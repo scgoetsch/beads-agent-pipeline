@@ -25,7 +25,8 @@ printf '\n\033[1m### the payload is actually there\033[0m\n'
 for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-prerun-hook.sh \
          .claude/bd-stop-hook.sh .beads-hooks/pre-commit tools/sweep.sh tools/dolt-guard.sh \
          docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
-         .claude/skills/README.md tools/check-no-agent-cache-paths.sh; do
+         .claude/skills/README.md tools/check-no-agent-cache-paths.sh \
+         tools/check-agent-docs-linked_test.sh; do
   [ -e "$T/$f" ] && ok "$f" || bad "$f missing"
 done
 [ -L "$T/CLAUDE.md" ] && [ "$(readlink "$T/CLAUDE.md")" = AGENTS.md ] \
@@ -49,7 +50,7 @@ grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
          tools/bd-prerun-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh \
-         tools/check-no-agent-cache-paths_test.sh; do
+         tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh; do
   if (cd "$T" && ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; sed -n '1,25p' "$T/.suite.log" | sed 's/^/        /'; fi
 done
@@ -104,18 +105,15 @@ S=$(mktemp -d); git -C "$S" init -q
 "$SRC/install.sh" --no-shell "$S" >"$S/.log" 2>&1
 [ -L "$S/CLAUDE.md" ] && ok "install creates CLAUDE.md as a symlink" || bad "install creates CLAUDE.md as a symlink"
 chk "it points at AGENTS.md" "$(readlink "$S/CLAUDE.md")" "AGENTS.md"
-guard() { (cd "$S" && ./tools/check-agent-docs-linked.sh) >/dev/null 2>&1; echo $?; }
-chk "guard passes when linked"            "$(guard)" "0"
+# The four states (linked / regular file / wrong target / dangling) are asserted by the guard's
+# OWN suite, tools/check-agent-docs-linked_test.sh, which the loop above runs inside this very
+# install. What belongs HERE is only what is specific to installing: that the link gets created,
+# and that the installer refuses to overwrite a regular file. Two places asserting one thing is
+# how the two drift apart.
 rm -f "$S/CLAUDE.md"; printf 'stale copy\n' > "$S/CLAUDE.md"
-chk "guard catches a regular file"        "$(guard)" "1"
-# the installer must not quietly overwrite it: that file may be the only copy of someone's edits
 "$SRC/install.sh" --no-shell "$S" >"$S/.log2" 2>&1
-chk "installer keeps the regular file"    "$(cat "$S/CLAUDE.md")" "stale copy"
+chk "installer keeps an existing regular CLAUDE.md" "$(cat "$S/CLAUDE.md")" "stale copy"
 grep -q 'REGULAR FILE' "$S/.log2" && ok "installer says why it refused" || bad "installer says why it refused"
-rm -f "$S/CLAUDE.md"; touch "$S/other.md"; ln -s other.md "$S/CLAUDE.md"
-chk "guard catches the wrong target"      "$(guard)" "1"
-rm -f "$S/CLAUDE.md"; ln -s nowhere.md "$S/CLAUDE.md"
-chk "guard catches a DANGLING link"       "$(guard)" "1"
 rm -rf "$S"
 
 printf '\n\033[1m### re-running changes nothing (idempotence)\033[0m\n'

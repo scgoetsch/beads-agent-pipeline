@@ -221,6 +221,7 @@ tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad 
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
 tools/check-agent-docs-linked.sh # CLAUDE.md is still a symlink to AGENTS.md
+tools/check-agent-docs-linked_test.sh  # …and that guard's own suite (all four link states)
 tools/agent_docs_test.sh         # every path this file and the skills cite still exists
 ```
 

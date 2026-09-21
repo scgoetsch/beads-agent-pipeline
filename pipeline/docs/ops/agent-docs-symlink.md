@@ -51,7 +51,15 @@ on demand. It asserts:
   catches wording somebody already thought of, and a section titled "Corrections protocol" using
   none of the listed words sailed straight through the earlier version.
 
-It exits 0 when either file is absent — there is nothing to enforce until both exist.
+It exits 0 when neither name is present — there is nothing to enforce until one exists. Note
+that a **dangling** link does not count as absent: `[ -e ]` follows the link and is false for a
+broken one, so testing only `[ -e CLAUDE.md ]` would pass the exact state the guard exists to
+catch. That was a real bug, and it survived because this was once the only guard in `tools/`
+without a `_test.sh` beside it.
+
+Its suite is `tools/check-agent-docs-linked_test.sh`: all four link states, both
+nothing-to-enforce cases, and the bd-managed-region check. It builds a throwaway root under
+`mktemp`, so it never touches your working tree and is safe to run with work in progress.
 
 ## Recovering
 
