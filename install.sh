@@ -272,8 +272,9 @@ fi
 
 # ------------------------------------------------------------------ verify --
 hdr "verify"
-# Which guards are actually in the shared pre-commit. The hook file ships with three stanzas:
-# bd's own marker-managed block, the memory-graph guard and the agent-docs guard. `bd hooks
+# Which guards are actually in the shared pre-commit. The hook file ships with four stanzas:
+# bd's own marker-managed block, the memory-graph guard, the agent-cache path guard and the
+# agent-docs guard. `bd hooks
 # install --shared` rewrites only the region between ITS markers, so the other two should
 # survive -- but a clone missing a stanza is otherwise SILENTLY unguarded, which is the exact
 # failure this pipeline exists to prevent. Report presence per guard rather than assuming it.
@@ -281,6 +282,7 @@ HK="$TARGET/.beads-hooks/pre-commit"
 if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
   for marker in "BEADS INTEGRATION:bd's own hooks" \
                 "bd-memgraph check:memory-graph guard" \
+                "agent-cache path guard:agent-cache path guard" \
                 "agent-docs symlink guard:agent-docs guard"; do
     pat=${marker%%:*}; name=${marker#*:}
     if grep -q "$pat" "$HK" 2>/dev/null; then say "$name present in .beads-hooks/pre-commit"

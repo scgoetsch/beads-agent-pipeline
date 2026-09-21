@@ -110,8 +110,13 @@ Nothing outside the temp directory is touched.
 
 - **Not a bd replacement or fork.** bd is unmodified; this is configuration, hooks and guards
   around it.
-- **Not tied to one agent harness.** The hooks are Claude Code's `settings.json` format, but the
-  tools, guards and `AGENTS.md` discipline are plain shell and apply anywhere.
+- **Not tied to one agent harness — but be precise about it.** The three SESSION hooks are Claude
+  Code's `settings.json` format and do nothing under agy, a Grok REPL or Cursor. Everything at the
+  git layer (`.beads-hooks/pre-commit`: memory graph, agent-cache paths, agent-docs symlink, bd's
+  own hooks), every tool, the shell guard and `AGENTS.md` itself work anywhere. That split is
+  deliberate: a session hook binds one harness, `git commit` binds all of them, so anything that
+  must not escape the repo is enforced there. Full matrix of what fires where, and how to prime a
+  session by hand: `docs/ops/other-harnesses.md`.
 - **Not a CI system.** The guards run at commit time and session time, on one machine.
 - **Not opinionated about your domain.** Project conventions go in *your* `AGENTS.md`, beside the
   code they govern.

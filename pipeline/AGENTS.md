@@ -178,6 +178,28 @@ succeeds.
 - NEVER stop before pushing — that leaves work stranded locally.
 - NEVER say "ready to push when you are". Push.
 
+## Document hygiene — no agent-cache paths in committed files
+
+Agent CLIs stage working artifacts in per-conversation cache directories: agy / antigravity under
+`~/.gemini/antigravity-cli/brain/<uuid>/`, Claude Code under `~/.claude/projects/<uuid>/` and
+`/tmp/claude-<uid>/`. **Those paths are user-local and ephemeral — they resolve for no other
+reader, on no other machine, and not for you next week.**
+
+Any markdown, README, walkthrough, report or generated manifest committed here MUST use
+repo-relative paths for figures, links and downloads.
+
+- ❌ `![fig](/home/you/.claude/projects/<uuid>/plot.png)`
+- ✅ `![fig](results/plots/plot.png)`
+
+If an agent generates artifacts in its cache directory, copy them into the repo FIRST and write
+the repo-relative path from the start. Do not paste a cache path intending to rewrite it later —
+that is the failure this rule exists for, and it has already happened.
+
+`tools/check-no-agent-cache-paths.sh` enforces it from `.beads-hooks/pre-commit`: whole-file for
+documents and generated data, added-lines-only for code so a repo adopting it mid-life is not
+blocked by pre-existing hits. It is a **git-layer** guard on purpose — session hooks only bind
+one harness, and this trap is not harness-specific. See `docs/ops/other-harnesses.md`.
+
 ## Conventions & Patterns
 
 Project-specific conventions belong here, beside the code they govern. If a subdirectory is big
@@ -197,6 +219,7 @@ tools/sweep_test.sh              # corpus sweep: searched-and-found-nothing vs d
 tools/dolt-guard_test.sh         # the shell guard that restarts the Dolt server
 tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember)
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
+tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
 tools/check-agent-docs-linked.sh # CLAUDE.md is still a symlink to AGENTS.md
 tools/agent_docs_test.sh         # every path this file and the skills cite still exists
 ```
@@ -217,8 +240,10 @@ and malformed `bd remember`; `bd-stop-hook.sh` warns about in-progress issues at
 **Each resolves the repo root from its own file location, never a literal path** — see
 `docs/ops/hooks-and-portability.md`. Optional site checks live in `.claude/site-checks/`.
 
-**Repo guards** (`.beads-hooks/`, via `core.hooksPath`) — bd's hooks plus the memory-graph guard
-and the agent-docs guard, all in `pre-commit`.
+**Repo guards** (`.beads-hooks/`, via `core.hooksPath`) — bd's hooks plus the memory-graph guard,
+the agent-cache path guard and the agent-docs guard, all in `pre-commit`. These are the guards
+that fire for EVERY agent, not just Claude Code — `docs/ops/other-harnesses.md` has the matrix of
+what runs where.
 
 **Tools** (`tools/`) — `sweep.sh` (corpus search with a positive control), `dolt-guard.sh` (keeps
 the bd Dolt server alive across reboots), `check-agent-docs-linked.sh`, and the `_test.sh` suite

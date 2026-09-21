@@ -15,6 +15,18 @@ fi
 # <<< bd-memgraph check <<<
 
 
+# >>> agent-cache path guard >>>
+# Rejects committed files embedding a per-conversation agent cache path (agy/antigravity
+# brain/, Claude Code projects/, /tmp/claude-<uid>/). Enforced HERE, at the git layer,
+# because session hooks are harness-specific and this trap is not: every agent and every
+# human passes through `git commit`. Logic lives in the repo so it is reviewable.
+# Bypass once with: git commit --no-verify
+if [ -x tools/check-no-agent-cache-paths.sh ]; then
+  tools/check-no-agent-cache-paths.sh || exit 1
+fi
+# <<< agent-cache path guard <<<
+
+
 # >>> agent-docs symlink guard >>>
 # CLAUDE.md must stay a symlink to AGENTS.md so the two cannot diverge, and the
 # workspace protocol must stay outside the bd-managed markers. Logic lives in the

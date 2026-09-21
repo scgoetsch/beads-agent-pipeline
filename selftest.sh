@@ -25,7 +25,7 @@ printf '\n\033[1m### the payload is actually there\033[0m\n'
 for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-prerun-hook.sh \
          .claude/bd-stop-hook.sh .beads-hooks/pre-commit tools/sweep.sh tools/dolt-guard.sh \
          docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
-         .claude/skills/README.md; do
+         .claude/skills/README.md tools/check-no-agent-cache-paths.sh; do
   [ -e "$T/$f" ] && ok "$f" || bad "$f missing"
 done
 [ -L "$T/CLAUDE.md" ] && [ "$(readlink "$T/CLAUDE.md")" = AGENTS.md ] \
@@ -33,10 +33,10 @@ done
 [ -x "$T/tools/sweep.sh" ] && ok "tools are executable" || bad "tools are executable"
 chk "core.hooksPath set" "$(git -C "$T" config core.hooksPath)" ".beads-hooks"
 
-printf '\n\033[1m### the shipped pre-commit carries all three stanzas\033[0m\n'
-# The hook is one file with three independent guards. Dropping one leaves the repo SILENTLY
+printf '\n\033[1m### the shipped pre-commit carries all four stanzas\033[0m\n'
+# The hook is one file with four independent guards. Dropping one leaves the repo SILENTLY
 # unguarded, so assert each by name rather than trusting that the file copied.
-for m in 'BEADS INTEGRATION' 'bd-memgraph check' 'agent-docs symlink guard'; do
+for m in 'BEADS INTEGRATION' 'bd-memgraph check' 'agent-cache path guard' 'agent-docs symlink guard'; do
   grep -q "$m" "$T/.beads-hooks/pre-commit" && ok "pre-commit stanza: $m" \
     || bad "pre-commit stanza: $m"
 done
@@ -48,10 +48,29 @@ grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
 
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
-         tools/bd-prerun-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh; do
+         tools/bd-prerun-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh \
+         tools/check-no-agent-cache-paths_test.sh; do
   if (cd "$T" && ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; sed -n '1,25p' "$T/.suite.log" | sed 's/^/        /'; fi
 done
+
+printf '\n\033[1m### the git-layer guard blocks a real commit (this is what covers OTHER harnesses)\033[0m\n'
+# The session hooks are Claude Code's. This one is not: it runs from .beads-hooks/pre-commit, so
+# it fires for agy, a Grok REPL, Codex, and a human typing git commit. Prove it end to end
+# through git rather than by calling the script directly.
+G=$(mktemp -d); git -C "$G" init -q
+git -C "$G" config user.email t@example.com; git -C "$G" config user.name t
+"$SRC/install.sh" --no-shell "$G" >/dev/null 2>&1
+printf 'see ![f](/home/someone/.claude/projects/abc/p.png)\n' > "$G/report.md"
+git -C "$G" add report.md
+git -C "$G" commit -qm "should be blocked" >/dev/null 2>&1
+chk "commit carrying a cache path is rejected" "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "0"
+# A guard that blocks everything is not a guard. The clean path must still work.
+printf 'see ![f](results/p.png)\n' > "$G/report.md"
+git -C "$G" add report.md
+git -C "$G" commit -qm "clean" >/dev/null 2>&1
+chk "a clean commit still succeeds"          "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "1"
+rm -rf "$G"
 
 printf '\n\033[1m### the peer layer is opt-in and self-consistent\033[0m\n'
 # Default install: no peer doc, no peer section, and -- the thing that actually matters --
