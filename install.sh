@@ -207,7 +207,16 @@ elif [ -e "$TARGET/CLAUDE.md" ] && [ ! -L "$TARGET/CLAUDE.md" ]; then
   say "    reconcile:  diff \"$TARGET/CLAUDE.md\" \"$TARGET/AGENTS.md\""
   say "    then:       rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md"
 elif [ ! -e "$TARGET/CLAUDE.md" ]; then
-  run ln -s AGENTS.md "$TARGET/CLAUDE.md" && did "CLAUDE.md -> AGENTS.md"
+  # `ln -s && did` alone would SAY NOTHING when ln fails, which it does on filesystems without
+  # symlink support (Windows without Developer Mode, some network and container mounts). The
+  # component whose job is to create the link is the worst place to fail quietly.
+  if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m ln -s AGENTS.md CLAUDE.md\n'
+  elif ln -s AGENTS.md "$TARGET/CLAUDE.md" 2>/dev/null; then did "CLAUDE.md -> AGENTS.md"
+  else
+    warn "could not create the CLAUDE.md symlink — this filesystem may not support symlinks."
+    say "    on Windows, try:  git config --global core.symlinks true  (needs Developer Mode)"
+    say "    otherwise see docs/ops/agent-docs-symlink.md for the fallback"
+  fi
 fi
 
 # ------------------------------------------------------------------- beads --

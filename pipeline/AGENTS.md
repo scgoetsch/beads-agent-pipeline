@@ -4,8 +4,10 @@ Instructions and context for AI coding agents working on this project.
 
 **`CLAUDE.md` and `AGENTS.md` are the same file** — `CLAUDE.md` is a symlink to `AGENTS.md`, so
 they cannot drift apart. Edit either name; there is only one file. Git carries the symlink, so
-every clone gets it. `tools/check-agent-docs-linked.sh` is the backstop for the one way this
-breaks: a tool that replaces the link with a regular file instead of writing through it.
+every clone gets it. `tools/check-agent-docs-linked.sh` is the backstop for the two ways this
+breaks: a tool that replaces the link with a regular file instead of writing through it, and a
+checkout on a filesystem without symlink support. Why that direction, what to do in either case,
+and the no-symlinks fallback: **`docs/ops/agent-docs-symlink.md`**.
 
 > This file came from **beads-agent-pipeline**. Everything below is live and enforced by the
 > guards in `tools/`. Add your project's own conventions as you go — the sections most worth

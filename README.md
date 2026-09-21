@@ -71,8 +71,12 @@ and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumption
 `/loop` and `/schedule` are harness features, not requirements; `triage` mentions a maker/checker
 verifier that is yours to define), all written down in `.claude/skills/README.md`.
 
-**An `AGENTS.md` template** that is symlinked from `CLAUDE.md` so the two can never drift, with a
-guard for the one way that breaks. It includes the section most people need and few write: an
+**An `AGENTS.md` template** that is symlinked from `CLAUDE.md` — one file, two names, so they
+cannot drift. The workspace this came from had them as two real files that diverged by ~180 lines
+before anyone noticed, and the part missing from the copy one tool read was the protocol for
+keeping claims consistent. A guard asserts the link and its target on every commit; the two ways
+it breaks (a tool replacing the link, and a checkout without symlink support) and the fallback for
+a filesystem that has no symlinks are in `docs/ops/agent-docs-symlink.md`. It includes the section most people need and few write: an
 explicit statement that these rules **supersede** the harness's own injected instructions about
 where tasks and memory live, because harnesses will contradict them repeatedly.
 

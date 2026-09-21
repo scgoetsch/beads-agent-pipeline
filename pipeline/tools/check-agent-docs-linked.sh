@@ -11,14 +11,28 @@
 # this repo was in until 2026-08-31 (bd doctor had been reporting it; the two had
 # diverged by ~180 lines).
 #
-# Run manually any time; it is also wired into .git/hooks/pre-commit.
+# Run manually any time. It is also invoked from .beads-hooks/pre-commit, which git uses via
+# core.hooksPath -- NOT from .git/hooks/, which git ignores entirely while that is set.
 #
 # Exit 0 = linked (or nothing to check), 1 = drifted.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 0
 
-# Nothing to enforce if the pair is not present.
+# Nothing to enforce if neither name is present at all.
+[ -e AGENTS.md ] || [ -e CLAUDE.md ] || [ -L CLAUDE.md ] || exit 0
+
+# A BROKEN SYMLINK IS NOT "ABSENT". `[ -e ]` follows the link, so it is FALSE for a dangling one
+# -- and an earlier version of this guard tested only `[ -e CLAUDE.md ]` and therefore exited 0
+# on exactly the state it exists to catch: CLAUDE.md pointing at a file that is no longer there.
+# Renaming or moving AGENTS.md produces it, silently, and nothing else would have told you.
+if [ -L CLAUDE.md ] && [ ! -e CLAUDE.md ]; then
+    echo "agent-docs: CLAUDE.md is a BROKEN symlink -> '$(readlink CLAUDE.md)' (target missing)." >&2
+    echo "  Reading CLAUDE.md fails, so an agent that looks there finds nothing at all." >&2
+    echo "  Restore the target, or repoint it: rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md" >&2
+    exit 1
+fi
+
 [ -e AGENTS.md ] || exit 0
 [ -e CLAUDE.md ] || exit 0
 
@@ -26,9 +40,14 @@ if [ ! -L CLAUDE.md ]; then
     cat >&2 <<'MSG'
 agent-docs: CLAUDE.md is a REGULAR FILE, not a symlink to AGENTS.md.
 
-  The two are meant to be one file so they cannot diverge. Something replaced
-  the link -- commonly a tool that writes to a temp file and renames over the
-  target, or a `bd setup claude` run.
+  The two are meant to be one file so they cannot diverge. Either something
+  replaced the link -- commonly a tool that writes to a temp file and renames
+  over the target, or a `bd setup claude` run -- or this clone was checked out
+  on a filesystem without symlink support, where git materialises the link as a
+  small regular file containing the text "AGENTS.md".
+
+  Check which: `cat CLAUDE.md`. If it is one line reading AGENTS.md, it is the
+  checkout case -- see docs/ops/agent-docs-symlink.md.
 
   Reconcile first (the regular file may hold edits the symlink target lacks):
 

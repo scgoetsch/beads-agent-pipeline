@@ -77,6 +77,28 @@ if (cd "$P" && ./tools/agent_docs_test.sh) >"$P/.suite.log" 2>&1; then ok "--wit
 else bad "--with-peer: agent_docs_test passes"; sed -n '1,20p' "$P/.suite.log" | sed 's/^/        /'; fi
 rm -rf "$P"
 
+printf '\n\033[1m### the CLAUDE.md symlink, and every way it breaks\033[0m\n'
+# One file, two names. The guard has to tell the four states apart, and the one that was missed
+# is `dangling`: [ -e ] follows the link and is FALSE for a broken one, so the guard used to exit
+# 0 on exactly the state it exists to catch.
+S=$(mktemp -d); git -C "$S" init -q
+"$SRC/install.sh" --no-shell "$S" >"$S/.log" 2>&1
+[ -L "$S/CLAUDE.md" ] && ok "install creates CLAUDE.md as a symlink" || bad "install creates CLAUDE.md as a symlink"
+chk "it points at AGENTS.md" "$(readlink "$S/CLAUDE.md")" "AGENTS.md"
+guard() { (cd "$S" && ./tools/check-agent-docs-linked.sh) >/dev/null 2>&1; echo $?; }
+chk "guard passes when linked"            "$(guard)" "0"
+rm -f "$S/CLAUDE.md"; printf 'stale copy\n' > "$S/CLAUDE.md"
+chk "guard catches a regular file"        "$(guard)" "1"
+# the installer must not quietly overwrite it: that file may be the only copy of someone's edits
+"$SRC/install.sh" --no-shell "$S" >"$S/.log2" 2>&1
+chk "installer keeps the regular file"    "$(cat "$S/CLAUDE.md")" "stale copy"
+grep -q 'REGULAR FILE' "$S/.log2" && ok "installer says why it refused" || bad "installer says why it refused"
+rm -f "$S/CLAUDE.md"; touch "$S/other.md"; ln -s other.md "$S/CLAUDE.md"
+chk "guard catches the wrong target"      "$(guard)" "1"
+rm -f "$S/CLAUDE.md"; ln -s nowhere.md "$S/CLAUDE.md"
+chk "guard catches a DANGLING link"       "$(guard)" "1"
+rm -rf "$S"
+
 printf '\n\033[1m### re-running changes nothing (idempotence)\033[0m\n'
 "$SRC/install.sh" --no-shell "$T" >"$T/.install2.log" 2>&1
 grep -q 'nothing to do' "$T/.install2.log" && ok "second run is a no-op" \
