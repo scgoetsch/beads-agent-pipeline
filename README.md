@@ -106,14 +106,29 @@ Nothing outside the temp directory is touched.
 
 | | | |
 | --- | --- | --- |
-| [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those three fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix |
+| [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those three fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix. Install below |
 | `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
 | [`bd`](https://github.com/gastownhall/beads) + [`dolt`](https://github.com/dolthub/dolt) | required | the issue tracker and memory store |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
-`install.sh --check` reports exactly what is present and what each absence costs.
+`install.sh --check` reports exactly what is present and what each absence costs. It states the
+harness rather than probing for it, because the hooks are run *by* the harness and a `claude` on
+your PATH does not prove they will fire.
+
+**Installing Claude Code**, if you want the session hooks:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash     # native build
+claude doctor                                       # check the install
+```
+
+`claude install <stable|latest|version>` manages the native build and `claude update` upgrades it.
+The native installer puts a versioned binary under `~/.local/share/claude/versions/` and symlinks
+`~/.local/bin/claude` at it. If you would rather not install it, everything except those three
+hooks still works — see `docs/ops/other-harnesses.md`, which also shows how to prime a session by
+hand.
 
 ## What this is not
 
