@@ -24,7 +24,7 @@ git -C "$T" config user.name  selftest
 # -- an unrelated warning would change the count and fail here instead of hiding behind an
 # expected 1. Asserting 0 unconditionally assumed a fully equipped box, which is how this suite
 # passed on the machine it came from and failed on the first bare one.
-REQUIRED="git bd dolt python3"        # keep in step with need() in install.sh
+REQUIRED="git bd python3"             # keep in step with need() in install.sh
 missing=0; absent=""
 for d in $REQUIRED; do
   command -v "$d" >/dev/null 2>&1 || { missing=$((missing+1)); absent="$absent $d"; }

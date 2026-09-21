@@ -63,8 +63,9 @@ need() { # need <cmd> <why> <how>
 }
 need git    "everything here is git-scoped"            "your package manager" || true
 need bd     "the issue tracker and memory store"       "https://github.com/gastownhall/beads" || true
-need dolt   "bd's storage engine"                      "https://github.com/dolthub/dolt" || true
 need python3 "the PreToolUse guard parses hook JSON"   "your package manager" || true
+# No `need dolt`: bd manages its own Dolt server (`bd dolt start`) and nothing here calls a dolt
+# binary. Requiring one made this exit 1 -- and selftest.sh fail -- on the machine it shipped from.
 
 # Optional, and genuinely optional: the pipeline degrades in a defined way without each.
 opt() { if command -v "$1" >/dev/null 2>&1; then say "$1 — present"; else say "$1 — absent ($2)"; fi; }

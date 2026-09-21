@@ -108,7 +108,7 @@ Nothing outside the temp directory is touched.
 | --- | --- | --- |
 | [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those three fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix. Install below |
 | `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
-| [`bd`](https://github.com/gastownhall/beads) + [`dolt`](https://github.com/dolthub/dolt) | required | the issue tracker and memory store |
+| [`bd`](https://github.com/gastownhall/beads) | required | the issue tracker and memory store. bd runs its own Dolt server (`bd dolt start`); a separate `dolt` binary is not needed and nothing here calls one |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
