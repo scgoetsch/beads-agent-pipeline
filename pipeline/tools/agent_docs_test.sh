@@ -34,10 +34,17 @@ PASS=0; FAIL=0
 ok()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
 bad() { printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 
-# Deliberately-absent or not-local tokens. Everything else that LOOKS like a repo path
-# must resolve. Kept short on purpose: a long allowlist is how a rotted pointer hides.
-# word/* are parts INSIDE a .docx zip (OOXML), not files on disk.
-ALLOW='^(MEMORY\.md|ChIP-seq/.*|/home2/.*|/project/.*|/endosome/.*|~/mount/.*|word/.*)$'
+# Deliberately-absent tokens. Everything else that LOOKS like a repo path must resolve.
+# Kept short on purpose: a long allowlist is how a rotted pointer hides.
+#
+# Tokens that are legitimately absent from a checkout, and so are not pointer rot:
+#   MEMORY.md  — named only to say DO NOT create one
+#   .beads/…   — created by `bd init`, which the installer deliberately leaves to you so the
+#                issue prefix is your choice
+# Add your own here (machine-specific mounts, generated output trees). Keep the list SHORT:
+# every entry is a path this test stops checking, and an exemption you cannot justify in one
+# line is usually a pointer you should have fixed instead.
+ALLOW='^(MEMORY\.md|\.beads(/.*)?)$'
 
 # Extract backticked path-looking tokens from a markdown file and report unresolved ones.
 unresolved() {
@@ -76,6 +83,14 @@ for m in re.finditer(r'`([^`\n]+)`', s):
     else:
         cands = [os.path.join(base, p), os.path.join(root, p)]
     if any(os.path.exists(c.rstrip('/')) for c in cands):
+        continue
+    # AN ANCHORED PATH MUST RESOLVE EXACTLY. The stem fallbacks below exist for docs that cite
+    # an output FAMILY by stem; applied to a token that names a real directory in this repo they
+    # are far too loose. Found the expensive way: AGENTS.md cited `.claude/skills/README.md`, the
+    # installer did not ship it, and this test stayed green because `find -name "*README.md*"`
+    # matched an unrelated README elsewhere in the tree. A guard weaker than the check it gates.
+    if '/' in t and t.startswith(ROOTS):
+        out.append(t)
         continue
     # A NAME STEM: docs often name a family of outputs by stem (`results.q5`) where the real
     # files carry a suffix or prefix. A glob hit counts.
@@ -187,6 +202,18 @@ if [ -n "$(unresolved "$TMP/probe.md")" ]; then
 else
   bad "T7  negative control: a missing path IS detected" \
       "the checker matched nothing — every other result above is meaningless"
+fi
+
+# A second negative control, for the loose-fallback bug above: an ANCHORED path whose basename
+# exists elsewhere in the tree must STILL be reported missing. `SKILL.md` really does exist under
+# .claude/skills/<name>/, so before the fix this probe passed the checker and a broken pointer
+# would have shipped.
+printf 'See `docs/ops/SKILL.md` for details.\n' > "$TMP/probe2.md"
+if [ -n "$(unresolved "$TMP/probe2.md")" ]; then
+  ok "T7b negative control: an anchored path is not satisfied by a same-named file elsewhere"
+else
+  bad "T7b negative control: an anchored path is not satisfied by a same-named file elsewhere" \
+      "a missing anchored path resolved against an unrelated file — T2 above cannot be trusted"
 fi
 
 echo "======================"

@@ -65,7 +65,11 @@ own tree — the ratio is the durable claim, and an absolute threshold ages out.
 working while writes silently fail to land, which is the worst possible shape for a data store.
 
 **Skills** — `memory-curate` (audit, dedupe and tier the memory store) and `triage` (surface and
-plan the top ready issue, read-only, without claiming it).
+plan the top ready issue, read-only, without claiming it). Both are **inert until you invoke
+them** — a skill is a prompt, not a hook — so they install by default and cost nothing at runtime,
+and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumptions (bd initialised;
+`/loop` and `/schedule` are harness features, not requirements; `triage` mentions a maker/checker
+verifier that is yours to define), all written down in `.claude/skills/README.md`.
 
 **An `AGENTS.md` template** that is symlinked from `CLAUDE.md` so the two can never drift, with a
 guard for the one way that breaks. It includes the section most people need and few write: an

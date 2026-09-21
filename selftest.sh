@@ -24,7 +24,8 @@ grep -q 'AGENTS.md' "$T/.install.log" && ok "installer reports what it did" || b
 printf '\n\033[1m### the payload is actually there\033[0m\n'
 for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-prerun-hook.sh \
          .claude/bd-stop-hook.sh .beads-hooks/pre-commit tools/sweep.sh tools/dolt-guard.sh \
-         docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md; do
+         docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
+         .claude/skills/README.md; do
   [ -e "$T/$f" ] && ok "$f" || bad "$f missing"
 done
 [ -L "$T/CLAUDE.md" ] && [ "$(readlink "$T/CLAUDE.md")" = AGENTS.md ] \

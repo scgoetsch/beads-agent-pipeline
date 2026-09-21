@@ -223,6 +223,8 @@ the bd Dolt server alive across reboots), `check-agent-docs-linked.sh`, and the 
 listed above.
 
 **Skills** (`.claude/skills/`) — `memory-curate` (audit and prune the memory store) and `triage`
-(surface and plan the top ready issue without claiming it).
+(surface and plan the top ready issue without claiming it). Both are **inert until invoked** and
+safe to delete. What each one requires, what it merely probes for, and the one thing `triage`
+references that this repo does not provide: **`.claude/skills/README.md`**.
 
 **Docs** (`docs/ops/`) — the reasoning behind each guard. Read these before changing one.
