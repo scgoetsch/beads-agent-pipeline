@@ -5,6 +5,16 @@
 #     ./install.sh --check [TARGET]     # preflight only, changes nothing
 #     ./install.sh --dry-run [TARGET]   # print every action, change nothing
 #     ./install.sh --no-shell [TARGET]  # skip the one thing written outside the repo
+#     ./install.sh --with-peer [TARGET] # also install the concurrent-session layer (see below)
+#
+# THE PEER LAYER IS OPT-IN because it is environment-dependent. It is only worth anything if more
+# than one agent session may run against the repo at once; for a single-session user it is dead
+# weight in a session payload that hosts already truncate. Without --with-peer, the concurrency
+# doc is not installed and the matching section is stripped out of AGENTS.md, so nothing cites a
+# file that is not there. Re-run with the flag to add it later.
+#
+# One piece of concurrency machinery ships either way: the flock in tools/dolt-guard.sh, which
+# stops two shells racing to start the Dolt server. It costs a single-session user nothing.
 #
 # IDEMPOTENT. Re-running is also how you repair a checkout whose config drifted: it reports
 # what it changed and what was already right.
@@ -23,12 +33,13 @@ set -uo pipefail
 SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PAYLOAD="$SRC/pipeline"
 
-MODE=install; DO_SHELL=1; TARGET=""
+MODE=install; DO_SHELL=1; WITH_PEER=0; TARGET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check)    MODE=check ;;
     --dry-run)  MODE=dryrun ;;
     --no-shell) DO_SHELL=0 ;;
+    --with-peer) WITH_PEER=1 ;;
     -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
     -*)         echo "unknown option: $1" >&2; exit 2 ;;
     *)          TARGET=$1 ;;
@@ -148,21 +159,39 @@ hdr "tools (tools/)"
 while IFS= read -r rel; do install_file "$rel" 755; done < <(cd "$PAYLOAD" && find tools -type f | sort)
 
 hdr "docs (docs/ops/)"
-while IFS= read -r rel; do install_file "$rel"; done < <(cd "$PAYLOAD" && find docs -type f | sort)
+PEER_DOC="docs/ops/concurrent-sessions.md"
+while IFS= read -r rel; do
+  if [ "$rel" = "$PEER_DOC" ] && [ "$WITH_PEER" -eq 0 ]; then
+    say "$PEER_DOC — skipped (peer layer is opt-in; re-run with --with-peer)"
+    continue
+  fi
+  install_file "$rel"
+done < <(cd "$PAYLOAD" && find docs -type f | sort)
 
 hdr "repo guards (.beads-hooks/)"
 install_file ".beads-hooks/pre-commit" 755
 
 # ------------------------------------------------------------- agent docs --
 hdr "agent docs (AGENTS.md + CLAUDE.md)"
+# Render the template for this install: with --with-peer the concurrency section stays (markers
+# removed); without it the whole block goes, so AGENTS.md never cites a doc we did not install.
+AGENTS_RENDERED="${TMPDIR:-/tmp}/bap-agents.$$"
+if [ "$WITH_PEER" -eq 1 ]; then
+  sed '/<!-- peer:begin -->/d; /<!-- peer:end -->/d' "$PAYLOAD/AGENTS.md" > "$AGENTS_RENDERED"
+else
+  # squeeze the blank-line run the removal leaves behind, so the seam is invisible
+  sed '/<!-- peer:begin -->/,/<!-- peer:end -->/d' "$PAYLOAD/AGENTS.md" \
+    | awk 'BEGIN{b=0} /^$/{b++; if(b>1) next} !/^$/{b=0} {print}' > "$AGENTS_RENDERED"
+fi
+trap 'rm -f "$AGENTS_RENDERED"' EXIT
 if [ -e "$TARGET/AGENTS.md" ]; then
-  if cmp -s "$PAYLOAD/AGENTS.md" "$TARGET/AGENTS.md"; then say "AGENTS.md (already current)"
+  if cmp -s "$AGENTS_RENDERED" "$TARGET/AGENTS.md"; then say "AGENTS.md (already current)"
   else
-    run cp -f "$PAYLOAD/AGENTS.md" "$TARGET/AGENTS.md.new"
+    run cp -f "$AGENTS_RENDERED" "$TARGET/AGENTS.md.new"
     say "AGENTS.md exists — yours kept. Ours is at AGENTS.md.new; merge what you want."
   fi
 else
-  run cp -f "$PAYLOAD/AGENTS.md" "$TARGET/AGENTS.md"
+  run cp -f "$AGENTS_RENDERED" "$TARGET/AGENTS.md"
   did "AGENTS.md (template — edit it, it is meant to be yours)"
 fi
 
@@ -254,5 +283,6 @@ Next:
   bd hooks install --shared    # --shared matters: without it git ignores them
   tools/agent_docs_test.sh     # and the rest of the suite in AGENTS.md
 Then open AGENTS.md and make it yours.
+The concurrent-session layer is $( [ "$WITH_PEER" -eq 1 ] && echo INSTALLED || echo "NOT installed — add it with --with-peer if more than one session will run against this repo" ).
 NEXT
 exit $(( problems > 0 ))

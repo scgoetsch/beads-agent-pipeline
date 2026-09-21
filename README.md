@@ -15,6 +15,16 @@ Nothing is overwritten. An existing `AGENTS.md`, `settings.json` or `tools/` fil
 lands beside it as `.new`. `--check` inspects, `--dry-run` prints every action, `--no-shell` skips
 the one thing written outside the repo. Re-running repairs a checkout whose config drifted.
 
+**`--with-peer` is opt-in**, because running several agent sessions against one repo is an
+environment question, not a default. Without it the concurrency doc is not installed and the
+matching section is stripped from `AGENTS.md`, so nothing cites a file that is not there — a
+single-session user carries none of it in a session payload that hosts already truncate. With it,
+you get the SET-not-append race rules, `bd dolt push` serialisation, and the rule that bit us:
+**establish which repo a peer is in before sending it repo-specific instructions**, because a peer
+listing does not report a peer's working directory and an issue-prefix does not imply a separate
+store. One piece of concurrency machinery ships either way — the `flock` in `tools/dolt-guard.sh`
+that stops two shells racing to start the Dolt server, which costs a single-session user nothing.
+
 ## The idea
 
 Agents fail in a specific, boring way: **they do not crash, they return success and do nothing.**

@@ -39,6 +39,30 @@ for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/s
   else bad "$s"; sed -n '1,25p' "$T/.suite.log" | sed 's/^/        /'; fi
 done
 
+printf '\n\033[1m### the peer layer is opt-in and self-consistent\033[0m\n'
+# Default install: no peer doc, no peer section, and -- the thing that actually matters --
+# AGENTS.md must not cite a doc we did not install. agent_docs_test is what proves that.
+[ -f "$T/docs/ops/concurrent-sessions.md" ] && bad "default: peer doc NOT installed" \
+  || ok "default: peer doc not installed"
+grep -q '^## Concurrent sessions' "$T/AGENTS.md" && bad "default: peer section stripped" \
+  || ok "default: peer section stripped from AGENTS.md"
+grep -q 'peer:begin\|peer:end' "$T/AGENTS.md" && bad "default: no marker comments leak" \
+  || ok "default: no marker comments leak"
+grep -q 'concurrent-sessions.md' "$T/AGENTS.md" && bad "default: AGENTS.md cites no missing doc" \
+  || ok "default: AGENTS.md cites no missing doc"
+
+P=$(mktemp -d); git -C "$P" init -q
+"$SRC/install.sh" --no-shell --with-peer "$P" >/dev/null 2>&1
+[ -f "$P/docs/ops/concurrent-sessions.md" ] && ok "--with-peer: peer doc installed" \
+  || bad "--with-peer: peer doc installed"
+grep -q '^## Concurrent sessions' "$P/AGENTS.md" && ok "--with-peer: peer section present" \
+  || bad "--with-peer: peer section present"
+grep -q 'peer:begin\|peer:end' "$P/AGENTS.md" && bad "--with-peer: no marker comments leak" \
+  || ok "--with-peer: no marker comments leak"
+if (cd "$P" && ./tools/agent_docs_test.sh) >"$P/.suite.log" 2>&1; then ok "--with-peer: agent_docs_test passes"
+else bad "--with-peer: agent_docs_test passes"; sed -n '1,20p' "$P/.suite.log" | sed 's/^/        /'; fi
+rm -rf "$P"
+
 printf '\n\033[1m### re-running changes nothing (idempotence)\033[0m\n'
 "$SRC/install.sh" --no-shell "$T" >"$T/.install2.log" 2>&1
 grep -q 'nothing to do' "$T/.install2.log" && ok "second run is a no-op" \

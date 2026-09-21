@@ -1,6 +1,12 @@
 # Concurrent sessions against one bd store
 
-AGENTS.md keeps the practice; this keeps the storage-layer verification and the decay patterns.
+**This document is OPTIONAL and environment-dependent.** It applies only if more than one agent
+session may run against this repo at once. If you work one session at a time, none of it is
+needed — install it with `install.sh --with-peer`, or skip it.
+
+Nothing else in the pipeline assumes peers. The one piece of concurrency machinery that always
+ships is the `flock` in `tools/dolt-guard.sh`, which stops two shells racing to start the Dolt
+server; that costs a single-session user nothing and prevents a real race when it matters.
 
 ## The SET-not-append trap becomes a race
 
@@ -41,3 +47,44 @@ ordinary git conflicts and git will tell you — it is only the bd layer that fa
 - *Hedges harden.* Qualifiers get dropped as claims move up into summaries ("dominant **with a real
   but secondary secondary effect**" → "dominant, NOT the other thing"). When correcting, check the
   summary layer *and* the memory key name — a key name is itself a claim.
+
+
+## Talking to a peer session
+
+If your harness can message other live sessions, the expensive mistake is **broadcasting
+repo-specific instructions to sessions that are not in your repo.**
+
+Learned directly: asked to share a change with the other sessions, an agent sent a ~30-line
+briefing to all three live peers. Only one plausibly shared the workspace. One replied that it was
+in a different repo with its own `.beads`, so none of it applied; the others reported the message
+as noise.
+
+**The cause was a missing fact, not a judgement slip.** A peer listing typically reports name,
+kind, state — **not the peer's working directory or repo.** A session's title is not evidence
+either ("Check status" says nothing about where it is). So there was no evidence any peer shared
+the workspace, and the broadcast went out as if there were.
+
+What to do instead, cheapest first:
+
+1. **Ask before briefing.** One line — "are you working in `<repo>`?" — costs the peer almost
+   nothing. A long briefing to a session on another project costs it context it did not ask for.
+2. **Make the message self-scoping in its FIRST line**, which is usually all the recipient sees as
+   a preview: *"Only relevant if you are in `<repo>` — ignore otherwise."*
+3. **Prefer letting the peer discover it.** A change git carries — a committed symlink, a tracked
+   script, an updated `AGENTS.md` — reaches every clone on the next pull with no message at all.
+   Ask whether the message is needed before composing it.
+
+### An issue-prefix does not imply a separate store
+
+A peer reasoning "my ids are `ab-*` and yours are `xy-*`, so we cannot collide" has the right
+conclusion for the wrong reason. **bd resolves its store by upward directory discovery, not by
+prefix.** What separates two sessions is having separate `.beads/` directories. A session working
+anywhere under a repo hits that repo's store whatever its task is — and the SET-not-append
+semantics above turn that into a silent overwrite rather than a visible conflict.
+
+### If a peer edits your working tree
+
+Treat a peer's report as a claim to verify, not a fact. Check `git log` and `git status` yourself
+before building on it: a peer that committed your uncommitted work has changed what `HEAD` means
+for you, and only your own `git diff HEAD` will tell you whether anything of yours is still
+outstanding.

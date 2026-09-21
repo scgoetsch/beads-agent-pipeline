@@ -133,8 +133,28 @@ the NEWER memory and targets must already exist. Run `bd-memgraph evolve "<draft
 writing, and `bd-memgraph check` before staging — the pre-commit guard runs it with `--no-ledger`,
 so a green hook is not evidence the ledger saw your session.
 
-Details: **`docs/ops/memory-and-the-graph.md`**. Running more than one session at once:
-**`docs/ops/concurrent-sessions.md`**.
+Details: **`docs/ops/memory-and-the-graph.md`**.
+
+<!-- peer:begin -->
+## Concurrent sessions
+
+More than one agent session may run against this repo at once. That is safe at the storage layer —
+one Dolt server, every session a client, writes serialised as transactions — but it turns the
+SET-not-append rule into a **race**: a second session can overwrite between your read and your
+write, and nothing reports it.
+
+- **Partition by scope, not by lock.** Disjoint issues and disjoint memory keys cannot collide.
+- **`bd recall <key>` immediately before `bd remember --key <key>`** — not a recall from earlier.
+- **`bd note <id>`** for anything appending to a running record, always.
+- **Serialise `bd dolt push`.** Simultaneous pushes to a shared blob store are the likeliest place
+  to see damage.
+- **Before messaging a peer session, establish which repo it is in.** A peer listing does not
+  report the peer's working directory, and an issue-prefix does not imply a separate store — bd
+  resolves its store by upward directory discovery. Ask first, or make the first line of the
+  message self-scoping: *"Only relevant if you are in `<repo>` — ignore otherwise."*
+
+Full detail, including the two decay patterns: **`docs/ops/concurrent-sessions.md`**.
+<!-- peer:end -->
 
 ## Session completion
 
