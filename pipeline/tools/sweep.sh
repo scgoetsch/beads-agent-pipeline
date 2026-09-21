@@ -7,10 +7,14 @@
 #   remotes -- then every modern grep front-end skips them by default:
 #     * ripgrep (`rg`, and any agent harness tool that wraps it) honours .gitignore natively
 #     * a `grep` shell function passing --ignore-files does the same
-#   Measured in one such workspace: `rg` from the root reached 72 files. This tool reached
-#   8,668 across 7 git repos. A root sweep therefore covered ~1% of the corpus and reported
-#   ZERO HITS -- indistinguishable from a clean sweep. Re-measure in your own tree rather
-#   than trusting those numbers; the RATIO is the durable claim, not the counts.
+#   Measured in one such workspace on 2026-09-21: `rg` from the root reached 131 files. This
+#   tool reached 8,993 across 7 git repos. A root sweep therefore covered ~1.5% of the corpus
+#   and reported ZERO HITS -- indistinguishable from a clean sweep.
+#
+#   RE-MEASURE IN YOUR OWN TREE. The RATIO is the durable claim, never the counts: the same
+#   workspace read 72 files at the root six weeks earlier, and the number moved because the
+#   ROOT repo grew, not because the hazard changed. Anything that pins an absolute count here
+#   ages out and then lies in whichever direction the tree happened to grow.
 #
 #   This matters most for a CORRECTION SWEEP: when a claim turns out to be wrong, you grep
 #   the distinctive number and phrase across every sibling document to find where else it

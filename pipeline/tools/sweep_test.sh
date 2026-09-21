@@ -11,9 +11,12 @@ set -uo pipefail
 cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)" || exit 1
 SWEEP=tools/sweep.sh
 
-pass=0; fail=0
-chk() { if [[ $2 == "$3" ]]; then printf '  PASS  %s (%s)\n' "$1" "$2"; ((pass++));
-        else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; ((fail++)); fi; }
+pass=0; fail=0; skip=0
+chk()  { if [[ $2 == "$3" ]]; then printf '  PASS  %s (%s)\n' "$1" "$2"; ((pass++));
+         else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; ((fail++)); fi; }
+# A skipped check is ANNOUNCED and counted. A check that quietly does not run is the exact
+# defect this suite exists to catch, one level up.
+skipc() { printf '  SKIP  %s\n' "$1"; ((skip++)); }
 
 # THE FIXTURE IS BUILT AT RUNTIME, never checked in. Two reasons, both learned:
 #   * A literal "absent" string committed here would live in the very corpus the sweep
@@ -52,6 +55,37 @@ chk "exit 0"              "$rc" 0
 chk "hit in nested repo"  "$(printf '%s' "$out" | /usr/bin/grep -c 'hidden.md')" 1
 chk "no control failed"   "$(printf '%s' "$out" | /usr/bin/grep -c 'CONTROL FAILED')" 0
 chk "counts both repos"   "$(printf '%s' "$out" | /usr/bin/grep -cE 'in 2 repos')" 1
+
+echo "### the same hazard, measured on THIS tree"
+# The fixture above proves the MECHANISM on any machine. This measures whether the hazard is
+# actually live in the tree you are installed into -- and it is the check that taught us the
+# most, because its first version pinned "rg saw < 100 files" and aged out the moment the root
+# repo grew (72 files one month, 131 the next). The assertion silently inverted and the suite
+# went red while the hazard it guards had not changed at all. Never pin an absolute count.
+#
+# Both sides are measured with the SAME instrument, so the ratio isolates the gitignore effect
+# rather than a difference between two tools. The corpus side uses sweep.sh's own repo
+# discovery and honours SWEEP_DEPTH the way sweep.sh does.
+if command -v rg >/dev/null; then
+  root_visible=$(rg --files . 2>/dev/null | wc -l)
+  corpus=0
+  while IFS= read -r _repo; do
+    corpus=$(( corpus + $(rg --files "$_repo" 2>/dev/null | wc -l) ))
+  done < <(printf '.\n'
+           find . -mindepth 2 -maxdepth "${SWEEP_DEPTH:-4}" -name .git -prune \
+                -printf '%h\n' 2>/dev/null | sort)
+  # THE DENOMINATOR IS ASSERTED BEFORE THE RATIO IS TRUSTED. A corpus measure that silently
+  # returned ~0 would satisfy any ratio trivially -- a guard weaker than the check it gates,
+  # one level down. Here it decides whether there is anything to measure at all: a repo with
+  # no gitignored nested repos has no hazard, and that is a SKIP, never a quiet pass.
+  if (( corpus > 1000 )); then
+    chk "rg at root sees <5% of the corpus" "$(( root_visible * 100 < corpus * 5 ))" 1
+  else
+    skipc "no multi-repo corpus here ($corpus files in reach) — the hazard needs nested repos"
+  fi
+else
+  skipc "rg absent — cannot demonstrate the gitignore-aware front end"
+fi
 
 echo "### a zero that CAN be trusted"
 out=$("$SWEEP" "$ABSENT" 2>&1); rc=$?
@@ -97,5 +131,5 @@ chk "no false binary notice" \
     "$("$SWEEP" --include '*.md' "$ABSENT" 2>&1 | /usr/bin/grep -c 'NOT SEARCHED because grep')" 0
 
 echo
-printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
+printf 'RESULT: %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [[ $fail -eq 0 ]]

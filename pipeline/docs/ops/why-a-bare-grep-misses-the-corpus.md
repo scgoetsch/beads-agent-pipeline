@@ -12,11 +12,16 @@ then every gitignore-aware front-end skips them by default:
 - `rg` (ripgrep) honours `.gitignore` natively, and so does any agent harness tool that wraps it.
 - A `grep` shell function passing `--ignore-files` does the same.
 
-Measured in one such workspace: `rg` from the root reached **72 files**. The corpus was **8,668
-files across 7 git repos**. So a root sweep covered about 1% of it and reported ZERO HITS.
+Measured in one such workspace on 2026-09-21: `rg` from the root reached **131 files**. The
+corpus was **8,993 files across 7 git repos**. So a root sweep covered about 1.5% of it and
+reported ZERO HITS.
 
-Re-measure in your own tree rather than trusting those numbers — the *ratio* is the durable claim,
-not the counts.
+**Re-measure in your own tree, and never pin an absolute count.** The *ratio* is the durable
+claim. That same workspace read 72 files at the root six weeks earlier: the number moved because
+the root repo grew, not because the hazard changed. The suite originally asserted "rg saw < 100
+files", and on the day the root repo crossed 100 the assertion silently inverted — the test went
+red while the thing it guards was exactly as broken as before. A check that fails on its own
+growth teaches people to ignore it.
 
 This bites hardest during a **correction sweep**: when a claim turns out to be wrong, you grep the
 distinctive number and the distinctive phrase across every sibling document to find where else it
@@ -55,7 +60,10 @@ should say what the sweep could not reach.
 - **The bd layer.** Memories and issue text are separate `bd memories` / `bd list` searches. A
   document sweep is not a corpus sweep.
 
-## Two traps found while building the positive control
+This is one instance of a defect class that recurs across subsystems; the catalogue is
+[checks-narrower-than-what-they-check.md](checks-narrower-than-what-they-check.md).
+
+## Traps found while building the positive control
 
 Both are worth knowing if you touch this tool:
 
@@ -63,6 +71,12 @@ Both are worth knowing if you touch this tool:
   first match, before grep has read far enough to classify the file — so a prose file with one bad
   byte is reported as text, which is exactly the case the BINARY column exists to report. Ask the
   bytes directly instead (NUL present, or invalid in the active locale).
+- **Assert the denominator before you trust a ratio.** The suite measures "what fraction of the
+  corpus can `rg` see from the root". A corpus measure that silently returned ~0 would satisfy any
+  ratio trivially — a guard weaker than the check it gates, one level down. So the corpus size is
+  asserted first, and both sides are measured with the *same instrument*, so the ratio isolates the
+  gitignore effect rather than a difference between two tools. Where there is no multi-repo corpus
+  to measure, the check is announced as SKIPPED and counted, never quietly passed.
 - **A single-candidate control produces false alarms.** If the one file it lifts its control line
   from happens to be one grep will not print lines from, the control can never be re-found, and the
   sweep cries "NOT TRUSTWORTHY" about a repo it searched perfectly well. It tries several

@@ -47,8 +47,9 @@ literal path, and `tools/hook_portability_test.sh` relocates them to a throwaway
 **`tools/sweep.sh`** — corpus-wide search with a **positive control per repo**. It lifts real lines
 out of each repo and greps for them through the identical code path; if they do not come back, that
 repo was not searched and the sweep exits non-zero. Exit 0 is the only thing that licenses "it
-isn't there". A plain `rg` from a repo root reached 72 files in the workspace this came from; the
-corpus was 8,668 across 7 repos. Zero hits, no error.
+isn't there". Measured 2026-09-21 in the workspace this came from: a plain `rg` at the root
+reached 131 files; the corpus was 8,993 across 7 repos. Zero hits, no error. Re-measure in your
+own tree — the ratio is the durable claim, and an absolute threshold ages out.
 
 **`tools/dolt-guard.sh`** — restarts bd's Dolt server after a reboot. Without it, `bd` reads keep
 working while writes silently fail to land, which is the worst possible shape for a data store.
@@ -61,8 +62,9 @@ guard for the one way that breaks. It includes the section most people need and 
 explicit statement that these rules **supersede** the harness's own injected instructions about
 where tasks and memory live, because harnesses will contradict them repeatedly.
 
-**Docs** (`docs/ops/`) — the reasoning behind each guard, including the measurements. Read the
-relevant one before changing a guard.
+**Docs** (`docs/ops/`) — the reasoning behind each guard, including the measurements. Start with
+`checks-narrower-than-what-they-check.md`: eleven instances of the one defect class every guard
+here is built against, with the diagnostic question to ask of your own checks.
 
 ## Verify it
 

@@ -76,7 +76,10 @@ verification step, and they will not always catch it.
 *Look specifically for a guard that is weaker than the check it gates.* Ask what a guard actually
 rules out, and whether a check that can only fail the job — never repair it — is worth having.
 This repo has hit that shape repeatedly: a textual assertion standing in for a behavioural one, a
-`-q` probe that short-circuits before it can answer, an empty-file test counted as a binary file.
+`-q` probe that short-circuits before it can answer, an empty-file test counted as a binary file,
+a guard that pinned an absolute threshold and went red on its own growth. The catalogue, with the
+diagnostic question to ask, is **`docs/ops/checks-narrower-than-what-they-check.md`** — read it
+before writing a guard, and add to it when you find a new instance.
 
 **Execute once approved.** After a plan is approved, run it end to end without re-confirming
 sub-steps. Stop only for a genuinely new decision — one that changes scope or is hard to reverse.
