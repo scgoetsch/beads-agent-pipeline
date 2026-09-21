@@ -17,8 +17,29 @@ printf '\n\033[1m### install into a fresh git repo\033[0m\n'
 git -C "$T" init -q
 git -C "$T" config user.email selftest@example.com
 git -C "$T" config user.name  selftest
-"$SRC/install.sh" --no-shell "$T" >"$T/.install.log" 2>&1
-chk "installer exits 0" "$?" "0"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install.log" 2>&1; rc=$?
+# The exit code depends on the box. The installer exits 1 whenever a required command is
+# missing, and that is right: a missing dependency must be loud. So the suite has to know which
+# of them THIS box lacks, expect the matching exit code, check each is named, and pin the count
+# -- an unrelated warning would change the count and fail here instead of hiding behind an
+# expected 1. Asserting 0 unconditionally assumed a fully equipped box, which is how this suite
+# passed on the machine it came from and failed on the first bare one.
+REQUIRED="git bd dolt python3"        # keep in step with need() in install.sh
+missing=0; absent=""
+for d in $REQUIRED; do
+  command -v "$d" >/dev/null 2>&1 || { missing=$((missing+1)); absent="$absent $d"; }
+done
+for d in $absent; do
+  grep -q " $d MISSING — " "$T/.install.log" && ok "installer names $d as missing" \
+    || bad "installer names $d as missing"
+done
+if [ "$missing" -eq 0 ]; then
+  chk "installer exits 0 (every required command present)" "$rc" "0"
+else
+  chk "installer exits 1 ($missing required command(s) absent:$absent)" "$rc" "1"
+  chk "installer counts exactly those $missing as needing attention" \
+      "$(sed -n 's/^ *\([0-9][0-9]*\) item(s) need your attention.*/\1/p' "$T/.install.log")" "$missing"
+fi
 grep -q 'AGENTS.md' "$T/.install.log" && ok "installer reports what it did" || bad "installer reports what it did"
 
 printf '\n\033[1m### the payload is actually there\033[0m\n'
@@ -72,6 +93,37 @@ git -C "$G" add report.md
 git -C "$G" commit -qm "clean" >/dev/null 2>&1
 chk "a clean commit still succeeds"          "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "1"
 rm -rf "$G"
+
+printf '\n\033[1m### ...and it is wired even when bd is not on the box\033[0m\n'
+# On an equipped machine the block above cannot tell whether hook wiring depends on bd: bd is
+# there, so the hooks get wired either way. The bug this guards against (instance 12 in
+# docs/ops/checks-narrower-than-what-they-check.md) only showed on a box WITHOUT bd. Hide bd
+# from PATH and prove the install still wires the hook and the hook still fires. If hiding bd
+# would also hide git or python3, say so loudly rather than pass by omission.
+H=$(mktemp -d); git -C "$H" init -q
+git -C "$H" config user.email t@example.com; git -C "$H" config user.name t
+bare_path=""; oldifs=$IFS; IFS=:
+for p in $PATH; do [ -x "$p/bd" ] || bare_path="${bare_path:+$bare_path:}$p"; done
+IFS=$oldifs
+if PATH="$bare_path" command -v git >/dev/null 2>&1 && PATH="$bare_path" command -v python3 >/dev/null 2>&1; then
+  PATH="$bare_path" command -v bd >/dev/null 2>&1 && bad "bd hidden from PATH" || ok "bd hidden from PATH"
+  PATH="$bare_path" "$SRC/install.sh" --no-shell "$H" >"$H/.log" 2>&1
+  chk "no-bd: installer exits 1"                 "$?" "1"
+  chk "no-bd: core.hooksPath set anyway"         "$(git -C "$H" config core.hooksPath)" ".beads-hooks"
+  grep -q 'core.hooksPath=.beads-hooks' "$H/.log" && ok "no-bd: installer verifies the wiring, not just the file" \
+    || bad "no-bd: installer verifies the wiring, not just the file"
+  printf 'see ![f](/home/someone/.claude/projects/abc/p.png)\n' > "$H/report.md"
+  git -C "$H" add report.md
+  PATH="$bare_path" git -C "$H" commit -qm "should be blocked" >/dev/null 2>&1
+  chk "no-bd: commit carrying a cache path is rejected" "$(git -C "$H" log --oneline 2>/dev/null | wc -l)" "0"
+  printf 'see ![f](results/p.png)\n' > "$H/report.md"
+  git -C "$H" add report.md
+  PATH="$bare_path" git -C "$H" commit -qm "clean" >/dev/null 2>&1
+  chk "no-bd: a clean commit still succeeds"     "$(git -C "$H" log --oneline 2>/dev/null | wc -l)" "1"
+else
+  bad "no-bd probe could not run: hiding bd from PATH also hides git or python3 — move bd to its own directory"
+fi
+rm -rf "$H"
 
 printf '\n\033[1m### the peer layer is opt-in and self-consistent\033[0m\n'
 # Default install: no peer doc, no peer section, and -- the thing that actually matters --

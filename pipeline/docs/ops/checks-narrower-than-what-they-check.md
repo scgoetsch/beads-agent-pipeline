@@ -115,6 +115,23 @@ could report anything.
 **Fix:** run the thing. Shim its dependencies and assert on OUTPUT — and check that the exit code
 alone would not have told you, because often it is identical in both the broken and fixed cases.
 
+### 12. A wiring step gated on a dependency the wired thing does not need
+
+`install.sh` set `core.hooksPath` only when `bd` was on PATH. The pre-commit it points at has four
+stanzas; two need no bd at all, and those two — the agent-cache path guard and the agent-docs
+symlink guard — are the ones that exist for the agent with no session hooks. On a box without bd
+the installer copied the hook file, reported it with a green `+`, exited 1 for the missing
+dependency, and never said that wiring the hook had been skipped. Its own verify step then grepped
+each stanza's text and reported all four "present" (instance 11's shape) while git ignored the
+file. `selftest.sh` could not catch any of it: it asserted `installer exits 0` unconditionally,
+which made "bd is installed" an assumption of the suite, so the suite only ever ran where the bug
+could not show. Found on the first box without bd, 2026-09-21.
+
+**Fix:** wire the hook on `.git` alone. Make the verify step assert `core.hooksPath` as well as the
+stanza text. Make the suite branch on which required commands the box actually lacks, name each,
+and pin the count. And hide bd from PATH inside the suite, so an equipped machine keeps proving
+the bare-box behaviour instead of relying on one manual run.
+
 ---
 
 ## How to add one

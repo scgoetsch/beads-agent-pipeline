@@ -89,7 +89,7 @@ explicit statement that these rules **supersede** the harness's own injected ins
 where tasks and memory live, because harnesses will contradict them repeatedly.
 
 **Docs** (`docs/ops/`) — the reasoning behind each guard, including the measurements. Start with
-`checks-narrower-than-what-they-check.md`: eleven instances of the one defect class every guard
+`checks-narrower-than-what-they-check.md`: twelve instances of the one defect class every guard
 here is built against, with the diagnostic question to ask of your own checks.
 
 ## Verify it

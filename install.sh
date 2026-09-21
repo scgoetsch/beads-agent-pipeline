@@ -111,6 +111,11 @@ if [ "$TARGET" = "$SRC" ]; then
 fi
 
 if [ "$MODE" = check ]; then
+  if [ -d "$TARGET/.git" ]; then
+    hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
+    if [ "$hp" = ".beads-hooks" ]; then say "core.hooksPath=.beads-hooks — the shared pre-commit is wired"
+    else say "core.hooksPath=${hp:-unset} — the shared pre-commit is NOT wired; install will set it"; fi
+  fi
   hdr "check only"
   say "no changes made. Re-run without --check to install."
   exit $(( problems > 0 ))
@@ -237,6 +242,21 @@ elif [ ! -e "$TARGET/CLAUDE.md" ]; then
   fi
 fi
 
+# --------------------------------------------------------------- git hooks --
+# Wired whether or not bd is present. Two of the pre-commit's stanzas (agent-cache paths,
+# agent-docs symlink) need no bd and are the whole point on a box without one; the two that do
+# need it self-skip. This used to sit inside the bd branch below, so a box without bd got the
+# hook file copied and reported with a green +, and nothing said that wiring it had been skipped
+# -- the git layer guarded nothing. Instance 12 in docs/ops/checks-narrower-than-what-they-check.md.
+hdr "git hooks"
+if [ -d "$TARGET/.git" ]; then
+  cur=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
+  if [ "$cur" = ".beads-hooks" ]; then say "core.hooksPath already .beads-hooks"
+  else run git -C "$TARGET" config core.hooksPath .beads-hooks && did "set core.hooksPath=.beads-hooks (was ${cur:-unset})"; fi
+  stale=$(ls "$TARGET/.git/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
+  [ "${stale:-0}" -gt 0 ] && warn "$stale stale hook(s) in .git/hooks — git ignores them now; delete them so nobody mistakes them for live."
+fi
+
 # ------------------------------------------------------------------- beads --
 hdr "bd store"
 if command -v bd >/dev/null 2>&1; then
@@ -246,16 +266,9 @@ if command -v bd >/dev/null 2>&1; then
     say "no .beads/ yet — initialise it yourself so the prefix is your choice:"
     say "    cd \"$TARGET\" && bd init --prefix <XX>"
   fi
-  if [ -d "$TARGET/.git" ]; then
-    cur=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
-    if [ "$cur" = ".beads-hooks" ]; then say "core.hooksPath already .beads-hooks"
-    else run git -C "$TARGET" config core.hooksPath .beads-hooks && did "set core.hooksPath=.beads-hooks (was ${cur:-unset})"; fi
-    say "bd's own hooks: run  bd hooks install --shared  in the target (note --shared)"
-    stale=$(ls "$TARGET/.git/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
-    [ "${stale:-0}" -gt 0 ] && warn "$stale stale hook(s) in .git/hooks — git ignores them now; delete them so nobody mistakes them for live."
-  fi
+  say "bd's own hooks: run  bd hooks install --shared  in the target (note --shared)"
 else
-  warn "bd absent — skipping store setup"
+  say "bd absent (reported under dependencies) — store setup skipped; the git hooks above are wired regardless"
 fi
 
 # -------------------------------------------------------------------- shell --
@@ -306,6 +319,11 @@ if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
     if grep -q "$pat" "$HK" 2>/dev/null; then say "$name present in .beads-hooks/pre-commit"
     else warn "$name MISSING from .beads-hooks/pre-commit — re-run this installer"; fi
   done
+  # Presence in the file is a textual claim. Whether git RUNS the file is core.hooksPath, and
+  # that was the piece this installer used to skip without saying so. Assert the wiring too.
+  hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
+  if [ "$hp" = ".beads-hooks" ]; then say "core.hooksPath=.beads-hooks — git runs that file"
+  else warn "core.hooksPath is '${hp:-unset}', not .beads-hooks — every stanza above is present and NONE of them fires"; fi
 fi
 if [ "$MODE" = dryrun ]; then
   say "dry run — nothing was changed, so nothing to verify."
