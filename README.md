@@ -98,6 +98,7 @@ Nothing outside the temp directory is touched.
 
 | | | |
 | --- | --- | --- |
+| [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those three fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix |
 | `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
 | [`bd`](https://github.com/gastownhall/beads) + [`dolt`](https://github.com/dolthub/dolt) | required | the issue tracker and memory store |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
