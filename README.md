@@ -98,7 +98,7 @@ Nothing outside the temp directory is touched.
 | [`bd`](https://github.com/gastownhall/beads) + [`dolt`](https://github.com/dolthub/dolt) | required | the issue tracker and memory store |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
-| [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard |
+| [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
 `install.sh --check` reports exactly what is present and what each absence costs.
 

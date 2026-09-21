@@ -71,7 +71,10 @@ opt() { if command -v "$1" >/dev/null 2>&1; then say "$1 — present"; else say 
 opt jq          "session-start falls back to the full bd prime dump"
 opt rg          "only affects sweep_test.sh's demonstration of the bug"
 opt iconv       "sweep.sh cannot flag bad-UTF-8 files as unsearchable"
-opt bd-memgraph "no memory-graph guard; https://github.com/scgoetsch/bd-memgraph"
+opt bd-memgraph "no memory-graph guard — the pre-commit stanza self-skips"
+command -v bd-memgraph >/dev/null 2>&1 || {
+  say "    add it:  git clone https://github.com/scgoetsch/bd-memgraph"
+  say "             ln -sf \"\$PWD/bd-memgraph/bd-memgraph.py\" ~/.local/bin/bd-memgraph"; }
 
 [ -d "$PAYLOAD" ] || { warn "payload missing: $PAYLOAD"; exit 1; }
 
@@ -260,6 +263,21 @@ fi
 
 # ------------------------------------------------------------------ verify --
 hdr "verify"
+# Which guards are actually in the shared pre-commit. The hook file ships with three stanzas:
+# bd's own marker-managed block, the memory-graph guard and the agent-docs guard. `bd hooks
+# install --shared` rewrites only the region between ITS markers, so the other two should
+# survive -- but a clone missing a stanza is otherwise SILENTLY unguarded, which is the exact
+# failure this pipeline exists to prevent. Report presence per guard rather than assuming it.
+HK="$TARGET/.beads-hooks/pre-commit"
+if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
+  for marker in "BEADS INTEGRATION:bd's own hooks" \
+                "bd-memgraph check:memory-graph guard" \
+                "agent-docs symlink guard:agent-docs guard"; do
+    pat=${marker%%:*}; name=${marker#*:}
+    if grep -q "$pat" "$HK" 2>/dev/null; then say "$name present in .beads-hooks/pre-commit"
+    else warn "$name MISSING from .beads-hooks/pre-commit — re-run this installer"; fi
+  done
+fi
 if [ "$MODE" = dryrun ]; then
   say "dry run — nothing was changed, so nothing to verify."
 else

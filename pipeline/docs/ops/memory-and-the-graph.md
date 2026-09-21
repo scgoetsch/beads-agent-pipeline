@@ -47,9 +47,27 @@ the full `bd prime` output.
 
 ## bd-memgraph
 
-[bd-memgraph](https://github.com/scgoetsch/bd-memgraph) (MIT) is an optional layer that reads
+[bd-memgraph](https://github.com/scgoetsch/bd-memgraph) (MIT) is an **optional** layer that reads
 `bd memories --json` and treats `[[wikilinks]]` in memory bodies as a typed graph. bd is never
 modified; the structure lives inside the memory bodies, so it survives upgrades and exports.
+
+It is a single python3 file with no dependencies:
+
+```bash
+git clone https://github.com/scgoetsch/bd-memgraph
+ln -sf "$PWD/bd-memgraph/bd-memgraph.py" ~/.local/bin/bd-memgraph
+```
+
+**Nothing breaks without it.** The `.beads-hooks/pre-commit` stanza tests for the binary and
+skips when it is absent, so the pipeline installs and runs fine either way. That silence is a
+deliberate exception to this repo's usual rule: silence is the enemy when it hides a FAILURE, but
+an optional tool you chose not to install is a decision, not a fault, and a hook that nags about
+it every commit would be noise. What is *not* silent is whether the stanza is present at all —
+the installer reports each guard in the pre-commit by name, so a hook missing one is visible.
+
+If you ever re-run `bd hooks install --shared`, it rewrites only the region between its own
+`BEADS INTEGRATION` markers, so the memory-graph and agent-docs stanzas should survive. Re-run
+the installer afterwards to confirm rather than assuming — it prints one line per guard.
 
 - Bare `[[key]]` means *related*. Type it when the relation is causal: `supersedes::`,
   `depends-on::`, `contradicts::`, `justified-by::`, `refines::`.
@@ -61,6 +79,17 @@ modified; the structure lives inside the memory bodies, so it survives upgrades 
 - At session close `bd-memgraph check` should report OK — no dangling links, no unswept
   supersedes. The pre-commit guard runs it with `--no-ledger`, which records no observations, so
   **a green hook is not evidence the ledger saw your session**; run a plain `check` before staging.
+  A non-observing run says so on its own status line — read it.
+
+**Commit the ledger.** `bd-memgraph` writes `.beads/memgraph-ledger.json`, which carries tombstone
+history so a superseded key stays known after `bd forget`. `.beads/` is normally gitignored, so
+re-include the ledger explicitly — without this the history is local-only and the next machine
+re-learns nothing:
+
+```gitignore
+.beads/
+!.beads/memgraph-ledger.json
+```
 
 `tools/../.claude/skills/memory-curate/audit_wikilinks.py` repairs dangling links in bulk. Its
 repoint table ships empty on purpose: you fill it in per repair, and only for successors you have

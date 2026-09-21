@@ -33,6 +33,19 @@ done
 [ -x "$T/tools/sweep.sh" ] && ok "tools are executable" || bad "tools are executable"
 chk "core.hooksPath set" "$(git -C "$T" config core.hooksPath)" ".beads-hooks"
 
+printf '\n\033[1m### the shipped pre-commit carries all three stanzas\033[0m\n'
+# The hook is one file with three independent guards. Dropping one leaves the repo SILENTLY
+# unguarded, so assert each by name rather than trusting that the file copied.
+for m in 'BEADS INTEGRATION' 'bd-memgraph check' 'agent-docs symlink guard'; do
+  grep -q "$m" "$T/.beads-hooks/pre-commit" && ok "pre-commit stanza: $m" \
+    || bad "pre-commit stanza: $m"
+done
+# The memory-graph stanza must self-skip when the optional tool is absent, or installing the
+# pipeline without bd-memgraph would block every commit.
+grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
+  && ok "memory-graph stanza self-skips when bd-memgraph is absent" \
+  || bad "memory-graph stanza self-skips when bd-memgraph is absent"
+
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
          tools/bd-prerun-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh; do
