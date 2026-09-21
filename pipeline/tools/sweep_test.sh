@@ -124,7 +124,19 @@ chk "grep -a proves the phrase is really in the file" \
 chk "sweep finds 0 hits"      "$(printf '%s' "$out" | /usr/bin/grep -c '^0 hit(s)')" 1
 chk "but SAYS it skipped a binary file" \
     "$(printf '%s' "$out" | /usr/bin/grep -c 'NOT SEARCHED because grep classifies them as binary')" 1
-rm -rf "$BINDIR"; trap - EXIT
+# ATTRIBUTE THE COUNT TO THIS FILE. The assertion above only says a binary notice appeared
+# SOMEWHERE in the sweep, which is too loose to test what it claims. Mutation-testing the
+# detector in a real multi-repo tree showed this check staying GREEN with the old, broken
+# predicate, because an unrelated EMPTY file was being miscounted as binary and printing the
+# notice on the canary's behalf. It passed for a reason with nothing to do with the canary.
+# So pin the root repo's own BINARY cell, with and without the file, and require exactly 1.
+root_bin() { printf '%s' "$1" | awk '$1=="<root>" {print $4; exit}'; }
+bin_with=$(root_bin "$out")
+rm -rf "$BINDIR"
+out_without=$("$SWEEP" --docs "$CANARY" 2>&1)
+bin_without=$(root_bin "$out_without")
+chk "the canary itself is what was counted" "$(( ${bin_with:-0} - ${bin_without:-0} ))" 1
+trap - EXIT
 
 echo "### with no such file, the binary notice is NOT printed"
 chk "no false binary notice" \
