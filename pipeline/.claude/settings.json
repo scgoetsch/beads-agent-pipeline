@@ -1,0 +1,48 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-prime-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-prime-hook.sh NOT FOUND at $H \u2014 bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-prerun-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-prerun-hook.sh NOT FOUND at $H \u2014 bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-prime-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-prime-hook.sh NOT FOUND at $H \u2014 bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-stop-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-stop-hook.sh NOT FOUND at $H \u2014 bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ]
+  }
+}

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# check-agent-docs-linked.sh — assert CLAUDE.md is still a symlink to AGENTS.md.
+#
+# WHY THIS EXISTS
+# AGENTS.md and CLAUDE.md are one file: CLAUDE.md is a symlink, so the two cannot
+# drift apart, and git carries the link to every clone. That holds as long as the
+# link survives. It does not survive a writer that replaces a file rather than
+# writing through it — write-to-temp-then-rename is the common pattern, and a
+# `bd setup claude` run may install a regular file too. The moment that happens
+# the two documents are independent again and drift silently, which is the state
+# this repo was in until 2026-08-31 (bd doctor had been reporting it; the two had
+# diverged by ~180 lines).
+#
+# Run manually any time; it is also wired into .git/hooks/pre-commit.
+#
+# Exit 0 = linked (or nothing to check), 1 = drifted.
+
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 0
+
+# Nothing to enforce if the pair is not present.
+[ -e AGENTS.md ] || exit 0
+[ -e CLAUDE.md ] || exit 0
+
+if [ ! -L CLAUDE.md ]; then
+    cat >&2 <<'MSG'
+agent-docs: CLAUDE.md is a REGULAR FILE, not a symlink to AGENTS.md.
+
+  The two are meant to be one file so they cannot diverge. Something replaced
+  the link -- commonly a tool that writes to a temp file and renames over the
+  target, or a `bd setup claude` run.
+
+  Reconcile first (the regular file may hold edits the symlink target lacks):
+
+      diff CLAUDE.md AGENTS.md
+
+  Fold anything worth keeping into AGENTS.md, then restore the link:
+
+      rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md
+
+  Bypass once with: git commit --no-verify
+MSG
+    exit 1
+fi
+
+target=$(readlink CLAUDE.md)
+if [ "$target" != "AGENTS.md" ]; then
+    echo "agent-docs: CLAUDE.md points at '$target', expected 'AGENTS.md'." >&2
+    echo "  Fix with: rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md" >&2
+    exit 1
+fi
+
+# The landmine this restructure defused: workspace protocol must stay OUTSIDE the
+# bd-managed markers, because `bd setup` regenerates whatever is between them.
+if command grep -q 'BEGIN BEADS INTEGRATION' AGENTS.md; then
+    managed=$(sed -n '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/p' AGENTS.md)
+
+    # STRUCTURAL CHECK, and the one that actually holds. The keyword list below is a
+    # BLOCKLIST: it only catches protocol whose wording someone already thought of.
+    # Verified 2026-09-01 that a section titled "Corrections protocol", using none of
+    # those four words, passes it untouched. Size does not care about wording.
+    #
+    # The region held 22 lines when this was written and bd's own generated template is
+    # 56, so the cap sits above a legitimate `bd setup` regeneration and far below the
+    # 307 lines of workspace protocol that were once in there.
+    managed_lines=$(printf '%s' "$managed" | wc -l)
+    if [ "$managed_lines" -gt 70 ]; then
+        echo "agent-docs: the BEADS INTEGRATION region in AGENTS.md is $managed_lines lines." >&2
+        echo "  That is too large to be bd's generated block alone (its template is ~56)." >&2
+        echo "  \`bd setup\` REGENERATES this region — anything hand-written in it will be" >&2
+        echo "  destroyed. Move it below the END marker." >&2
+        exit 1
+    fi
+
+    for pattern in 'sweep\.sh' 'memgraph' 'SUPERSEDE' 'Session Completion'; do
+        if printf '%s' "$managed" | command grep -qE "$pattern"; then
+            echo "agent-docs: '$pattern' is INSIDE the BEADS INTEGRATION markers in AGENTS.md." >&2
+            echo "  \`bd setup\` regenerates that region and would silently destroy it." >&2
+            echo "  Move it below the END marker." >&2
+            exit 1
+        fi
+    done
+fi
+
+exit 0

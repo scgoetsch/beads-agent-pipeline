@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# install.sh — install the beads agent pipeline into a git repo.
+#
+#     ./install.sh [TARGET_REPO]        # default: the current directory
+#     ./install.sh --check [TARGET]     # preflight only, changes nothing
+#     ./install.sh --dry-run [TARGET]   # print every action, change nothing
+#     ./install.sh --no-shell [TARGET]  # skip the one thing written outside the repo
+#
+# IDEMPOTENT. Re-running is also how you repair a checkout whose config drifted: it reports
+# what it changed and what was already right.
+#
+# IT NEVER OVERWRITES YOUR CONTENT. An existing AGENTS.md, settings.json or tools/ file that
+# differs from ours is left in place and the new version is written beside it as `.new`, with
+# a line telling you. The one exception is a file this installer wrote earlier and you have
+# not edited, which is updated in place.
+#
+# WHAT IT TOUCHES OUTSIDE THE REPO: exactly one marker-managed block in ~/.bashrc that sources
+# tools/dolt-guard.sh. Without it, a reboot leaves the bd Dolt server dead and `bd` writes
+# silently fail to land while reads still look fine. Skip it with --no-shell.
+
+set -uo pipefail
+
+SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+PAYLOAD="$SRC/pipeline"
+
+MODE=install; DO_SHELL=1; TARGET=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check)    MODE=check ;;
+    --dry-run)  MODE=dryrun ;;
+    --no-shell) DO_SHELL=0 ;;
+    -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
+    -*)         echo "unknown option: $1" >&2; exit 2 ;;
+    *)          TARGET=$1 ;;
+  esac
+  shift
+done
+TARGET=${TARGET:-$PWD}
+
+changed=0; problems=0
+say()  { printf '  %s\n' "$1"; }
+did()  { printf '  \033[32m+\033[0m %s\n' "$1"; changed=$((changed+1)); }
+warn() { printf '  \033[33m!\033[0m %s\n' "$1" >&2; problems=$((problems+1)); }
+hdr()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
+run()  { if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m %s\n' "$*"; else "$@"; fi; }
+
+# ---------------------------------------------------------------- preflight --
+hdr "dependencies"
+need() { # need <cmd> <why> <how>
+  if command -v "$1" >/dev/null 2>&1; then say "$1 — $(command -v "$1")"; return 0; fi
+  warn "$1 MISSING — $2"; say "    install: $3"; return 1
+}
+need git    "everything here is git-scoped"            "your package manager" || true
+need bd     "the issue tracker and memory store"       "https://github.com/gastownhall/beads" || true
+need dolt   "bd's storage engine"                      "https://github.com/dolthub/dolt" || true
+need python3 "the PreToolUse guard parses hook JSON"   "your package manager" || true
+
+# Optional, and genuinely optional: the pipeline degrades in a defined way without each.
+opt() { if command -v "$1" >/dev/null 2>&1; then say "$1 — present"; else say "$1 — absent ($2)"; fi; }
+opt jq          "session-start falls back to the full bd prime dump"
+opt rg          "only affects sweep_test.sh's demonstration of the bug"
+opt iconv       "sweep.sh cannot flag bad-UTF-8 files as unsearchable"
+opt bd-memgraph "no memory-graph guard; https://github.com/scgoetsch/bd-memgraph"
+
+[ -d "$PAYLOAD" ] || { warn "payload missing: $PAYLOAD"; exit 1; }
+
+hdr "target"
+if [ ! -d "$TARGET" ]; then warn "no such directory: $TARGET"; exit 1; fi
+TARGET=$(cd "$TARGET" && pwd -P)
+say "$TARGET"
+if [ ! -d "$TARGET/.git" ]; then
+  warn "not a git repository — the hooks, the guards and bd all assume one."
+  say "    fix: git -C \"$TARGET\" init"
+  [ "$MODE" = check ] || exit 1
+fi
+if [ "$TARGET" = "$SRC" ]; then
+  warn "refusing to install into the pipeline repo itself — pass a target directory."
+  exit 1
+fi
+
+if [ "$MODE" = check ]; then
+  hdr "check only"
+  say "no changes made. Re-run without --check to install."
+  exit $(( problems > 0 ))
+fi
+
+# ------------------------------------------------------------------- files --
+# Copy a payload file. Never clobbers content the user may have edited: identical is a no-op,
+# different lands as `<file>.new` unless we are the only author it has ever had.
+install_file() { # install_file <relpath> [mode]
+  local rel=$1 mode=${2:-} src="$PAYLOAD/$1" dst="$TARGET/$1"
+  [ -f "$src" ] || { warn "payload file missing: $rel"; return 1; }
+  if [ -e "$dst" ]; then
+    if cmp -s "$src" "$dst"; then say "$rel (already current)"; return 0; fi
+    run cp -f "$src" "$dst.new"
+    warn "$rel DIFFERS — yours kept, ours written to $rel.new"
+    say "    compare: diff \"$dst\" \"$dst.new\""
+    return 0
+  fi
+  run mkdir -p "$(dirname "$dst")"
+  run cp -f "$src" "$dst"
+  [ -n "$mode" ] && run chmod "$mode" "$dst"
+  did "$rel"
+}
+
+hdr "session machinery (.claude/)"
+for f in bd-prime-hook.sh bd-prerun-hook.sh bd-stop-hook.sh; do install_file ".claude/$f" 755; done
+install_file ".claude/memory-hot.txt"
+
+# settings.json is the one file a user is LIKELY to already have, and clobbering it would take
+# their unrelated hooks with it. Merge when we can, and say so plainly when we cannot.
+SET="$TARGET/.claude/settings.json"
+if [ ! -e "$SET" ]; then
+  install_file ".claude/settings.json"
+elif cmp -s "$PAYLOAD/.claude/settings.json" "$SET"; then
+  say ".claude/settings.json (already current)"
+elif command -v jq >/dev/null 2>&1; then
+  merged=$(jq -s '.[0] * .[1]' "$SET" "$PAYLOAD/.claude/settings.json" 2>/dev/null)
+  if [ -n "$merged" ] && [ "$merged" != "null" ]; then
+    if [ "$(printf '%s' "$merged" | jq -S .)" = "$(jq -S . "$SET" 2>/dev/null)" ]; then
+      say ".claude/settings.json (hooks already present)"
+    else
+      run cp -f "$SET" "$SET.bak.$(date +%s)"
+      if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m merge hooks into %s\n' "$SET"
+      else printf '%s\n' "$merged" > "$SET"; fi
+      did ".claude/settings.json — merged our hooks in (backup kept)"
+      warn "our 'hooks' block REPLACED any same-named block of yours. Check the backup if you had one."
+    fi
+  else
+    run cp -f "$PAYLOAD/.claude/settings.json" "$SET.new"
+    warn ".claude/settings.json — could not merge; ours written to settings.json.new"
+  fi
+else
+  run cp -f "$PAYLOAD/.claude/settings.json" "$SET.new"
+  warn ".claude/settings.json exists and jq is absent — ours written to settings.json.new"
+  say "    merge the \"hooks\" block by hand, or install jq and re-run."
+fi
+
+hdr "skills (.claude/skills/)"
+for s in memory-curate triage; do
+  while IFS= read -r rel; do install_file "$rel"; done < <(cd "$PAYLOAD" && find ".claude/skills/$s" -type f)
+done
+
+hdr "site checks (.claude/site-checks/)"
+while IFS= read -r rel; do install_file "$rel"; done < <(cd "$PAYLOAD" && find .claude/site-checks -type f)
+
+hdr "tools (tools/)"
+while IFS= read -r rel; do install_file "$rel" 755; done < <(cd "$PAYLOAD" && find tools -type f | sort)
+
+hdr "docs (docs/ops/)"
+while IFS= read -r rel; do install_file "$rel"; done < <(cd "$PAYLOAD" && find docs -type f | sort)
+
+hdr "repo guards (.beads-hooks/)"
+install_file ".beads-hooks/pre-commit" 755
+
+# ------------------------------------------------------------- agent docs --
+hdr "agent docs (AGENTS.md + CLAUDE.md)"
+if [ -e "$TARGET/AGENTS.md" ]; then
+  if cmp -s "$PAYLOAD/AGENTS.md" "$TARGET/AGENTS.md"; then say "AGENTS.md (already current)"
+  else
+    run cp -f "$PAYLOAD/AGENTS.md" "$TARGET/AGENTS.md.new"
+    say "AGENTS.md exists — yours kept. Ours is at AGENTS.md.new; merge what you want."
+  fi
+else
+  run cp -f "$PAYLOAD/AGENTS.md" "$TARGET/AGENTS.md"
+  did "AGENTS.md (template — edit it, it is meant to be yours)"
+fi
+
+if [ -L "$TARGET/CLAUDE.md" ] && [ "$(readlink "$TARGET/CLAUDE.md")" = "AGENTS.md" ]; then
+  say "CLAUDE.md -> AGENTS.md (already linked)"
+elif [ -e "$TARGET/CLAUDE.md" ] && [ ! -L "$TARGET/CLAUDE.md" ]; then
+  # Never silently discard a regular file: it may hold edits AGENTS.md does not.
+  warn "CLAUDE.md is a REGULAR FILE, not a symlink. Not touching it."
+  say "    reconcile:  diff \"$TARGET/CLAUDE.md\" \"$TARGET/AGENTS.md\""
+  say "    then:       rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md"
+elif [ ! -e "$TARGET/CLAUDE.md" ]; then
+  run ln -s AGENTS.md "$TARGET/CLAUDE.md" && did "CLAUDE.md -> AGENTS.md"
+fi
+
+# ------------------------------------------------------------------- beads --
+hdr "bd store"
+if command -v bd >/dev/null 2>&1; then
+  if [ -d "$TARGET/.beads" ]; then
+    say ".beads/ present"
+  else
+    say "no .beads/ yet — initialise it yourself so the prefix is your choice:"
+    say "    cd \"$TARGET\" && bd init --prefix <XX>"
+  fi
+  if [ -d "$TARGET/.git" ]; then
+    cur=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
+    if [ "$cur" = ".beads-hooks" ]; then say "core.hooksPath already .beads-hooks"
+    else run git -C "$TARGET" config core.hooksPath .beads-hooks && did "set core.hooksPath=.beads-hooks (was ${cur:-unset})"; fi
+    say "bd's own hooks: run  bd hooks install --shared  in the target (note --shared)"
+    stale=$(ls "$TARGET/.git/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
+    [ "${stale:-0}" -gt 0 ] && warn "$stale stale hook(s) in .git/hooks — git ignores them now; delete them so nobody mistakes them for live."
+  fi
+else
+  warn "bd absent — skipping store setup"
+fi
+
+# -------------------------------------------------------------------- shell --
+hdr "shell guard (~/.bashrc)"
+GUARD_SRC="$TARGET/tools/dolt-guard.sh"
+GB='# >>> bd dolt-guard >>>'; GE='# <<< bd dolt-guard <<<'; RC="$HOME/.bashrc"
+if [ "$DO_SHELL" -eq 0 ]; then
+  say "skipped (--no-shell). Without it, a reboot leaves the Dolt server dead and bd writes"
+  say "  silently fail to land while reads still look fine. Source it yourself: . $GUARD_SRC"
+elif [ -z "${HOME:-}" ]; then warn "HOME unset — skipping"
+elif [ ! -f "$GUARD_SRC" ] && [ "$MODE" != dryrun ]; then warn "tools/dolt-guard.sh not installed — skipping"
+else
+  BLOCK="$GB
+# Restarts the beads Dolt server after a reboot; nothing else does.
+# Managed by beads-agent-pipeline's install.sh — edit tools/dolt-guard.sh, not here.
+[ -f \"$GUARD_SRC\" ] && . \"$GUARD_SRC\"
+$GE"
+  if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m add the dolt-guard block to %s\n' "$RC"
+  else
+    [ -f "$RC" ] || : > "$RC"
+    esc() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
+    cur_block=$(sed -n "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/p" "$RC" 2>/dev/null)
+    if [ "$cur_block" = "$BLOCK" ]; then say "dolt-guard already current in $RC"
+    else
+      cp "$RC" "$RC.bak.$(date +%s)" && say "backed up $RC"
+      [ -n "$cur_block" ] && sed -i "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/d" "$RC"
+      printf '\n%s\n' "$BLOCK" >> "$RC"
+      did "dolt-guard installed in $RC — open a new shell, or: . $GUARD_SRC"
+    fi
+  fi
+fi
+
+# ------------------------------------------------------------------ verify --
+hdr "verify"
+if [ "$MODE" = dryrun ]; then
+  say "dry run — nothing was changed, so nothing to verify."
+else
+  if [ -x "$TARGET/tools/check-agent-docs-linked.sh" ]; then
+    if (cd "$TARGET" && tools/check-agent-docs-linked.sh >/dev/null 2>&1); then say "agent-docs symlink guard passes"
+    else warn "agent-docs symlink guard FAILS — run tools/check-agent-docs-linked.sh in the target"; fi
+  fi
+  if [ -x "$TARGET/tools/hook_portability_test.sh" ]; then
+    if (cd "$TARGET" && tools/hook_portability_test.sh >/dev/null 2>&1); then say "hook portability suite passes"
+    else warn "hook portability suite FAILS — run tools/hook_portability_test.sh in the target"; fi
+  fi
+fi
+
+hdr "result"
+[ "$changed" -eq 0 ] && say "nothing to do — this checkout was already set up." || say "$changed change(s) applied."
+if [ "$problems" -gt 0 ]; then say "$problems item(s) need your attention (marked ! above)."; fi
+cat <<NEXT
+
+Next:
+  cd "$TARGET"
+  bd init --prefix <XX>        # if you have no .beads/ yet
+  bd hooks install --shared    # --shared matters: without it git ignores them
+  tools/agent_docs_test.sh     # and the rest of the suite in AGENTS.md
+Then open AGENTS.md and make it yours.
+NEXT
+exit $(( problems > 0 ))

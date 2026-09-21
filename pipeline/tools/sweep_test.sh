@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# sweep_test.sh — acceptance tests for tools/sweep.sh.
+#
+# The property under test is NOT "the sweep finds things". It is that the sweep
+# DISTINGUISHES "searched the corpus and found nothing" from "did not search the
+# corpus" — the confusion that made the correction protocol a silent no-op.
+#
+# Run: tools/sweep_test.sh
+
+set -uo pipefail
+cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)" || exit 1
+SWEEP=tools/sweep.sh
+
+pass=0; fail=0
+chk() { if [[ $2 == "$3" ]]; then printf '  PASS  %s (%s)\n' "$1" "$2"; ((pass++));
+        else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; ((fail++)); fi; }
+
+# THE FIXTURE IS BUILT AT RUNTIME, never checked in. Two reasons, both learned:
+#   * A literal "absent" string committed here would live in the very corpus the sweep
+#     searches, so "absent" would score a hit. The first draft of this file did exactly that.
+#   * The original version of this suite asserted against a real path in a private corpus
+#     and a magic "rg saw < 100 files" threshold. Both rotted: the path is not yours, and the
+#     threshold drifted as the tree grew until the suite read amber for no reason. A fixture
+#     proves the property on ANY machine and cannot drift.
+ABSENT="zzq$$-$(date +%s%N)-absent-fixture"
+PHRASE="zzq$$-$(date +%s%N)-corpus-canary"
+
+FIX=$(mktemp -d); trap 'rm -rf "$FIX"' EXIT
+mkdir -p "$FIX/tools" "$FIX/nested"
+cp "$SWEEP" "$FIX/tools/sweep.sh"; chmod +x "$FIX/tools/sweep.sh"
+printf 'nested/\n' > "$FIX/.gitignore"          # the nested repo has its own remote: ignored here
+printf 'nothing to see\n' > "$FIX/visible.md"
+printf '%s\n' "$PHRASE" > "$FIX/nested/hidden.md"   # the claim lives ONLY here
+git -C "$FIX" init -q 2>/dev/null
+git -C "$FIX/nested" init -q 2>/dev/null
+
+echo "### the bug: a gitignore-aware front-end from the root cannot see the corpus"
+# NOTE: do NOT assert on a bare `grep -rn ... .` here. A gitignore-aware `grep` is usually a
+# shell FUNCTION, which scripts do not inherit -- inside this file `grep` is /usr/bin/grep,
+# which traverses everything instead. The trap fires in the AGENT'S shell, where the function
+# is live; in a script the same command fails differently, by being slow. Both present as
+# "nothing useful came back". rg reproduces the gitignore behaviour cheaply and honestly.
+if command -v rg >/dev/null; then
+  chk "rg blind to the nested repo" "$(rg -n "$PHRASE" "$FIX" 2>/dev/null | /usr/bin/grep -c . )" 0
+fi
+chk "but the file really has it" \
+    "$(/usr/bin/grep -c "$PHRASE" "$FIX/nested/hidden.md" 2>/dev/null)" 1
+
+echo "### ACCEPTANCE: sweep.sh reaches the gitignored nested repo"
+out=$("$FIX/tools/sweep.sh" "$PHRASE" 2>&1); rc=$?
+chk "exit 0"              "$rc" 0
+chk "hit in nested repo"  "$(printf '%s' "$out" | /usr/bin/grep -c 'hidden.md')" 1
+chk "no control failed"   "$(printf '%s' "$out" | /usr/bin/grep -c 'CONTROL FAILED')" 0
+chk "counts both repos"   "$(printf '%s' "$out" | /usr/bin/grep -cE 'in 2 repos')" 1
+
+echo "### a zero that CAN be trusted"
+out=$("$SWEEP" "$ABSENT" 2>&1); rc=$?
+chk "exit 0"              "$rc" 0
+chk "0 hits"              "$(printf '%s' "$out" | /usr/bin/grep -c '^0 hit(s)')" 1
+chk "licenses the zero"   "$(printf '%s' "$out" | /usr/bin/grep -c 'can be trusted')" 1
+
+echo "### a zero that must NOT be trusted — unsearched corpus fails loud"
+out=$("$SWEEP" --include '*.nonexistentext' anything 2>&1); rc=$?
+chk "exit 2"              "$rc" 2
+chk "says NOT TRUSTWORTHY" "$(printf '%s' "$out" | /usr/bin/grep -c 'SWEEP NOT TRUSTWORTHY')" 1
+
+echo "### narrowing is always announced, and never announced falsely"
+chk "narrowed run says so" \
+    "$("$SWEEP" --docs "$ABSENT" 2>&1 | /usr/bin/grep -c 'NARROWED BY filter')" 1
+chk "full run does not"   \
+    "$("$SWEEP" "$ABSENT" 2>&1 | /usr/bin/grep -c 'NARROWED BY filter')" 0
+
+echo "### a file grep calls BINARY is reported, not silently unsearched"
+# The failure this guards: plain prose carrying one malformed byte is classified binary,
+# contributes no hits and no error, and the sweep's zero then looks clean. Build exactly
+# that file -- readable prose, one bad byte -- and require the run to admit it skipped it.
+# cwd is already the repo root (set at the top of this file).
+BINDIR=.sweep_bintest.$$
+mkdir -p "$BINDIR"
+# Assemble the canary from halves: if the whole token appeared literally in THIS file,
+# the sweep would legitimately find it here and the "0 hits" assertion below would fail
+# for a reason that has nothing to do with binary detection.
+CAN_A=SWEEPBIN; CAN_B=ARYCANARY; CANARY="${CAN_A}${CAN_B}"
+printf 'the phrase %s is right here in plain prose \xff\n' "$CANARY" > "$BINDIR/canary.md"
+trap 'rm -rf "$BINDIR"' EXIT
+out=$("$SWEEP" --docs "$CANARY" 2>&1); rc=$?
+chk "exit 0"                  "$rc" 0
+chk "grep -a proves the phrase is really in the file" \
+    "$(/usr/bin/grep -ac "$CANARY" "$BINDIR/canary.md")" 1
+chk "sweep finds 0 hits"      "$(printf '%s' "$out" | /usr/bin/grep -c '^0 hit(s)')" 1
+chk "but SAYS it skipped a binary file" \
+    "$(printf '%s' "$out" | /usr/bin/grep -c 'NOT SEARCHED because grep classifies them as binary')" 1
+rm -rf "$BINDIR"; trap - EXIT
+
+echo "### with no such file, the binary notice is NOT printed"
+chk "no false binary notice" \
+    "$("$SWEEP" --include '*.md' "$ABSENT" 2>&1 | /usr/bin/grep -c 'NOT SEARCHED because grep')" 0
+
+echo
+printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
+[[ $fail -eq 0 ]]

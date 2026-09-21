@@ -1,0 +1,59 @@
+#!/usr/bin/env sh
+
+# >>> bd-memgraph check >>>
+# Blocks commits on hard memory-graph errors (dangling/self links); warnings pass.
+# Skips silently when bd, bd-memgraph, or .beads are absent — never bricks a repo.
+# Bypass once with: git commit --no-verify   Remove with: bd-memgraph install-hook --remove
+if command -v bd-memgraph >/dev/null 2>&1 && command -v bd >/dev/null 2>&1 && [ -d .beads ]; then
+  # --no-ledger: the guard validates only — writing observations mid-commit would
+  # dirty .beads/memgraph-ledger.json in the working tree on every commit
+  bd-memgraph --no-ledger check || {
+    echo "bd-memgraph: hard errors in the memory graph (see above) — fix or --no-verify" >&2
+    exit 1
+  }
+fi
+# <<< bd-memgraph check <<<
+
+
+# >>> agent-docs symlink guard >>>
+# CLAUDE.md must stay a symlink to AGENTS.md so the two cannot diverge, and the
+# workspace protocol must stay outside the bd-managed markers. Logic lives in the
+# repo so it is reviewable; this stanza is only the invocation.
+# Bypass once with: git commit --no-verify   Reinstall with: tools/setup-repo.sh
+if [ -x tools/check-agent-docs-linked.sh ]; then
+  tools/check-agent-docs-linked.sh || exit 1
+fi
+# <<< agent-docs symlink guard <<<
+
+# --- BEGIN BEADS INTEGRATION v1.1.2 ---
+# This section is managed by beads. Do not remove these markers.
+if command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
+  _bd_used_perl=0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_bd_timeout" bd hooks run pre-commit "$@"
+    _bd_exit=$?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_bd_timeout" bd hooks run pre-commit "$@"
+    _bd_exit=$?
+  elif command -v perl >/dev/null 2>&1; then
+    _bd_used_perl=1
+    perl -e 'alarm shift; exec @ARGV' "$_bd_timeout" bd hooks run pre-commit "$@"
+    _bd_exit=$?
+  else
+    echo >&2 "beads: hook 'pre-commit' running without timeout; install coreutils or perl to enable BEADS_HOOK_TIMEOUT"
+    bd hooks run pre-commit "$@"
+    _bd_exit=$?
+  fi
+  if [ $_bd_exit -eq 124 ] || { [ $_bd_used_perl -eq 1 ] && [ $_bd_exit -eq 142 ]; }; then
+    echo >&2 "beads: hook 'pre-commit' timed out after ${_bd_timeout}s — continuing without beads"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -eq 3 ]; then
+    echo >&2 "beads: database not initialized — skipping hook 'pre-commit'"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
+fi
+# --- END BEADS INTEGRATION v1.1.2 ---
