@@ -61,6 +61,14 @@ isn't there". Measured 2026-09-21 in the workspace this came from: a plain `rg` 
 reached 131 files; the corpus was 8,993 across 7 repos. Zero hits, no error. Re-measure in your
 own tree — the ratio is the durable claim, and an absolute threshold ages out.
 
+**`tools/check-no-agent-cache-paths.sh`** — refuses commits that embed a per-conversation agent
+cache path (`~/.gemini/antigravity-cli/brain/<uuid>/`, `~/.claude/projects/<uuid>/`,
+`/tmp/claude-<uid>/`). Those resolve for nobody else and on no other machine, so a figure linked
+from one is a broken image for every other reader. It runs at the **git layer** on purpose: the
+trap is not specific to one agent, so neither is the guard — it covers the agent that has no
+session hooks at all. Documents and generated JSON are scanned whole-file; code on added lines
+only, a ratchet rather than a flag day.
+
 **`tools/dolt-guard.sh`** — restarts bd's Dolt server after a reboot. Without it, `bd` reads keep
 working while writes silently fail to land, which is the worst possible shape for a data store.
 

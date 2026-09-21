@@ -234,7 +234,11 @@ that every command named here actually exists, so a rotted entry fails loudly.
 
 ## What is in this repo
 
-**Session machinery** (`.claude/`) — these run automatically and shape every session.
+**Session machinery** (`.claude/`) — these run automatically and shape every session, **and they
+require Claude Code**: `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those
+three fire there and nowhere else. Under any other harness they do nothing and nothing reports
+it, while every git-layer guard, every tool and this file keep working — `docs/ops/other-harnesses.md`
+has the matrix and says how to prime a session by hand.
 `bd-prime-hook.sh` builds the session-start payload (session rules, bd context, hot memories, an
 index of the rest); `bd-prerun-hook.sh` is a PreToolUse guard that blocks bare `pkill`/`killall`
 and malformed `bd remember`; `bd-stop-hook.sh` warns about in-progress issues at stop.
