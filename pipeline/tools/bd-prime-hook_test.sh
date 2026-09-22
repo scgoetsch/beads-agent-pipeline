@@ -53,6 +53,35 @@ chk "hot body emitted in full"              "$(grep -c 'ALPHA-BODY sentinel' <<<
 chk "cold body NOT emitted"                 "$(grep -c 'BETA-BODY sentinel' <<<"$out")" 0
 chk "cold key in the index, hot key not"    "$(grep -cE '^- beta-key$' <<<"$out"):$(grep -cE '^- alpha-key$' <<<"$out")" "1:0"
 
+echo "### a store with no memories yet is tiered as 0 of 0, not treated as a failed export"
+# The normal state of a fresh project. This used to print the fallback banner on every session
+# until the first `bd remember`.
+: > "$T/ws/.claude/memory-hot.txt"
+cat > "$T/bin/bd" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  prime)  printf '# Beads Workflow Context\n\n## Persistent Memories (0)\n\n## Core Rules\n- rule one\n' ;;
+  export) out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done; : > "$out" ;;
+  *) exit 0 ;;
+esac
+STUB
+out=$(run_hook)
+chk "empty store -> no fallback banner"     "$(grep -c 'bd-prime-hook:' <<<"$out")" 0
+chk "empty store -> 0 of 0 total"           "$(grep -c 'HOT tier (0 always-loaded guards of 0 total)' <<<"$out")" 1
+chk "empty store -> says so in words"       "$(grep -c 'no memories yet' <<<"$out")" 1
+# restore the two-memory stub for the fallback cases below
+cat > "$T/bin/bd" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  prime)
+    printf '# Beads Workflow Context\n\n## Persistent Memories (2)\n\n### alpha-key\nALPHA-BODY sentinel\n\n### beta-key\nBETA-BODY sentinel\n\n## Core Rules\n- rule one\n' ;;
+  export)
+    out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
+    printf '{"_type":"memory","key":"alpha-key","value":"ALPHA-BODY sentinel"}\n{"_type":"memory","key":"beta-key","value":"BETA-BODY sentinel"}\n' > "$out" ;;
+  *) exit 0 ;;
+esac
+STUB
+
 echo "### every fallback names itself"
 rm -f "$T/ws/.claude/memory-hot.txt"
 out=$(run_hook)

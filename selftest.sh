@@ -200,6 +200,29 @@ grep -q 'NONE of them fires' "$T/.install3.log" && bad "verify does not cry wolf
   || ok "verify does not cry wolf on the absolute path"
 git -C "$T" config core.hooksPath .beads-hooks
 
+# bd init (1.3) also registers its own `bd prime` SessionStart hook in .claude/settings.json.
+# The next installer run replaces it with ours -- the designed outcome, since ours runs bd prime
+# -- and must SAY so without counting it as a problem. It used to warn, so the first re-run after
+# bd init exited 1 on every fresh box. A hook of the user's own that gets replaced is a real loss
+# and must still warn.
+jq '.hooks.SessionStart = [{"matcher":"","hooks":[{"type":"command","command":"bd prime --hook-json"}]}]' \
+  "$T/.claude/settings.json" > "$T/.settings.bdinit" && cp -f "$T/.settings.bdinit" "$T/.claude/settings.json"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install4.log" 2>&1; rc4=$?
+grep -q "replaced bd's own SessionStart hook" "$T/.install4.log" && ok "bd's own SessionStart hook is replaced, and said so" \
+  || bad "bd's own SessionStart hook is replaced, and said so"
+grep -q 'REPLACED .* of yours' "$T/.install4.log" && bad "replacing only bd's hook is not a problem" \
+  || ok "replacing only bd's hook is not a problem"
+if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then chk "...and the re-run after bd init exits 0" "$rc4" "0"; fi
+chk "our SessionStart hook is back" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$T/.claude/settings.json" | grep -c 'bd-prime-hook.sh')" "1"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install5.log" 2>&1
+grep -q 'nothing to do' "$T/.install5.log" && ok "and the run after that is a no-op" || bad "and the run after that is a no-op"
+jq '.hooks.PreToolUse += [{"matcher":"","hooks":[{"type":"command","command":"echo mine"}]}]' \
+  "$T/.claude/settings.json" > "$T/.settings.user" && cp -f "$T/.settings.user" "$T/.claude/settings.json"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install6.log" 2>&1
+grep -q 'REPLACED 1 hook command(s) of yours' "$T/.install6.log" && ok "a hook of the USER's that gets replaced still warns" \
+  || bad "a hook of the USER's that gets replaced still warns"
+rm -f "$T"/.claude/settings.json.bak.*
+
 printf '\n\033[1m### it refuses to clobber your content, and drops nothing beside AGENTS.md\033[0m\n'
 cp -f "$T/AGENTS.md" "$T/.agents.orig"
 # bd init appends its managed block to AGENTS.md. That is neither the user's edit nor drift, and

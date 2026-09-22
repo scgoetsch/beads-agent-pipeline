@@ -177,18 +177,25 @@ elif command -v jq >/dev/null 2>&1; then
     if [ "$(printf '%s' "$merged" | jq -S .)" = "$(jq -S . "$SET" 2>/dev/null)" ]; then
       say ".claude/settings.json (hooks already present)"
     else
-      had_bd_hook=$(grep -c 'bd prime --hook-json' "$SET" 2>/dev/null || true)
+      # What are we replacing? Hook commands in the existing file that are neither bd's own
+      # (`bd prime`, which bd init / bd setup claude register) nor already ours. Replacing bd's
+      # is the designed outcome -- ours runs bd prime itself -- and happens on EVERY fresh install
+      # the moment bd init has run, so it is reported but not counted as a problem. Replacing
+      # anything else is a real loss and stays a `!`. Counting bd's as a problem made the first
+      # re-run after bd init exit 1 on every fresh box, for behaviour the README calls expected.
+      had_bd_hook=$(grep -c 'bd prime' "$SET" 2>/dev/null || true)
+      had_other=$(jq -r '[.hooks // {} | .[]? | .[]? | .hooks[]? | .command] | map(select((test("bd prime") or test("bd-(prime|prerun|stop)-hook\\.sh")) | not)) | length' "$SET" 2>/dev/null || echo 0)
       run cp -f "$SET" "$SET.bak.$(date +%s)"
       if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m merge hooks into %s\n' "$SET"
       else printf '%s\n' "$merged" > "$SET"; fi
       did ".claude/settings.json — merged our hooks in (backup kept)"
-      warn "our 'hooks' block REPLACED any same-named block of yours. Check the backup if you had one."
-      # bd init / bd setup claude register their own SessionStart hook in this file. Ours runs
-      # `bd prime` itself, so replacing it loses nothing -- but bd's own check will now say so.
+      if [ "${had_other:-0}" -gt 0 ]; then
+        warn "our 'hooks' block REPLACED $had_other hook command(s) of yours that were not bd's. Check the backup."
+      fi
       if [ "${had_bd_hook:-0}" -gt 0 ]; then
-        say "    that included bd's own SessionStart hook (bd prime --hook-json). Ours runs bd prime"
-        say "    itself, so nothing is lost — but \`bd setup claude --check\` will report 'No hooks"
-        say "    installed' from now on. That is expected; do not re-run bd setup to fix it."
+        say "    replaced bd's own SessionStart hook (bd prime). Ours runs bd prime itself, so nothing is"
+        say "    lost — but \`bd setup claude --check\` will report 'No hooks installed' from now on."
+        say "    That is expected; do not re-run bd setup to fix it."
       fi
     fi
   else

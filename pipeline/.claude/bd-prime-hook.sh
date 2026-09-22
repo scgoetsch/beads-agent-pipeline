@@ -68,13 +68,18 @@ fallback_full() { echo "# ⚠ bd-prime-hook: $1 — emitting the FULL bd prime d
 command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
 [ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
 bd export --include-memories -o "$MM" 2>/dev/null || { fallback_full "bd export --include-memories failed"; exit 0; }
-grep -q '"_type":"memory"' "$MM" 2>/dev/null || { fallback_full "bd export produced no memories"; exit 0; }
+[ -f "$MM" ] || { fallback_full "bd export exited 0 but wrote no file"; exit 0; }
+# A store with NO memories yet is the normal state of a fresh project, not a failed export: the
+# tiered output is simply "0 of 0". Treating it as a fallback put a warning banner on every
+# session of a new project until its first `bd remember`. The failure this guards against -- an
+# export that exits 0 and writes nothing -- is the missing-file case above.
 emit_rules
 # bd workflow context + command reference, with the full memory dump removed
 # (delete from "## Persistent Memories" up to but NOT including "## Core Rules")
 bd prime 2>/tmp/bd-prime-err | sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}'
 TOTAL=$(grep -c '"_type":"memory"' "$MM"); HOTN=$(grep -c . "$HOTFILE")
 echo ""; echo "## Persistent Memories — HOT tier ($HOTN always-loaded guards of $TOTAL total)"
+[ "$TOTAL" -eq 0 ] && echo "_The store has no memories yet — nothing to tier. \`bd remember --key <slug> \"<fact>\"\` adds the first._"
 echo "_Only recurring-mistake guards are injected in full below. Retrieve any other memory on demand with \`bd memories <keyword>\`._"; echo ""
 while IFS= read -r k; do [ -z "$k" ] && continue
   jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM"; done < "$HOTFILE"

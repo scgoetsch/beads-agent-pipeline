@@ -107,6 +107,14 @@ where tasks and memory live, because harnesses will contradict them repeatedly.
 `checks-narrower-than-what-they-check.md`: twelve instances of the one defect class every guard
 here is built against, with the diagnostic question to ask of your own checks.
 
+## Setting up a fresh box — for agents
+
+`AGENTS.md` in this directory (and `CLAUDE.md`, a symlink to it) is a runbook an agent can follow
+top to bottom on a machine that has never seen bd: install the prerequisites, self-test the
+pipeline, install it into a project, initialise bd, and prove every guard through `git commit`,
+with a gate after each phase and a report shape at the end. It is what found most of the bugs in
+this repository's history, so run it as written and file whatever deviates.
+
 ## Verify it
 
 ```bash
