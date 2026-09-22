@@ -224,6 +224,18 @@ grep -q "our template: $SRC/pipeline/AGENTS.md" "$T/.agents2.log" && ok "the log
   || bad "the log points at the template instead"
 cp -f "$T/.agents.orig" "$T/AGENTS.md"
 
+printf '\n\033[1m### an installed file the target gitignores is named\033[0m\n'
+# The origin workspace ignores *.txt, which ate .claude/memory-hot.txt: every clone would have
+# taken the SessionStart hook's full-dump fallback. Verify checks every payload file that landed.
+printf '*.txt\n' > "$T/.gitignore"
+"$SRC/install.sh" --no-shell "$T" >"$T/.eaten.log" 2>&1
+grep -q 'GITIGNORED in this repo' "$T/.eaten.log" && grep -qE '^ *\.claude/memory-hot\.txt$' "$T/.eaten.log" \
+  && ok "memory-hot.txt under a *.txt rule is reported, by path" || bad "memory-hot.txt under a *.txt rule is reported, by path"
+rm -f "$T/.gitignore"
+"$SRC/install.sh" --no-shell "$T" >"$T/.eaten2.log" 2>&1
+grep -q 'no installed file is gitignored' "$T/.eaten2.log" && ok "and the clean state is stated, not silent" \
+  || bad "and the clean state is stated, not silent"
+
 printf '\n\033[1m### the memory-graph ledger: ignored, untracked, tracked — each named\033[0m\n'
 # The doc used to recommend `.beads/` + `!.beads/memgraph-ledger.json`, which ignores the ledger:
 # git cannot re-include a file under an excluded directory. Verify says which state it is in.

@@ -374,6 +374,17 @@ if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
   if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs that file"
   else warn "core.hooksPath is '${HOOKS_PATH_VALUE:-unset}', which is not .beads-hooks/ — every stanza above is present and NONE of them fires"; fi
 fi
+# Nothing installed here helps a clone if the target's .gitignore eats it. The workspace this came
+# from ignores `*.txt`, which swallowed .claude/memory-hot.txt: every clone would have taken the
+# SessionStart hook's full-dump fallback. Check every payload file that landed, not a chosen few.
+if [ "$MODE" != dryrun ] && [ -d "$TARGET/.git" ]; then
+  eaten=$(cd "$PAYLOAD" && find . -type f | sed 's|^\./||' | while IFS= read -r rel; do
+    [ -e "$TARGET/$rel" ] && git -C "$TARGET" ls-files --others --ignored --exclude-standard -- "$rel"; done)
+  if [ -n "$eaten" ]; then
+    warn "installed file(s) GITIGNORED in this repo — they will not reach any clone; add a \`!path\` re-include:"
+    printf '%s\n' "$eaten" | sed 's/^/        /' >&2
+  else say "no installed file is gitignored here"; fi
+fi
 # The memory-graph ledger only helps the next machine if it is in git. bd does not ignore it, but
 # a root .gitignore that excludes `.beads/` wholesale does -- and a `!` re-include under an
 # excluded directory has no effect (docs/ops/memory-and-the-graph.md has the working form).
