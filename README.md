@@ -75,11 +75,23 @@ a discipline you may not want, and it is one line to turn off:
   if bd is unavailable. The directory name is the one-line knob `SCRIPT_DIRS_RE` in
   `.claude/bd-prerun-hook.sh`; set it to something that matches nothing to drop the rule.
 
-**The SessionStart hook** replaces bd's raw `bd prime` dump (76 KB on a 40-memory store, past
-what hosts keep of a session payload) with the rules, the bd context, the memories listed in
-`.claude/memory-hot.txt` in full, and a key-only index of the rest. The hot list ships empty, and
-empty means "index only", not "unconfigured". If the hook has to fall back to the full dump — no
-`jq`, no export — it says so on its first line rather than looking like the tiered output.
+**The SessionStart hook** replaces bd's raw `bd prime` dump (76 KB on a 40-memory store) with,
+in this order, the rules, a key-only index of the store, the memories listed in
+`.claude/memory-hot.txt` in full, and the bd context. The hot list ships empty, and empty means
+"index only", not "unconfigured". If the hook has to fall back to the full dump — no `jq`, no
+export — it says so on its first line rather than looking like the tiered output.
+
+**The host has a budget, and the hook knows it.** Claude Code keeps only a 2,000-byte preview of
+any one SessionStart hook command's output above 10,000 bytes and writes the rest to a file
+(measured 2026-09-22 with synthetic hooks, 10,000 arriving whole and 12,000 not; the JSON
+`additionalContext` form is capped the same; [anthropics/claude-code#70460](https://github.com/anthropics/claude-code/issues/70460)
+states the same numbers and no setting to raise them). A 15.9 KB tiered payload lost its hot
+tier and its index that way while every line of it read as success. So the hook budgets:
+`BD_PRIME_BUDGET` (default 10000; `0` lifts the cap on a host that has none) bounds what it
+emits, hot bodies that do not fit are named at the top instead of shipped (`bd recall <key>`
+fetches one), the bd context is the first thing dropped, and the full-dump fallback is cut the
+same way with a line saying so. On Claude Code that leaves roughly 8 KB for hot bodies; keep the
+hot list to guards, not to everything you would like an agent to know.
 
 **`tools/sweep.sh`** — corpus-wide search with a **positive control per repo**. It lifts real lines
 out of each repo and greps for them through the identical code path; if they do not come back, that

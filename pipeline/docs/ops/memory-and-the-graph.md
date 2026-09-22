@@ -39,8 +39,12 @@ way. Two measurements from a live store that shaped this design:
 
 - A 70-character preview per index entry cost 38,480 bytes of a 76,290-byte payload: half the
   hook, spent restating keys that are already full sentences. Keys only.
-- Hosts truncate the session payload (~39 KB was observed). **Anything appended at the bottom is
-  invisible precisely when it matters**, which is why alarms are emitted at the top.
+- The host keeps far less than the hook can emit. Claude Code shows a 2,000-byte preview of any
+  one SessionStart hook output above 10,000 bytes and files the rest (measured 2026-09-22;
+  anthropics/claude-code#70460); an earlier ~39 KB figure was wrong. **Anything appended at the
+  bottom is invisible precisely when it matters**, which is why alarms come first, the index comes
+  before the hot bodies, and the hook trims to `BD_PRIME_BUDGET` (default 10000) rather than
+  letting the host trim for it: what it drops it names, what the host drops nobody sees.
 
 An empty `memory-hot.txt` is fine and is how it ships: the hook emits the rules, the bd context and a
 key-only index of every memory, with nothing in full. It does NOT fall back to the full `bd prime`

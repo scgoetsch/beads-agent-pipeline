@@ -263,8 +263,12 @@ require Claude Code**: `.claude/settings.json` wires three hook scripts on four 
 other harness they do nothing and nothing reports it, while every git-layer guard, every tool
 and this file keep working — `docs/ops/other-harnesses.md` has the matrix and says how to prime
 a session by hand.
-`bd-prime-hook.sh` builds the session-start payload (session rules, bd context, hot memories, an
-index of the rest) and runs again before a context compaction; `bd-prerun-hook.sh` is a
+`bd-prime-hook.sh` builds the session-start payload (session rules, an index of the memory store,
+the hot memories in full, then the bd context — trimmed to `BD_PRIME_BUDGET`, default 10,000
+bytes, because Claude Code shows only a 2,000-byte preview above that; what is dropped is named
+at the top, and every payload ends with `# — end of bd-prime-hook payload —`: if you do not see
+that line, the host cut the payload — run `bash .claude/bd-prime-hook.sh` yourself) and runs
+again before a context compaction; `bd-prerun-hook.sh` is a
 PreToolUse guard that blocks bare `pkill`/`killall`, malformed `bd remember`, and a run of a
 script under the scripts directory with no bd issue in progress (which directory is the
 one-line knob `SCRIPT_DIRS_RE` in the hook); `bd-stop-hook.sh` warns about in-progress issues at stop.

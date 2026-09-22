@@ -150,6 +150,14 @@ done
 out=$(cd "$T/ws" && PATH="$T/bin:$T/notimeout" bash .claude/bd-prime-hook.sh 2>/dev/null)
 chk "no timeout: the payload says checks run UNBOUNDED" "$(grep -c 'run UNBOUNDED' <<<"$out")" 1
 chk "no timeout: the check still ran"                  "$(grep -c 'MOUNT-DOWN sentinel' <<<"$out")" 1
+# A check that dumps 12 KB would push the rules past the host's cap and take the whole payload
+# with it. It is cut, the cut is marked, and the payload still fits (peer review, 2026-09-22).
+printf '#!/usr/bin/env bash\necho "DUMP-START sentinel"; head -c 12000 /dev/zero | tr "\\0" d; echo\n' > "$T/ws/.claude/site-checks/dump.sh"
+chmod +x "$T/ws/.claude/site-checks/dump.sh"
+out=$(run_hook)
+chk "a 12 KB check is cut and the cut is marked"      "$(grep -c 'cut by bd-prime-hook at 1500 of' <<<"$out")" 1
+chk "...its first bytes are kept"                      "$(grep -c 'DUMP-START sentinel' <<<"$out")" 1
+chk "...and the payload still fits the budget"         "$(( $(printf '%s' "$out" | wc -c | tr -d ' ') <= 10000 ))" 1
 rm -rf "$T/ws/.claude/site-checks"
 
 echo "### this suite's no-jq branch: run it again with jq hidden, and require it to pass"
@@ -175,6 +183,93 @@ case "$1" in prime) printf '## Persistent Memories (0)\n## Core Rules\n' ;; expo
 STUB
 out=$(run_hook)
 chk "export failure -> banner names it"     "$(grep -c 'bd-prime-hook: bd export .*failed' <<<"$out")" 1
+
+# ---- the host's budget --------------------------------------------------------------------
+# Claude Code keeps only a 2,000-byte preview of a SessionStart hook output above 10,000 bytes
+# (measured 2026-09-22; anthropics/claude-code#70460). The hook that shipped before this section
+# emitted rules, then bd context, then the hot tier, then the index, with no idea of the cap: a
+# 15.9 KB payload on a real store reached the model as its first 2 KB, hot tier and index gone,
+# and every line of it looked like success. Each check below fails against that hook.
+stub_store() { # stub_store <alpha-body> <beta-body> <extra-context-bytes>
+  local a=$1 b=$2 pad; pad=$(head -c "$3" /dev/zero | tr '\0' 'c')
+  cat > "$T/bin/bd" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+  prime)
+    printf '# Beads Workflow Context\n\n## Persistent Memories (2)\n\n### alpha-key\n%s\n\n### beta-key\n%s\n\n## Core Rules\n- rule one\n%s\n' "$a" "$b" "$pad" ;;
+  export)
+    out=""; while [ \$# -gt 0 ]; do [ "\$1" = "-o" ] && out=\$2; shift; done
+    printf '{"_type":"memory","key":"alpha-key","value":"%s"}\n{"_type":"memory","key":"beta-key","value":"%s"}\n' "$a" "$b" > "\$out" ;;
+  *) exit 0 ;;
+esac
+STUB
+}
+bytes() { printf '%s' "$1" | wc -c | tr -d ' '; }
+
+echo "### over budget: the payload is trimmed to fit, says so first, and names what it dropped"
+stub_store "$(head -c 9500 /dev/zero | tr '\0' 'x')" "BETA-BODY sentinel" 0
+printf 'alpha-key\n' > "$T/ws/.claude/memory-hot.txt"
+out=$(run_hook)
+chk "output fits the default budget (10,000 bytes)"   "$(( $(bytes "$out") <= 10000 ))" 1
+chk "line 1 announces the trim"                        "$(printf '%s' "$out" | head -1 | grep -c 'PAYLOAD TRIMMED')" 1
+chk "the dropped hot key is named for bd recall"       "$(grep -c 'bd recall <key>`: alpha-key' <<<"$out")" 1
+chk "its 9.5 KB body is not shipped"                     "$(grep -c 'xxxxxxxxxx' <<<"$out")" 0
+chk "rules still arrive"                               "$(grep -c 'MANDATORY SESSION RULES' <<<"$out")" 1
+chk "the index still arrives"                          "$(grep -cE '^- beta-key$' <<<"$out")" 1
+chk "the bd context still arrives when it fits"        "$(grep -c 'rule one' <<<"$out")" 1
+
+echo "### the bd context is the first thing dropped; a hot body that fits is kept"
+stub_store "$(head -c 4500 /dev/zero | tr '\0' 'y')" "BETA-BODY sentinel" 5000
+out=$(run_hook)
+chk "still within budget"                              "$(( $(bytes "$out") <= 10000 ))" 1
+chk "the 4.5 KB hot body is shipped"                   "$(grep -c 'yyyyyyyyyy' <<<"$out")" 1
+chk "the context is dropped and named"                 "$(grep -c 'run `bd prime`' <<<"$out")" 1
+chk "...so its text is absent"                         "$(grep -c 'rule one' <<<"$out")" 0
+
+echo "### priority is the ORDER of memory-hot.txt, not the alphabet"
+# jq's `unique` sorts. With it, the budget kept whichever hot key sorted first: on a real store
+# that was `evaluation-…` over `operational-state`, whatever the list said.
+stub_store "$(head -c 4800 /dev/zero | tr '\0' 'x')" "$(head -c 4800 /dev/zero | tr '\0' 'y')" 0
+printf 'beta-key\nalpha-key\n' > "$T/ws/.claude/memory-hot.txt"
+out=$(run_hook)
+chk "beta (listed first) is shipped"                   "$(grep -c 'yyyyyyyyyy' <<<"$out")" 1
+chk "alpha (listed second, does not fit) is dropped"   "$(grep -c 'xxxxxxxxxx' <<<"$out")" 0
+chk "...and named"                                     "$(grep -c 'bd recall <key>`: alpha-key' <<<"$out")" 1
+printf 'alpha-key\n' > "$T/ws/.claude/memory-hot.txt"
+
+echo "### BD_PRIME_BUDGET: 0 lifts the cap, a larger value is honoured"
+stub_store "$(head -c 9500 /dev/zero | tr '\0' 'x')" "BETA-BODY sentinel" 0
+out=$(BD_PRIME_BUDGET=0 run_hook)
+chk "budget 0: the 9.5 KB body is shipped"               "$(grep -c 'xxxxxxxxxx' <<<"$out")" 1
+chk "budget 0: no trim alarm"                          "$(grep -c 'PAYLOAD TRIMMED' <<<"$out")" 0
+out=$(BD_PRIME_BUDGET=20000 run_hook)
+chk "budget 20000: shipped, no alarm"                  "$(grep -c 'xxxxxxxxxx' <<<"$out"):$(grep -c 'PAYLOAD TRIMMED' <<<"$out")" "1:0"
+
+echo "### under budget: nothing is trimmed, and the order is rules, index, hot tier, bd context"
+stub_store "ALPHA-BODY sentinel" "BETA-BODY sentinel" 0
+out=$(run_hook)
+chk "no trim alarm"                                    "$(grep -c 'PAYLOAD TRIMMED' <<<"$out")" 0
+chk "the payload ends with its end marker"             "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
+l_rules=$(grep -n 'MANDATORY SESSION RULES' <<<"$out" | head -1 | cut -d: -f1)
+l_index=$(grep -n '^## Persistent Memories — index' <<<"$out" | cut -d: -f1)
+l_hot=$(grep -n '^## Persistent Memories — HOT tier' <<<"$out" | cut -d: -f1)
+l_ctx=$(grep -n '^## Core Rules' <<<"$out" | cut -d: -f1)
+chk "rules before index before hot tier before context" \
+    "$(( l_rules < l_index && l_index < l_hot && l_hot < l_ctx ))" 1
+
+echo "### the fallback dump is budgeted too, and says on line 2 that it was cut"
+rm -f "$T/ws/.claude/memory-hot.txt"
+cat > "$T/bin/bd" <<STUB
+#!/usr/bin/env bash
+case "\$1" in prime) printf '# Beads Workflow Context\n%s\n' "$(head -c 12000 /dev/zero | tr '\0' 'z')" ;; *) exit 0 ;; esac
+STUB
+out=$(run_hook)
+chk "fallback output fits the budget"                  "$(( $(bytes "$out") <= 10000 ))" 1
+chk "line 1 still names the fallback"                  "$(printf '%s' "$out" | head -1 | grep -c 'missing.*FULL bd prime dump')" 1
+chk "line 2 says the dump was cut and why"             "$(printf '%s' "$out" | sed -n 2p | grep -c 'CUT to fit')" 1
+chk "the cut point is marked"                          "$(grep -c 'cut here by bd-prime-hook' <<<"$out")" 1
+chk "the cut fallback still ends with the end marker"  "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
+: > "$T/ws/.claude/memory-hot.txt"
 
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"

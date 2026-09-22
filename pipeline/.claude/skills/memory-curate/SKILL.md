@@ -48,7 +48,10 @@ earlier version of this skill said to, and following it would rewrite a tested f
 decides what goes on the list:
 1. Classify HOT (always-relevant guards, ~top 10-20) vs SITUATIONAL.
 2. Write the HOT keys to `.claude/memory-hot.txt`, one per line. Keys not in the store are named
-   at the next session start rather than silently ignored.
+   at the next session start rather than silently ignored. **Mind the budget:** the hook trims
+   to `BD_PRIME_BUDGET` (default 10,000 bytes, the Claude Code cap) and names any hot body that
+   did not fit — on Claude Code that is roughly 8 KB of bodies in total. A hot list that
+   overflows is not hot; compact the bodies or shorten the list until the top line is gone.
 3. Mid-session, pull situational detail on demand via `bd memories <kw>` (or mesh `search`).
    Cold-start is safe because the always-on guards are exactly what's needed before the task is known.
 

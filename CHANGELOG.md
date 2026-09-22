@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- The SessionStart hook now fits the host. Claude Code keeps only a 2,000-byte preview of any
+  one hook command's output above 10,000 bytes and files the rest (measured 2026-09-22 with
+  synthetic hooks; the JSON `additionalContext` form is capped the same; anthropics/claude-code
+  #70460). The hook emitted rules, then the 4.8 KB bd context, then the hot tier, then the
+  index, and a real store with three hot keys produced 15.9 KB: the model got the banner and
+  nothing after it, while every line of the run read as success. The hook now builds every
+  section first and assembles them against `BD_PRIME_BUDGET` (default 10000; `0` = no cap):
+  rules, site checks and the index always ship; the index comes before the hot bodies; hot
+  bodies are kept in list order while they fit and the rest are NAMED at the top for
+  `bd recall`; the bd context is the first thing dropped; the full-dump fallback is cut the
+  same way with a line 2 saying so. `tools/bd-prime-hook_test.sh` gains a budget section
+  (28 cases; 17 fail against the previous hook, the rest pin what must not change). Hot bodies
+  are also ranked in the order of `memory-hot.txt` now: the list was deduplicated with jq's
+  `unique`, which sorts, so the budget kept whichever key came first in the alphabet. From the
+  peer review of this change: each site check's output is cut at 1,500 bytes with the cut marked,
+  so a chatty check cannot push the rules past the cap; every payload ends with an end marker a
+  reader can look for; `install.sh` measures the real payload in its verify step. Not adopted
+  (recorded for whoever needs more than ~8 KB of hot bodies): splitting the payload across
+  several hook commands, since the cap is per command — it multiplies the budget at the cost of
+  running `bd export` per slice, a longer `settings.json` the installer must merge, and an
+  unmeasured possibility of a cap on the sum. PreCompact runs the same hook and is assumed to
+  have the same cap; it was not measured separately. The README, `docs/ops/memory-and-the-graph.md`
+  (its "~39 KB" figure was wrong), the template `AGENTS.md`, the `memory-curate` skill and the
+  runbook's section-7 sentinel say so.
+
 From the 2026-09-22 line-by-line inspection (agy, reviewed by grok-peer, each finding verified
 against c37eced before it was fixed). Each fix ships with a check that fails on the previous code.
 

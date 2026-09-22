@@ -198,7 +198,11 @@ bd forget runbook-sentinel-7731 >/dev/null
 Measured 2026-09-22 with Claude Code 2.1.278: line 1 is `SessionStart:startup hook success: # 🚨
 MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨` and line 2 is `runbook-sentinel-7731`. If line 1
 is the raw `bd prime` dump instead, the merge in phase 4 did not take —
-`jq '.hooks.SessionStart' .claude/settings.json` should name `bd-prime-hook.sh`.
+`jq '.hooks.SessionStart' .claude/settings.json` should name `bd-prime-hook.sh`. If line 1 is
+right and line 2 is `NOT LISTED`, the host cut the payload: Claude Code keeps only a 2,000-byte
+preview of a hook output above 10,000 bytes, and the hook trims itself to `BD_PRIME_BUDGET`
+(default 10000) to stay under that — `bash .claude/bd-prime-hook.sh | wc -c` says how big it
+is, and a first line reading `PAYLOAD TRIMMED` says what it dropped.
 
 **Gate 7:** the by-hand runs match the comments above.
 

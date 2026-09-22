@@ -434,6 +434,17 @@ else
     if (cd "$TARGET" && tools/hook_portability_test.sh >/dev/null 2>&1); then say "hook portability suite passes"
     else warn "hook portability suite FAILS — run tools/hook_portability_test.sh in the target"; fi
   fi
+  # The one number the session hook lives or dies by: Claude Code shows at most 10,000 bytes of
+  # one hook's output (a 2,000-byte preview above that). The hook trims itself to that budget and
+  # says so on its first line; measure the real payload here rather than trusting either.
+  if [ -x "$TARGET/.claude/bd-prime-hook.sh" ]; then
+    pb=$(cd "$TARGET" && bash .claude/bd-prime-hook.sh 2>/dev/null | wc -c | tr -d ' ')
+    pl=$(cd "$TARGET" && bash .claude/bd-prime-hook.sh 2>/dev/null | head -1)
+    case $pb in ''|*[!0-9]*) pb=0 ;; esac
+    if [ "$pb" -gt 10000 ]; then warn "session payload is $pb bytes — above the 10,000 Claude Code shows; the hook should have trimmed it (BD_PRIME_BUDGET?)"
+    else say "session payload: $pb bytes (Claude Code shows at most 10,000 per hook)"; fi
+    case $pl in *"PAYLOAD TRIMMED"*) say "    the hook trimmed it — see its first line; shorten .claude/memory-hot.txt" ;; esac
+  fi
 fi
 
 hdr "result"
