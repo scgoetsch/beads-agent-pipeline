@@ -70,6 +70,11 @@ hooks_wired() {
   [ "$got" = "$want" ]
 }
 
+# A file with bd's managed region removed. bd rewrites what is between its markers (the
+# `# --- BEGIN/END BEADS INTEGRATION ---` block in the pre-commit, the `<!-- ... -->` block it
+# appends to AGENTS.md), so byte-identity with our payload is the wrong test for either file.
+outside_bd() { sed '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d' "$1"; }
+
 # ---------------------------------------------------------------- preflight --
 hdr "dependencies"
 need() { # need <cmd> <why> <how>
@@ -225,7 +230,6 @@ hdr "repo guards (.beads-hooks/)"
 # is OUTSIDE bd's markers; inside them is bd's to manage, and the verify step below checks each
 # guard is still present by name.
 HK_DST="$TARGET/.beads-hooks/pre-commit"; HK_SRC="$PAYLOAD/.beads-hooks/pre-commit"
-outside_bd() { sed '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d' "$1"; }
 if [ -e "$HK_DST" ] && ! cmp -s "$HK_SRC" "$HK_DST" \
    && [ "$(outside_bd "$HK_SRC")" = "$(outside_bd "$HK_DST")" ]; then
   say ".beads-hooks/pre-commit (current — differs only inside bd's own block, which bd manages)"
@@ -247,11 +251,22 @@ else
     | awk 'BEGIN{b=0} /^$/{b++; if(b>1) next} !/^$/{b=0} {print}' > "$AGENTS_RENDERED"
 fi
 trap 'rm -f "$AGENTS_RENDERED"' EXIT
+# AGENTS.md is the one payload file that is MEANT to diverge from ours: the user edits it, and
+# bd init appends its managed block. So this never drops an AGENTS.md.new beside it -- that was
+# re-offered on every re-run, read as "a truncated rewrite in progress" by the first outside
+# reader, and was a trap for whoever edited the wrong file next. Say which state it is in and
+# where our template lives; that is all the information the .new ever carried.
 if [ -e "$TARGET/AGENTS.md" ]; then
   if cmp -s "$AGENTS_RENDERED" "$TARGET/AGENTS.md"; then say "AGENTS.md (already current)"
+  elif [ "$(outside_bd "$AGENTS_RENDERED")" = "$(outside_bd "$TARGET/AGENTS.md")" ]; then
+    say "AGENTS.md (current — differs only inside bd's own block, which bd init appends)"
   else
-    run cp -f "$AGENTS_RENDERED" "$TARGET/AGENTS.md.new"
-    say "AGENTS.md exists — yours kept. Ours is at AGENTS.md.new; merge what you want."
+    say "AGENTS.md is yours — kept. It differs from our template, which is the point."
+    say "    our template: $PAYLOAD/AGENTS.md  (the peer section is stripped unless --with-peer)"
+  fi
+  if [ -e "$TARGET/AGENTS.md.new" ]; then
+    run rm -f "$TARGET/AGENTS.md.new"
+    did "removed AGENTS.md.new — an earlier run left it; it was only ever a copy of our template"
   fi
 else
   run cp -f "$AGENTS_RENDERED" "$TARGET/AGENTS.md"

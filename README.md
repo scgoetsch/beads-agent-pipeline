@@ -11,9 +11,11 @@ cd /path/to/your-project
 /path/to/beads-agent-pipeline/install.sh
 ```
 
-Nothing is overwritten. An existing `AGENTS.md`, `settings.json` or `tools/` file is kept and ours
-lands beside it as `.new`. `--check` inspects, `--dry-run` prints every action, `--no-shell` skips
-the one thing written outside the repo. Re-running repairs a checkout whose config drifted.
+Nothing is overwritten. An existing `settings.json` is merged; an existing `tools/` or `docs/` file
+is kept and ours lands beside it as `.new`. An existing `AGENTS.md` is kept and nothing is written
+beside it — it is meant to diverge from the template, and the log says where the template is.
+`--check` inspects, `--dry-run` prints every action, `--no-shell` skips the one thing written
+outside the repo. Re-running repairs a checkout whose config drifted.
 
 **`--with-peer` is opt-in**, because running several agent sessions against one repo is an
 environment question, not a default. Without it the concurrency doc is not installed and the

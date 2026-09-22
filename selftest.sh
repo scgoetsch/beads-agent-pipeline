@@ -200,13 +200,29 @@ grep -q 'NONE of them fires' "$T/.install3.log" && bad "verify does not cry wolf
   || ok "verify does not cry wolf on the absolute path"
 git -C "$T" config core.hooksPath .beads-hooks
 
-printf '\n\033[1m### it refuses to clobber your content\033[0m\n'
-printf 'MY OWN DOC\n' > "$T/AGENTS.md.mine"; cp -f "$T/AGENTS.md" "$T/.agents.orig"
+printf '\n\033[1m### it refuses to clobber your content, and drops nothing beside AGENTS.md\033[0m\n'
+cp -f "$T/AGENTS.md" "$T/.agents.orig"
+# bd init appends its managed block to AGENTS.md. That is neither the user's edit nor drift, and
+# the installer used to answer it by writing AGENTS.md.new on every re-run -- a stray file that
+# the first outside reader took for a truncated rewrite in progress.
+{ cat "$T/.agents.orig"
+  printf '\n<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:deadbeef -->\n'
+  printf '## Beads Issue Tracker\n\nbd wrote this\n<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
+printf 'left by an earlier run\n' > "$T/AGENTS.md.new"
+"$SRC/install.sh" --no-shell "$T" >"$T/.agents1.log" 2>&1
+grep -q 'AGENTS.md (current' "$T/.agents1.log" && ok "AGENTS.md with bd's block appended counts as current" \
+  || bad "AGENTS.md with bd's block appended counts as current"
+[ -e "$T/AGENTS.md.new" ] && bad "a stale AGENTS.md.new is removed" || ok "a stale AGENTS.md.new is removed"
+# The user's own edits are the whole point of the file: kept, nothing written beside it, and the
+# log says where our template is instead.
 printf 'MY OWN DOC\n' > "$T/AGENTS.md"
-"$SRC/install.sh" --no-shell "$T" >/dev/null 2>&1
+"$SRC/install.sh" --no-shell "$T" >"$T/.agents2.log" 2>&1
 chk "existing AGENTS.md kept" "$(cat "$T/AGENTS.md")" "MY OWN DOC"
-[ -f "$T/AGENTS.md.new" ] && ok "ours offered as AGENTS.md.new" || bad "ours offered as AGENTS.md.new"
-cp -f "$T/.agents.orig" "$T/AGENTS.md"; rm -f "$T/AGENTS.md.new"
+[ -e "$T/AGENTS.md.new" ] && bad "no AGENTS.md.new dropped beside an edited AGENTS.md" \
+  || ok "no AGENTS.md.new dropped beside an edited AGENTS.md"
+grep -q "our template: $SRC/pipeline/AGENTS.md" "$T/.agents2.log" && ok "the log points at the template instead" \
+  || bad "the log points at the template instead"
+cp -f "$T/.agents.orig" "$T/AGENTS.md"
 
 printf '\n\033[1m### --dry-run and --check touch nothing\033[0m\n'
 D=$(mktemp -d); git -C "$D" init -q
