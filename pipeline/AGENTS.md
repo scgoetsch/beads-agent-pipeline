@@ -188,8 +188,11 @@ reader, on no other machine, and not for you next week.**
 Any markdown, README, walkthrough, report or generated manifest committed here MUST use
 repo-relative paths for figures, links and downloads.
 
-- ❌ `![fig](/home/you/.claude/projects/<uuid>/plot.png)`
+- ❌ `![fig](<absolute path into ~/.claude/projects/<uuid>/>plot.png)`
 - ✅ `![fig](results/plots/plot.png)`
+
+(The ❌ example is written with `~` on purpose: the guard matches the absolute form, and a rulebook
+that spelled it out could not itself be committed — which is exactly what happened once.)
 
 If an agent generates artifacts in its cache directory, copy them into the repo FIRST and write
 the repo-relative path from the start. Do not paste a cache path intending to rewrite it later —

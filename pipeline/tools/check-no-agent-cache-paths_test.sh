@@ -21,10 +21,14 @@ chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));
         else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
 run_guard() { (cd "$T" && "$GUARD") >/dev/null 2>&1; echo $?; }
 
-# Built at runtime so this file does not itself contain a literal the guard would reject.
-BAD_DOC="/home/someone/.claude/projects/$(uuidgen 2>/dev/null || echo 1234)/figure.png"
-BAD_TMP="/tmp/claude-1000/scratch/out.txt"
-BAD_AGY="/home/someone/.gemini/antigravity-cli/brain/abc/plot.png"
+# Built at runtime so this file does not itself contain a literal the guard would reject: the
+# home prefix and the uid live in variables, so no source line here matches the guard's regex.
+# The first version of this file said the same thing and then wrote the literals anyway, and
+# the guard blocked the commit that installed its own suite. The last case below checks it.
+HOME_OF=/home/someone; UID_OF=1000
+BAD_DOC="$HOME_OF/.claude/projects/$(uuidgen 2>/dev/null || echo 1234)/figure.png"
+BAD_TMP="/tmp/claude-$UID_OF/scratch/out.txt"
+BAD_AGY="$HOME_OF/.gemini/antigravity-cli/brain/abc/plot.png"
 
 echo "### a clean tree passes"
 printf 'see [fig](results/figure.png)\n' > "$T/clean.md"
@@ -68,6 +72,16 @@ printf 'x = 1\n' > "$T/t.py"; git -C "$T" add t.py
 git -C "$T" -c core.hooksPath=/dev/null commit -qm t-base
 printf 'x = 1\nz = "%s"\n' "$BAD_AGY" > "$T/t.py"; git -C "$T" add t.py
 chk "a fresh bad added line still blocks" "$(run_guard)" 1
+git -C "$T" rm -q --cached t.py; rm -f "$T/t.py"
+
+echo "### this suite, and the guard, can themselves be committed under the guard"
+# A guard whose own test file cannot pass it is installed once with --no-verify and then
+# distrusted. Stage both files as NEW (every line counts as added) and run the guard.
+mkdir -p "$T/tools"
+cp -f "${BASH_SOURCE[0]}" "$T/tools/check-no-agent-cache-paths_test.sh"
+cp -f "$GUARD"            "$T/tools/check-no-agent-cache-paths.sh"
+git -C "$T" add tools
+chk "guard + suite stage clean as new files" "$(run_guard)" 0
 
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"

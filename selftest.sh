@@ -12,6 +12,9 @@ pass=0; fail=0
 ok()  { printf '  \033[32mPASS\033[0m  %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; fail=$((fail+1)); }
 chk() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; fi; }
+# A cache path for the negative controls, built at runtime so this file holds no literal the
+# installed guard rejects -- the pipeline's own files must commit clean under its own hooks.
+BAD_HOME=/home/someone; BADP="$BAD_HOME/.claude/projects/abc/p.png"
 
 printf '\n\033[1m### install into a fresh git repo\033[0m\n'
 git -C "$T" init -q
@@ -83,7 +86,7 @@ printf '\n\033[1m### the git-layer guard blocks a real commit (this is what cove
 G=$(mktemp -d); git -C "$G" init -q
 git -C "$G" config user.email t@example.com; git -C "$G" config user.name t
 "$SRC/install.sh" --no-shell "$G" >/dev/null 2>&1
-printf 'see ![f](/home/someone/.claude/projects/abc/p.png)\n' > "$G/report.md"
+printf 'see ![f](%s)\n' "$BADP" > "$G/report.md"
 git -C "$G" add report.md
 git -C "$G" commit -qm "should be blocked" >/dev/null 2>&1
 chk "commit carrying a cache path is rejected" "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "0"
@@ -92,6 +95,15 @@ printf 'see ![f](results/p.png)\n' > "$G/report.md"
 git -C "$G" add report.md
 git -C "$G" commit -qm "clean" >/dev/null 2>&1
 chk "a clean commit still succeeds"          "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "1"
+# And the payload itself -- AGENTS.md, the docs, the tools, this guard's own suite -- must commit
+# clean under the guards it installs. The first version of the template spelled out a cache path
+# as its "wrong" example, and the suite held the literals it tests with, so the first commit that
+# touched either was blocked by the pipeline itself.
+git -C "$G" add -A
+git -C "$G" commit -qm "the whole installed payload" >"$G/.payload.log" 2>&1
+n=$(git -C "$G" log --oneline 2>/dev/null | wc -l)
+chk "the whole installed payload commits clean under its own guards" "$n" "2"
+[ "$n" = "2" ] || sed -n '1,8p' "$G/.payload.log" | sed 's/^/        /'
 rm -rf "$G"
 
 printf '\n\033[1m### ...and it is wired even when bd is not on the box\033[0m\n'
@@ -112,7 +124,7 @@ if PATH="$bare_path" command -v git >/dev/null 2>&1 && PATH="$bare_path" command
   chk "no-bd: core.hooksPath set anyway"         "$(git -C "$H" config core.hooksPath)" ".beads-hooks"
   grep -q 'core.hooksPath=.beads-hooks' "$H/.log" && ok "no-bd: installer verifies the wiring, not just the file" \
     || bad "no-bd: installer verifies the wiring, not just the file"
-  printf 'see ![f](/home/someone/.claude/projects/abc/p.png)\n' > "$H/report.md"
+  printf 'see ![f](%s)\n' "$BADP" > "$H/report.md"
   git -C "$H" add report.md
   PATH="$bare_path" git -C "$H" commit -qm "should be blocked" >/dev/null 2>&1
   chk "no-bd: commit carrying a cache path is rejected" "$(git -C "$H" log --oneline 2>/dev/null | wc -l)" "0"
