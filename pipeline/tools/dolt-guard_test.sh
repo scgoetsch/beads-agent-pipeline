@@ -181,6 +181,54 @@ check "bd dolt start ran exactly once across 4 shells" "$(wc -l <"$TMP/calls-7" 
 check "port ends up listening" "$([ -n "$(ss -ltnH "sport = :$port7")" ] && echo up || echo down)" "up"
 echo
 
+# ---------------------------------------------------------------- 9
+echo "no listener prober on PATH (no ss, lsof, netstat): says so, touches nothing"
+# The probe used to be `ss` alone. Absent (stock macOS), its empty output read as "not
+# listening" and every new shell tried to start a server. Build a PATH holding the tools the
+# guard needs and none of the three probers.
+NOPROBE="$TMP/noprobe"; mkdir -p "$NOPROBE"
+for t in bash sh date sleep cat grep mkdir touch dirname; do
+    b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOPROBE/$t"
+done
+ws9=$(make_ws ws9); port9=$(free_port)
+stub_never9=$(make_bd never9 "touch '$TMP/CALLED-9'; exit 0")
+PATH="$NOPROBE" run_guard "$ws9" "$port9" "$stub_never9"; rc=$?
+check "returns 0" "$rc" "0"
+grep -q 'cannot probe' "$TMP/err" \
+    && ok "says it cannot probe (not 'not listening')" \
+    || bad "says it cannot probe" "stderr: $(cat "$TMP/err")"
+[ ! -e "$TMP/CALLED-9" ] && ok "bd dolt start NOT called" || bad "bd dolt start NOT called" "it was"
+echo
+
+# ---------------------------------------------------------------- 10
+echo "no flock on PATH: starts the server unlocked and says so, not 'timed out'"
+# A missing flock exited 127, `if ! flock` took the failure branch, and the guard reported a
+# 30-second timeout that never happened -- and gave up on exactly the box it was needed on.
+NOFLOCK="$TMP/noflock"; mkdir -p "$NOFLOCK"
+for t in bash sh date sleep cat grep mkdir touch dirname ss python3 setsid; do
+    b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOFLOCK/$t"
+done
+ws10=$(make_ws ws10); port10=$(free_port)
+stub_start10=$(make_bd start10 "
+setsid python3 -c \"
+import socket,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(('127.0.0.1',$port10)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+exit 0")
+PATH="$NOFLOCK" run_guard "$ws10" "$port10" "$stub_start10"; rc=$?
+LISTENERS+=("$(pgrep -f "127.0.0.1',$port10" | sed -n 1p)")
+check "returns 0" "$rc" "0"
+grep -q 'no flock' "$TMP/err" \
+    && ok "says it ran without the lock" \
+    || bad "says it ran without the lock" "stderr: $(cat "$TMP/err")"
+grep -q 'started dolt server' "$TMP/err" \
+    && ok "and started the server" \
+    || bad "and started the server" "stderr: $(cat "$TMP/err")"
+grep -q 'timed out' "$TMP/err" \
+    && bad "no false 'timed out'" "stderr: $(cat "$TMP/err")" \
+    || ok "no false 'timed out'"
+echo
+
 # ----------------------------------------------------------------
 echo "─────────────────────────────────────────"
 if [ "$FAIL" -eq 0 ]; then

@@ -33,8 +33,26 @@ if [ -L CLAUDE.md ] && [ ! -e CLAUDE.md ]; then
     exit 1
 fi
 
-[ -e AGENTS.md ] || exit 0
+# Nothing to enforce when CLAUDE.md is simply absent. Its presence as anything but the link is a
+# drift state WHETHER OR NOT AGENTS.md exists: with no AGENTS.md beside it, every harness that
+# follows the AGENTS.md convention finds no instructions at all, which is the split the link is
+# there to prevent. An earlier version tested `[ -e AGENTS.md ] || exit 0` first, so a lone
+# regular CLAUDE.md passed untouched (2026-09-22 review; the suite now has that state).
 [ -e CLAUDE.md ] || exit 0
+
+if [ ! -L CLAUDE.md ] && [ ! -e AGENTS.md ]; then
+    cat >&2 <<'MSG'
+agent-docs: CLAUDE.md is a REGULAR FILE and there is no AGENTS.md beside it.
+
+  Only Claude Code reads CLAUDE.md. Every other harness looks for AGENTS.md and finds
+  nothing, so the two names must resolve to ONE file. Make this one it:
+
+      git mv CLAUDE.md AGENTS.md && ln -s AGENTS.md CLAUDE.md && git add CLAUDE.md
+
+  Bypass once with: git commit --no-verify
+MSG
+    exit 1
+fi
 
 if [ ! -L CLAUDE.md ]; then
     cat >&2 <<'MSG'
@@ -79,15 +97,26 @@ if command grep -q 'BEGIN BEADS INTEGRATION' AGENTS.md; then
     # Verified 2026-09-01 that a section titled "Corrections protocol", using none of
     # those four words, passes it untouched. Size does not care about wording.
     #
-    # The region held 22 lines when this was written and bd's own generated template is
-    # 56, so the cap sits above a legitimate `bd setup` regeneration and far below the
-    # 307 lines of workspace protocol that were once in there.
-    managed_lines=$(printf '%s' "$managed" | wc -l)
-    if [ "$managed_lines" -gt 70 ]; then
+    # The region held 22 lines when this was written and bd 1.3.0's generated template is 56;
+    # the cap sits above a legitimate `bd setup` regeneration and far below the 307 lines of
+    # workspace protocol that were once in there. It is NOT a fixed number: an absolute
+    # threshold here is the aging-threshold defect of docs/ops/checks-narrower-than-what-they-check.md
+    # (instance 10), and bd's template already grew from ~22 (1.1.2) to 56 (1.3.0). So ask bd for
+    # the block it would write (`bd setup --print`, 1.1.2+) and allow that plus the marker lines
+    # and a dozen lines of slack; 56 stays the floor on a box without bd, or a bd without --print.
+    managed_lines=$(printf '%s' "$managed" | wc -l | tr -d ' ')
+    template_lines=0
+    if bd setup --help 2>&1 | command grep -q -- '--print'; then
+        template_lines=$(bd setup --print 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    case $template_lines in ''|*[!0-9]*) template_lines=0 ;; esac
+    [ "$template_lines" -lt 56 ] && template_lines=56
+    cap=$((template_lines + 14))
+    if [ "$managed_lines" -gt "$cap" ]; then
         echo "agent-docs: the BEADS INTEGRATION region in AGENTS.md is $managed_lines lines." >&2
-        echo "  That is too large to be bd's generated block alone (its template is ~56)." >&2
+        echo "  That is too large to be bd's generated block alone (its template is $template_lines lines; cap $cap)." >&2
         echo "  \`bd setup\` REGENERATES this region — anything hand-written in it will be" >&2
-        echo "  destroyed. Move it below the END marker." >&2
+        echo "  destroyed. Move it outside the markers (above BEGIN or below END)." >&2
         exit 1
     fi
 
@@ -99,7 +128,7 @@ if command grep -q 'BEGIN BEADS INTEGRATION' AGENTS.md; then
         if printf '%s' "$managed" | command grep -qE "$pattern"; then
             echo "agent-docs: '$pattern' is INSIDE the BEADS INTEGRATION markers in AGENTS.md." >&2
             echo "  \`bd setup\` regenerates that region and would silently destroy it." >&2
-            echo "  Move it below the END marker." >&2
+            echo "  Move it outside the markers (above BEGIN or below END)." >&2
             exit 1
         fi
     done

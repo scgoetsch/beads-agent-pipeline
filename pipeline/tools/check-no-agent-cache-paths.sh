@@ -4,7 +4,8 @@
 # WHY THIS EXISTS, AND WHY IT IS A GIT HOOK
 # Coding agents stage working artifacts in per-conversation cache directories: agy /
 # antigravity under ~/.gemini/antigravity-cli/brain/<uuid>/, Claude Code under
-# ~/.claude/projects/<uuid>/ and /tmp/claude-<uid>/. Those paths are user-local and
+# ~/.claude/projects/<uuid>/ and $TMPDIR/claude-<uid>/ (/tmp on Linux, /var/folders/... on
+# macOS). Those paths are user-local and
 # ephemeral — they resolve for nobody else, on no other machine, and not for the same
 # person next week. A figure linked from one is a broken image for every other reader.
 #
@@ -37,11 +38,19 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 # Extend as new agent CLIs appear. Any user, and macOS as well as Linux — the original was
 # pinned to one literal home directory, which is fine in one workspace and useless in a repo
 # other people clone.
+# Every home-directory form we know: /home/<u> (Linux), /var/home/<u> (Fedora Silverblue and
+# other ostree systems, where /home is a symlink and a resolved path carries the long form),
+# /Users/<u> (macOS), /root (Docker, cloud VMs, WSL as root). The 2026-09-22 review found the
+# first two holes below in patterns this file already claimed to cover.
+HOME_RE='(home/[^/[:space:]]+|var/home/[^/[:space:]]+|Users/[^/[:space:]]+|root)'
 FORBIDDEN_PATTERNS=(
-    '/(home/[^/[:space:]]+|Users/[^/[:space:]]+|root)/\.gemini/antigravity-cli/brain/'
-    '/(home/[^/[:space:]]+|Users/[^/[:space:]]+|root)/\.claude/projects/'
+    "/$HOME_RE/\\.gemini/antigravity-cli/brain/"
+    "/$HOME_RE/\\.claude/projects/"
+    # Claude Code's scratch dir is $TMPDIR/claude-<uid>/: /tmp on Linux; on macOS the per-user
+    # /var/folders/xx/yyyy/T/, which also appears resolved as /private/var/folders/...
     '/tmp/claude-[0-9]+/'
-    'file:///(home/[^/[:space:]]+|Users/[^/[:space:]]+|root)/\.(gemini|claude)/'
+    '/(private/)?var/folders/[^/[:space:]]+/[^/[:space:]]+/T/claude-[0-9]+/'
+    "file:///$HOME_RE/\\.(gemini|claude)/"
 )
 FORBIDDEN_RE=$(IFS='|'; echo "${FORBIDDEN_PATTERNS[*]}")
 
@@ -57,8 +66,8 @@ violations=0
 doc_files=()
 while IFS= read -r f; do doc_files+=("$f"); done < <(
     git diff --cached --name-only --diff-filter=ACMR -- \
-        '*.md' '*.markdown' '*.rst' '*.txt' '*.ipynb' '*.html' \
-        '*.json' '*.tsv' '*.csv' 2>/dev/null
+        '*.md' '*.markdown' '*.rst' '*.txt' '*.ipynb' '*.html' '*.tex' '*.typ' '*.adoc' \
+        '*.Rmd' '*.qmd' '*.json' '*.tsv' '*.csv' 2>/dev/null
 )
 for f in ${doc_files[@]+"${doc_files[@]}"}; do
     [ -f "$f" ] || continue
@@ -72,8 +81,14 @@ done
 # ---- code: added lines only -------------------------------------------------------
 code_files=()
 while IFS= read -r f; do code_files+=("$f"); done < <(
+    # The ratchet is exactly as wide as this list: a language missing here commits a cache path
+    # clean, the silent pass this guard exists to prevent. It stopped at scripting languages
+    # until the 2026-09-22 review. Add, never remove.
     git diff --cached --name-only --diff-filter=ACMR -- \
-        '*.py' '*.sh' '*.R' '*.pl' '*.rb' '*.js' '*.ts' '*.toml' '*.yaml' '*.yml' 2>/dev/null
+        '*.py' '*.sh' '*.bash' '*.zsh' '*.R' '*.pl' '*.rb' '*.js' '*.mjs' '*.cjs' '*.jsx' \
+        '*.ts' '*.tsx' '*.rs' '*.go' '*.c' '*.h' '*.cc' '*.cpp' '*.cxx' '*.hpp' '*.java' '*.kt' \
+        '*.kts' '*.scala' '*.swift' '*.cs' '*.php' '*.lua' '*.zig' '*.jl' '*.ex' '*.exs' '*.erl' \
+        '*.hs' '*.sql' '*.toml' '*.yaml' '*.yml' '*.ini' '*.cfg' '*.conf' 2>/dev/null
 )
 for f in ${code_files[@]+"${code_files[@]}"}; do
     [ -f "$f" ] || continue
@@ -91,7 +106,7 @@ done
 if [ "$violations" -ne 0 ]; then
     cat >&2 <<'MSG'
 
-Agent-cache absolute paths (brain/<uuid>/, projects/<uuid>/, /tmp/claude-<uid>/) are
+Agent-cache absolute paths (brain/<uuid>/, projects/<uuid>/, $TMPDIR/claude-<uid>/) are
 user-local and ephemeral. They break for every other reader and on every other machine.
 
 Fix: copy the artifact into the repo if it is not already there, and reference it with a

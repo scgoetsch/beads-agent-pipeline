@@ -222,10 +222,17 @@ hdr "skills (.claude/skills/)"
 # The WHOLE tree, not a per-skill loop: the loop shipped the two skill directories and silently
 # missed .claude/skills/README.md sitting beside them, while AGENTS.md cited it. Enumerate the
 # directory, do not enumerate a list of names you have to remember to update.
-while IFS= read -r rel; do install_file "$rel"; done < <(cd "$PAYLOAD" && find .claude/skills -type f | sort)
+# Scripts among the skill files must stay executable: `install_file` with no mode leaves the
+# payload's bits, and a 0644 audit_wikilinks.py fails as ./audit_wikilinks.py (2026-09-22).
+while IFS= read -r rel; do
+  case $rel in *.py|*.sh) install_file "$rel" 755 ;; *) install_file "$rel" ;; esac
+done < <(cd "$PAYLOAD" && find .claude/skills -type f | sort)
 
 hdr "site checks (.claude/site-checks/)"
-while IFS= read -r rel; do install_file "$rel"; done < <(cd "$PAYLOAD" && find .claude/site-checks -type f)
+# A site check that is not executable is silently skipped by the prime hook, so scripts here get 755.
+while IFS= read -r rel; do
+  case $rel in *.sh) install_file "$rel" 755 ;; *) install_file "$rel" ;; esac
+done < <(cd "$PAYLOAD" && find .claude/site-checks -type f)
 
 hdr "tools (tools/)"
 while IFS= read -r rel; do install_file "$rel" 755; done < <(cd "$PAYLOAD" && find tools -type f | sort)

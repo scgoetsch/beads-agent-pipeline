@@ -81,6 +81,30 @@ printf 'x = 1\nz = "%s"\n' "$BAD_AGY" > "$T/t.py"; git -C "$T" add t.py
 chk "a fresh bad added line still blocks" "$(run_guard)" 1
 git -C "$T" rm -q --cached t.py; rm -f "$T/t.py"
 
+echo "### BLOCK: the code ratchet covers compiled languages, and the doc scan covers TeX"
+# Until 2026-09-22 the code list stopped at scripting languages: a cache path added to main.go
+# or src/lib.rs committed clean. Same shape for a figure path in a .tex document.
+printf 'package main\n' > "$T/m.go"; git -C "$T" add m.go
+git -C "$T" -c core.hooksPath=/dev/null commit -qm go-base
+printf 'package main\n// out: %s\n' "$BAD_TMP" > "$T/m.go"; git -C "$T" add m.go
+chk "added line in .go blocked" "$(run_guard)" 1
+git -C "$T" rm -q --cached m.go; rm -f "$T/m.go"
+printf '\\includegraphics{%s}\n' "$BAD_DOC" > "$T/fig.tex"; git -C "$T" add fig.tex
+chk "cache path in .tex blocked" "$(run_guard)" 1
+git -C "$T" rm -q --cached fig.tex; rm -f "$T/fig.tex"
+
+echo "### BLOCK: homes and scratch dirs the regex did not know — /var/home and macOS TMPDIR"
+# Built from variables for the same reason as above: none of these lines may itself match.
+VARHOME_OF=/var/home/someone; BAD_VARHOME="$VARHOME_OF/.claude/projects/abc/figure.png"
+MAC_T=/var/folders/k3/x1y2z3q4/T; BAD_MAC="$MAC_T/claude-$UID_OF/scratch/out.txt"
+printf 'see ![fig](%s)\n' "$BAD_VARHOME" > "$T/report.md"; git -C "$T" add report.md
+chk "claude projects path under /var/home blocked" "$(run_guard)" 1
+printf 'see ![fig](%s)\n' "$BAD_MAC" > "$T/report.md"; git -C "$T" add report.md
+chk "macOS TMPDIR scratch path blocked"            "$(run_guard)" 1
+printf 'see ![fig](/private%s)\n' "$BAD_MAC" > "$T/report.md"; git -C "$T" add report.md
+chk "the /private/var/folders form blocked"        "$(run_guard)" 1
+git -C "$T" rm -q --cached report.md; rm -f "$T/report.md"
+
 echo "### this suite, and the guard, can themselves be committed under the guard"
 # A guard whose own test file cannot pass it is installed once with --no-verify and then
 # distrusted. Stage both files as NEW (every line counts as added) and run the guard.

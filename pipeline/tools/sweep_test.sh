@@ -142,6 +142,26 @@ echo "### with no such file, the binary notice is NOT printed"
 chk "no false binary notice" \
     "$("$SWEEP" --include '*.md' "$ABSENT" 2>&1 | /usr/bin/grep -c 'NOT SEARCHED because grep')" 0
 
+echo "### BSD xargs (rejects -r, runs nothing on empty input): the sweep still runs"
+# `xargs -r` is GNU. sweep.sh probes for it once instead of assuming it; prove the probe with
+# an xargs on PATH that behaves like BSD's: -r is an illegal option, and empty input runs
+# nothing. Before the probe every sweep on macOS died with "xargs: illegal option -- r".
+REAL_XARGS=$(type -P xargs)
+BSD=$(mktemp -d)
+cat > "$BSD/xargs" <<FAKE
+#!/usr/bin/env bash
+for a in "\$@"; do case \$a in -r) echo "xargs: illegal option -- r" >&2; exit 1 ;; esac; done
+in=\$(mktemp); cat > "\$in"
+if [ -s "\$in" ]; then "$REAL_XARGS" "\$@" < "\$in"; rc=\$?; else rc=0; fi
+rm -f "\$in"; exit \$rc
+FAKE
+chmod +x "$BSD/xargs"
+out=$(PATH="$BSD:$PATH" "$FIX/tools/sweep.sh" "$PHRASE" 2>&1); rc=$?
+chk "exit 0 under a BSD-like xargs"  "$rc" 0
+chk "hit in nested repo under it"    "$(printf '%s' "$out" | /usr/bin/grep -c 'hidden.md')" 1
+chk "no 'illegal option' leaked"     "$(printf '%s' "$out" | /usr/bin/grep -c 'illegal option')" 0
+rm -rf "$BSD"
+
 echo
 printf 'RESULT: %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [[ $fail -eq 0 ]]

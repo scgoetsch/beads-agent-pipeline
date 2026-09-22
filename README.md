@@ -202,8 +202,8 @@ on any other platform and file what fails.
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | `rg` | optional | only `sweep_test.sh`'s demonstration of the bare-grep hazard uses it; the sweep itself does not |
-| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; embedded stores never reach it |
-| `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) a hung site check can stall session start |
+| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; it falls back to `lsof`, then `netstat`, and says so when none of the three is present. Embedded stores never reach it |
+| `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) the checks run unbounded, the session payload says so, and a hung check can stall session start |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
 `install.sh --check` reports exactly what is present and what each absence costs. It states the
@@ -264,8 +264,11 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
   `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
 - **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
   install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **Tested on Ubuntu only.** The bash-4-only and GNU-only constructs that were found are gone, but
-  nobody has run this on macOS or Windows/WSL.
+- **Tested on Ubuntu only.** The bash-4-only and GNU-only constructs that were found are gone
+  (`xargs -r` is probed for, `ss` and `flock` degrade with a message), but nobody has run this on
+  macOS or Windows/WSL. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
+  uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's
+  `/bin/bash` 3.2; the installer writes only `~/.bashrc`.
 - **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`
   is not set here. The self-test proves the installed payload commits clean under the guards; the
   root files (`README.md`, `AGENTS.md`, `selftest.sh`) are checked only by a manual sweep.

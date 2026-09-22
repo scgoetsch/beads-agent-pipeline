@@ -190,12 +190,23 @@ fi
 [ "$is_script" -eq 0 ] && exit 0
 
 # ── Check for an in_progress beads issue ─────────────────────────────────────
-if ! bd_output=$(bd list --status=in_progress 2>/dev/null); then
-    # bd unavailable — fail open rather than block all work
-    exit 0
-fi
+# Count issue ROWS, not ● glyphs: ● is bd's priority bullet on every row and its BLOCKED glyph in
+# the legend under any non-empty listing, so `grep -c "●"` matched rows for the wrong reason and
+# the legend for no reason. Only "any or none" matters here, but the same function feeds the
+# number bd-stop-hook.sh prints; keep the two identical (the comment there has the shape).
+count_in_progress() {
+    local text n=""
+    text=$(bd list --status=in_progress 2>/dev/null) || return 1
+    if command -v jq >/dev/null 2>&1; then
+        n=$(bd --json list --status=in_progress 2>/dev/null \
+            | jq -r 'if type == "array" then length else empty end' 2>/dev/null)
+    fi
+    case $n in ''|*[!0-9]*) n=$(printf '%s\n' "$text" | grep -cE '^[^[:alnum:]]*◐ ' || true) ;; esac
+    printf '%s' "${n:-0}"
+}
 
-in_progress=$(echo "$bd_output" | grep -c "●" 2>/dev/null || true)
+# bd unavailable — fail open rather than block all work
+in_progress=$(count_in_progress) || exit 0
 : "${in_progress:=0}"
 [ "$in_progress" -gt 0 ] && exit 0
 

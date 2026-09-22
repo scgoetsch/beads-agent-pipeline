@@ -41,6 +41,15 @@ chk "symlink to the wrong target caught"  "$(run)" 1
 rm -f "$T/CLAUDE.md"; ln -s AGENTS-renamed.md "$T/CLAUDE.md"
 chk "DANGLING symlink is caught"          "$(run)" 1
 
+echo "### a lone regular CLAUDE.md is a drift state too"
+# `[ -e AGENTS.md ] || exit 0` used to run before the regular-file test, so a regular CLAUDE.md
+# with no AGENTS.md beside it passed — and every non-Claude harness found nothing in that repo.
+rm -f "$T/CLAUDE.md" "$T/AGENTS.md"; printf 'rules only Claude sees\n' > "$T/CLAUDE.md"
+chk "regular CLAUDE.md with NO AGENTS.md is caught"   "$(run)" 1
+rm -f "$T/CLAUDE.md"; printf 'x\n' > "$T/OTHER.md"; ln -s OTHER.md "$T/CLAUDE.md"
+chk "symlink elsewhere with NO AGENTS.md is caught"   "$(run)" 1
+rm -f "$T/CLAUDE.md" "$T/OTHER.md"; printf '# Agent Instructions\n\nSome rules.\n' > "$T/AGENTS.md"
+
 echo "### nothing to enforce is still nothing to enforce"
 rm -f "$T/CLAUDE.md"
 chk "no CLAUDE.md at all passes"          "$(run)" 0
@@ -66,6 +75,20 @@ chk "protocol inside the markers is caught" "$(run)" 1
   printf '## Session Completion\n\n**When ending a work session**, close issues and push.\n'
   printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
 chk "bd 1.3.0's own block (with its Session Completion heading) passes" "$(run)" 0
+
+echo "### the size cap follows bd's own template, not a number written down in 2026"
+# The guard asks `bd setup --print` how long bd's block is (floor 56) and allows that plus slack.
+# Compute the same figure here, so this stays true when bd's template grows.
+tmpl=0
+if bd setup --help 2>&1 | grep -q -- '--print'; then tmpl=$(bd setup --print 2>/dev/null | wc -l | tr -d ' '); fi
+case $tmpl in ''|*[!0-9]*) tmpl=0 ;; esac; [ "$tmpl" -lt 56 ] && tmpl=56
+region() {  # region N -> AGENTS.md whose managed block holds N generated-looking lines
+  { printf '# Agent Instructions\n\nrules\n\n<!-- BEGIN BEADS INTEGRATION v:1 -->\n'
+    i=0; while [ "$i" -lt "$1" ]; do printf -- '- generated line %d\n' "$i"; i=$((i+1)); done
+    printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
+}
+region "$tmpl";         chk "a block as long as bd's template ($tmpl) passes"   "$(run)" 0
+region $((tmpl + 40));  chk "a block 40 lines past bd's template is caught"     "$(run)" 1
 
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"

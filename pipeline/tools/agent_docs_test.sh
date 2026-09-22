@@ -164,7 +164,7 @@ if grep -qE '^_Add .*_$|# npm install' AGENTS.md; then
   bad "T6  no unfilled template placeholder" "$(grep -nE '^_Add .*_$|# npm install' AGENTS.md | head -2)"
 else ok "T6  no unfilled template placeholder"; fi
 
-# ---- 8 nested-repo agent docs ---------------------------------------------
+# ---- 7 nested-repo agent docs ---------------------------------------------
 # A nested project directory may carry its own CLAUDE.md. Those never load at session start,
 # so they are not a payload problem — but they are the FIRST thing an agent reads once it
 # enters that subtree, so a rotted pointer there is just as expensive.
@@ -175,10 +175,10 @@ for nd in */CLAUDE.md; do
   U=$(unresolved "$nd" "$ROOT/$d")
   [ -n "$U" ] && NEST_FAIL="$NEST_FAIL $nd:[$(echo "$U" | tr '\n' ' ')]"
 done
-if [ -z "$NEST_FAIL" ]; then ok "T8  every path cited in a nested CLAUDE.md resolves"
-else bad "T8  every path cited in a nested CLAUDE.md resolves" "$NEST_FAIL"; fi
+if [ -z "$NEST_FAIL" ]; then ok "T7  every path cited in a nested CLAUDE.md resolves"
+else bad "T7  every path cited in a nested CLAUDE.md resolves" "$NEST_FAIL"; fi
 
-# ---- 9 nested repos expose BOTH agent-doc names ---------------------------
+# ---- 8 nested repos expose BOTH agent-doc names ---------------------------
 # The root keeps AGENTS.md as the real file with CLAUDE.md symlinked to it. The nested
 # repos had only CLAUDE.md, so an agent following the AGENTS.md convention found nothing
 # on entering that subtree. They now symlink the other way (AGENTS.md -> CLAUDE.md) —
@@ -191,16 +191,16 @@ for nd in */CLAUDE.md; do
   a=$(readlink -f "$d/CLAUDE.md"); b=$(readlink -f "$d/AGENTS.md")
   [ "$a" = "$b" ] || NAME_FAIL="$NAME_FAIL $d(diverged)"
 done
-if [ -z "$NAME_FAIL" ]; then ok "T9  nested repos: CLAUDE.md and AGENTS.md are one file"
-else bad "T9  nested repos: CLAUDE.md and AGENTS.md are one file" "$NAME_FAIL"; fi
+if [ -z "$NAME_FAIL" ]; then ok "T8  nested repos: CLAUDE.md and AGENTS.md are one file"
+else bad "T8  nested repos: CLAUDE.md and AGENTS.md are one file" "$NAME_FAIL"; fi
 
-# ---- 7 NEGATIVE CONTROL ---------------------------------------------------
+# ---- 9 NEGATIVE CONTROL ---------------------------------------------------
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 printf 'See `tools/this_file_does_not_exist_%s.sh` for details.\n' "$$" > "$TMP/probe.md"
 if [ -n "$(unresolved "$TMP/probe.md")" ]; then
-  ok "T7  negative control: a missing path IS detected"
+  ok "T9  negative control: a missing path IS detected"
 else
-  bad "T7  negative control: a missing path IS detected" \
+  bad "T9  negative control: a missing path IS detected" \
       "the checker matched nothing — every other result above is meaningless"
 fi
 
@@ -210,9 +210,9 @@ fi
 # would have shipped.
 printf 'See `docs/ops/SKILL.md` for details.\n' > "$TMP/probe2.md"
 if [ -n "$(unresolved "$TMP/probe2.md")" ]; then
-  ok "T7b negative control: an anchored path is not satisfied by a same-named file elsewhere"
+  ok "T9b negative control: an anchored path is not satisfied by a same-named file elsewhere"
 else
-  bad "T7b negative control: an anchored path is not satisfied by a same-named file elsewhere" \
+  bad "T9b negative control: an anchored path is not satisfied by a same-named file elsewhere" \
       "a missing anchored path resolved against an unrelated file — T2 above cannot be trusted"
 fi
 

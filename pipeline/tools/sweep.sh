@@ -131,13 +131,20 @@ while IFS= read -r r; do REPOS+=("$r"); done < <(
 
 # --- helpers ------------------------------------------------------------------
 
+# `xargs -r` (run nothing on empty input) is GNU. BSD xargs skips an empty input on its own and
+# the older ones reject -r outright, so every sweep on macOS died with "illegal option -- r"
+# (2026-09-22 review). Probe once and pass the flag only where it is accepted; where it is
+# not, the platform already has the behaviour the flag asks for.
+XARGS_R=''
+printf '' | xargs -r true >/dev/null 2>&1 && XARGS_R='-r'
+
 # List every eligible file in a repo, NUL-separated, relative to that repo.
 # Eligible = (tracked OR untracked-and-not-ignored) AND regular file AND under cap.
 repo_files() {
   local repo=$1
   { git -C "$repo" ls-files -z 2>/dev/null
     git -C "$repo" ls-files --others ${EXCLUDE_STD:+$EXCLUDE_STD} -z 2>/dev/null
-  } | (cd "$repo" && xargs -0 -r sh -c \
+  } | (cd "$repo" && xargs -0 $XARGS_R sh -c \
         'find "$@" -maxdepth 0 -type f -size -'"${MAX_BYTES}"'c '"$NAME_EXPR"' -print0 2>/dev/null' _)
 }
 
@@ -191,7 +198,7 @@ repo_oversize() {
   local repo=$1
   { git -C "$repo" ls-files -z 2>/dev/null
     git -C "$repo" ls-files --others ${EXCLUDE_STD:+$EXCLUDE_STD} -z 2>/dev/null
-  } | (cd "$repo" && xargs -0 -r sh -c \
+  } | (cd "$repo" && xargs -0 $XARGS_R sh -c \
         'find "$@" -maxdepth 0 -type f -size +'"${MAX_BYTES}"'c '"$NAME_EXPR"' -print 2>/dev/null' _) | wc -l
 }
 
@@ -203,7 +210,7 @@ GREP_BIN=$(type -P grep) || { echo "sweep: no grep on PATH" >&2; exit 3; }
 # Run the real scan. Same code path used by the search and by the control.
 scan() {
   local repo=$1 mode=$2 pat=$3
-  repo_files "$repo" | (cd "$repo" && xargs -0 -r \
+  repo_files "$repo" | (cd "$repo" && xargs -0 $XARGS_R \
     "$GREP_BIN" -nHI --binary-files=without-match "${CASE[@]+"${CASE[@]}"}" "$mode" -e "$pat" 2>/dev/null)
 }
 

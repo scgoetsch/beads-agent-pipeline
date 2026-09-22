@@ -35,17 +35,32 @@ MM="$TMPD/mm.jsonl"; ERR="$TMPD/err"; INDEX="$TMPD/index"
 # This runs inside emit_rules for two reasons. emit_rules runs in BOTH the normal and the
 # fallback_full path, so a check cannot be skipped by a degraded session; and hosts truncate
 # the session payload (~39 KB was measured on one), so anything appended at the BOTTOM is
-# invisible precisely when it matters. Each check is bounded by `timeout` and its failure is
-# swallowed: a monitor that can hang or fail session start is worse than the outage it reports.
+# invisible precisely when it matters. Each check is bounded by `timeout` where the box has one,
+# and its exit status is ignored: a monitor that can fail session start is worse than the outage
+# it reports. But NOT silently -- see the note inside.
 #
 # Example: a check that reports a dead network mount, so an agent does not read a stale local
 # directory and believe it. Write it so that "everything is fine" produces zero bytes.
 emit_site_checks() {
-  local dir="$WS/.claude/site-checks" f out
+  local dir="$WS/.claude/site-checks" f out bound="timeout 20" unbounded_said=0
   [ -d "$dir" ] || return 0
+  # `timeout` is coreutils; stock macOS has none. `out=$(timeout 20 "$f" 2>/dev/null)` with no
+  # timeout binary failed with "command not found" -- on the stderr that was discarded -- and
+  # every check was skipped with no line saying so: the open-and-silent shape. Run unbounded
+  # instead and SAY so once; a hung check then stalls session start visibly (the README warns of
+  # it) rather than never running invisibly. Found by the 2026-09-22 review; the suite hides
+  # timeout and requires both the notice and the check's output.
+  command -v timeout >/dev/null 2>&1 || bound=""
   for f in "$dir"/*.sh; do
     [ -x "$f" ] || continue
-    out=$(timeout 20 "$f" 2>/dev/null) || true
+    if [ -z "$bound" ] && [ "$unbounded_said" -eq 0 ]; then
+      echo "## ⚠ bd-prime-hook: no \`timeout\` on this box — site checks run UNBOUNDED (a hung check stalls session start)"
+      echo ""
+      unbounded_said=1
+    fi
+    # Both streams: a check that dies on stderr ("command not found", a missing interpreter) is
+    # a check that did not run, and that has to reach the payload too.
+    out=$($bound "$f" 2>&1) || true
     [ -n "$out" ] || continue
     echo "## ⚠ SITE CHECK — $(basename "$f" .sh)"
     echo '```'

@@ -84,12 +84,24 @@ allows "the age filter on the pkill itself is still allowed"         "ls && pkil
 blocks "one allowed and one bare invocation: still blocked"          "pkill -O 60 -f a; pkill -f b"
 
 echo "### the untracked-scripts gate: consults bd, needs an in_progress issue, fails open"
-# A stub bd on PATH answers `bd list --status=in_progress` with whatever BD_STUB_LIST holds.
+# A stub bd on PATH answers `bd list --status=in_progress` with whatever BD_STUB_LIST holds and
+# `bd --json list ...` with BD_STUB_JSON. The text fixtures below are bd 1.3's REAL shape: a row is
+# "◐ id ● P2 [type] title" (● is the priority bullet) and a non-empty listing ends with a legend
+# that says "● blocked". The old fixture was "● proj-1 P2 ..." — a row the hook matched for the
+# wrong reason, which is how `grep -c "●"` survived here (2026-09-22).
 # This gate had no coverage at all while three documents said this suite covered it.
 STUB=$(mktemp -d); trap 'rm -rf "$STUB"' EXIT
-printf '#!/usr/bin/env bash\ncase "$*" in *in_progress*) printf "%%s\\n" "$BD_STUB_LIST" ;; esac\nexit 0\n' > "$STUB/bd"
+cat > "$STUB/bd" <<'BDSTUB'
+#!/usr/bin/env bash
+case "$*" in
+  *--json*)      printf '%s\n' "${BD_STUB_JSON-}" ;;
+  *in_progress*) printf '%s\n' "${BD_STUB_LIST-}" ;;
+esac
+exit 0
+BDSTUB
 chmod +x "$STUB/bd"
-export BD_STUB_LIST=""
+LEGEND=$'\n--------\nTotal: 1 issues (0 open, 1 in progress)\n\nStatus: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred'
+export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
 PATH="$STUB:$PATH" blocks "python3 scripts/run.py with nothing in_progress"   "python3 scripts/run.py"
 PATH="$STUB:$PATH" blocks "bash scripts/x.sh with nothing in_progress"        "bash scripts/x.sh"
 PATH="$STUB:$PATH" blocks "a direct scripts/run_* invocation"                 "scripts/run_analysis --fast"
@@ -97,9 +109,15 @@ PATH="$STUB:$PATH" blocks "an admitted bd remember does not license the script a
                           "bd remember --key k 'fact' && python3 scripts/run.py"
 PATH="$STUB:$PATH" allows "a script outside scripts/ is not gated"            "python3 other/run.py"
 PATH="$STUB:$PATH" allows "the word scripts/ in prose is not a script run"    "git commit -m 'moved scripts/x.py'"
-export BD_STUB_LIST="● proj-1 P2 something in flight"
+export BD_STUB_LIST="◐ proj-1 ● P2 [task] something in flight$LEGEND" BD_STUB_JSON='[{"id":"proj-1","status":"in_progress"}]'
 PATH="$STUB:$PATH" allows "with an issue in_progress the script runs"        "python3 scripts/run.py"
-unset BD_STUB_LIST
+# The text fallback (no usable JSON) must count ROWS: one row + the legend is 1, and a legend with
+# no row above it is 0 even though both carry ●.
+export BD_STUB_JSON="not json"
+PATH="$STUB:$PATH" allows "text fallback: a real row above the legend counts"  "python3 scripts/run.py"
+export BD_STUB_LIST="Status: ○ open  ◐ in_progress  ● blocked  ✓ closed"
+PATH="$STUB:$PATH" blocks "text fallback: the legend's ● is not an issue"      "python3 scripts/run.py"
+unset BD_STUB_LIST BD_STUB_JSON
 # bd absent entirely: the gate must fail OPEN (a broken bd must not block all work).
 bare_path=""; oldifs=$IFS; IFS=:
 for d in $PATH; do [ -x "$d/bd" ] || bare_path="${bare_path:+$bare_path:}$d"; done

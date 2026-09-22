@@ -61,5 +61,7 @@ start, and **anything it prints becomes an alarm at the top of the payload**. Th
 a healthy check prints nothing. A check that chatters every session trains its reader to skip the
 block, and is then worthless on the day it has something to say.
 
-Each check is bounded by `timeout` and its failure is swallowed — a monitor that can hang session
-start is worse than the outage it reports.
+Each check is bounded by `timeout` where the box has one; without it the checks run unbounded and
+the payload says so at the top, because a check skipped in silence is the shape this file exists to
+prevent. Its exit status is ignored, and whatever it prints — on either stream — is the alarm: a
+check that dies with "command not found" on stderr is reported, not skipped.

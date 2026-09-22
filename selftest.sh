@@ -56,6 +56,8 @@ done
 [ -L "$T/CLAUDE.md" ] && [ "$(readlink "$T/CLAUDE.md")" = AGENTS.md ] \
   && ok "CLAUDE.md is a symlink to AGENTS.md" || bad "CLAUDE.md symlink"
 [ -x "$T/tools/sweep.sh" ] && ok "tools are executable" || bad "tools are executable"
+[ -x "$T/.claude/skills/memory-curate/audit_wikilinks.py" ] && ok "skill scripts are executable" \
+  || bad "skill scripts are executable"
 chk "core.hooksPath set" "$(git -C "$T" config core.hooksPath)" ".beads-hooks"
 
 printf '\n\033[1m### the shipped pre-commit carries all four stanzas\033[0m\n'
@@ -73,7 +75,8 @@ grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
 
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
-         tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh \
+         tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/bd-stop-hook_test.sh \
+         tools/dolt-guard_test.sh tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
          tools/audit_wikilinks_test.sh; do
   if (cd "$T" && ./$s) >"$T/.suite.log" 2>&1; then ok "$s"

@@ -239,6 +239,7 @@ tools/sweep_test.sh              # corpus sweep: searched-and-found-nothing vs d
 tools/dolt-guard_test.sh         # the shell guard that restarts the Dolt server
 tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember, untracked scripts)
 tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and names every fallback
+tools/bd-stop-hook_test.sh       # the Stop hook's in-progress count is the number of issues, not of ● glyphs
 tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from the store
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
@@ -257,13 +258,16 @@ that every command named here actually exists, so a rotted entry fails loudly.
 ## What is in this repo
 
 **Session machinery** (`.claude/`) — these run automatically and shape every session, **and they
-require Claude Code**: `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those
-three fire there and nowhere else. Under any other harness they do nothing and nothing reports
-it, while every git-layer guard, every tool and this file keep working — `docs/ops/other-harnesses.md`
-has the matrix and says how to prime a session by hand.
+require Claude Code**: `.claude/settings.json` wires three hook scripts on four events
+(SessionStart, PreCompact, PreToolUse, Stop), and those fire there and nowhere else. Under any
+other harness they do nothing and nothing reports it, while every git-layer guard, every tool
+and this file keep working — `docs/ops/other-harnesses.md` has the matrix and says how to prime
+a session by hand.
 `bd-prime-hook.sh` builds the session-start payload (session rules, bd context, hot memories, an
-index of the rest); `bd-prerun-hook.sh` is a PreToolUse guard that blocks bare `pkill`/`killall`
-and malformed `bd remember`; `bd-stop-hook.sh` warns about in-progress issues at stop.
+index of the rest) and runs again before a context compaction; `bd-prerun-hook.sh` is a
+PreToolUse guard that blocks bare `pkill`/`killall`, malformed `bd remember`, and a run of a
+script under the scripts directory with no bd issue in progress (which directory is the
+one-line knob `SCRIPT_DIRS_RE` in the hook); `bd-stop-hook.sh` warns about in-progress issues at stop.
 **Each resolves the repo root from its own file location, never a literal path** — see
 `docs/ops/hooks-and-portability.md`. Optional site checks live in `.claude/site-checks/`.
 

@@ -35,8 +35,19 @@ __BD_DOLT_GUARD_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." 2>/dev/null 
 
 __bd_dolt_guard_listening() {
     # Reads the kernel's listen table; does NOT open a connection. ~4ms.
-    # `ss -H` suppresses the header, so "no listener" is genuinely empty output.
-    [ -n "$(ss -ltnH "sport = :$1" 2>/dev/null)" ]
+    # `ss -H` suppresses the header, so "no listener" is genuinely empty output. ss is iproute2,
+    # Linux only: fall back to lsof, then netstat (stock macOS has both). Returns 2 when NONE is
+    # on PATH, so a box with no prober says so instead of reading "not listening" and trying to
+    # start a server from every shell (2026-09-22 review; check 9 in dolt-guard_test.sh).
+    if command -v ss >/dev/null 2>&1; then
+        [ -n "$(ss -ltnH "sport = :$1" 2>/dev/null)" ]
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -an 2>/dev/null | command grep -qE "[.:]$1[[:space:]].*LISTEN"
+    else
+        return 2
+    fi
 }
 
 __bd_dolt_guard_say() {
@@ -76,8 +87,13 @@ bd_dolt_guard() {
     # did, while bd writes landed fine. A false alarm on every shell is how a guard gets ignored.
     [ -d "$ws/.beads/embeddeddolt" ] && return 0
 
-    # The only path taken 99% of the time. No lock, no subprocess but `ss`.
-    __bd_dolt_guard_listening "$port" && return 0
+    # The only path taken 99% of the time. No lock, no subprocess but the prober.
+    __bd_dolt_guard_listening "$port"
+    case $? in
+        0) return 0 ;;
+        2) __bd_dolt_guard_say "$ws" "cannot probe :$port — none of ss, lsof, netstat on PATH; leaving the server alone"
+           return 0 ;;
+    esac
 
     if [ -z "$bd_bin" ]; then
         bd_bin=$(command -v bd 2>/dev/null) || bd_bin="$HOME/.local/bin/bd"
@@ -95,7 +111,12 @@ bd_dolt_guard() {
     # Concurrent shells must not each spawn a server: a Claude Code session can
     # open several at once (parallel tool calls). The first one through starts
     # it; the rest block here and find the port already up on the re-check.
-    if ! flock -w 30 "$lockfd"; then
+    # flock is util-linux; stock macOS has none. A missing flock exited 127 and read as "timed
+    # out", so the guard gave up on exactly the box it was needed on. Proceed unlocked and say so:
+    # two shells racing to `bd dolt start` is a nuisance, a server nobody starts is the outage.
+    if ! command -v flock >/dev/null 2>&1; then
+        __bd_dolt_guard_say "$ws" "no flock on this box — starting dolt without the concurrency lock"
+    elif ! flock -w 30 "$lockfd"; then
         __bd_dolt_guard_say "$ws" "FAILED: timed out waiting for another shell to start dolt on :$port"
         exec {lockfd}>&-
         return 1

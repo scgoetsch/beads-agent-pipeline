@@ -127,6 +127,31 @@ git -C "$T/ws" config core.hooksPath "$T/ws/.beads-hooks"
 out=$(run_hook)
 chk "wired (absolute path, as bd 1.3 sets it) -> no alarm" "$(grep -c 'NOT WIRED' <<<"$out")" 0
 
+echo "### site checks: output is an alarm, silence is health, and a missing timeout is named"
+mkdir -p "$T/ws/.claude/site-checks"
+printf '#!/usr/bin/env bash\necho "MOUNT-DOWN sentinel"\n'        > "$T/ws/.claude/site-checks/mount.sh"
+printf '#!/usr/bin/env bash\nexit 0\n'                             > "$T/ws/.claude/site-checks/quiet.sh"
+printf '#!/usr/bin/env bash\necho "STDERR-ONLY sentinel" >&2\n'   > "$T/ws/.claude/site-checks/noisy-stderr.sh"
+chmod +x "$T/ws/.claude/site-checks/"*.sh
+out=$(run_hook)
+chk "a check that prints becomes a SITE CHECK block"  "$(grep -c 'SITE CHECK — mount' <<<"$out")" 1
+chk "its output is in the payload"                     "$(grep -c 'MOUNT-DOWN sentinel' <<<"$out")" 1
+chk "a silent check adds nothing"                      "$(grep -c 'SITE CHECK — quiet' <<<"$out")" 0
+chk "a check that speaks on stderr is heard too"       "$(grep -c 'STDERR-ONLY sentinel' <<<"$out")" 1
+chk "with timeout present, no UNBOUNDED notice"        "$(grep -c 'run UNBOUNDED' <<<"$out")" 0
+# Hide `timeout`: a PATH of symlinks to everything else the hook needs. The checks must still run
+# and the payload must say they ran unbounded -- not skip them in silence, which is what
+# `out=$(timeout 20 "$f" 2>/dev/null) || true` did on a box with no timeout (stock macOS).
+mkdir -p "$T/notimeout"
+for tool in bash sh mktemp rm cp chmod mkdir cat grep head tail wc git dirname basename ls sed awk sort \
+            cut tr date env jq readlink realpath find xargs tee uniq mv touch python3; do
+  b=$(command -v "$tool" 2>/dev/null) && ln -sf "$b" "$T/notimeout/$tool"
+done
+out=$(cd "$T/ws" && PATH="$T/bin:$T/notimeout" bash .claude/bd-prime-hook.sh 2>/dev/null)
+chk "no timeout: the payload says checks run UNBOUNDED" "$(grep -c 'run UNBOUNDED' <<<"$out")" 1
+chk "no timeout: the check still ran"                  "$(grep -c 'MOUNT-DOWN sentinel' <<<"$out")" 1
+rm -rf "$T/ws/.claude/site-checks"
+
 echo "### this suite's no-jq branch: run it again with jq hidden, and require it to pass"
 # A PATH of symlinks to everything the fallback path needs, minus jq. If the nested run exits
 # non-zero, a jq-less box would fail the whole self-test while the README calls jq optional.

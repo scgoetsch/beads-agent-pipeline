@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+From the 2026-09-22 line-by-line inspection (agy, reviewed by grok-peer, each finding verified
+against c37eced before it was fixed). Each fix ships with a check that fails on the previous code.
+
+- The Stop hook's reminder counted lines containing `●` — bd's priority bullet on every row and its
+  BLOCKED glyph in the legend under every non-empty listing — so one in-progress issue read
+  "You have 2 in-progress issue(s)". Both hooks now count issue rows (`bd --json list`, or the `◐`
+  rows without jq); the PreToolUse suite's fixture is bd's real output shape, and
+  `tools/bd-stop-hook_test.sh` is new.
+- `check-agent-docs-linked.sh` returned success for a regular `CLAUDE.md` with no `AGENTS.md`
+  beside it (the state where every non-Claude harness finds nothing), and capped bd's block at a
+  fixed 70 lines that would have blocked every commit the day bd's template grew. It now fails
+  the lone regular file, and asks `bd setup --print` how long bd's block is (floor 56, plus slack).
+- `check-no-agent-cache-paths.sh`'s code ratchet stopped at scripting languages — a cache path
+  added to `main.go` or `src/lib.rs` committed clean — and its regex knew neither
+  `/var/home/<user>` (ostree) nor macOS's `$TMPDIR` (`/var/folders/…/T/claude-<uid>/`). Compiled
+  languages, TeX/Typst/AsciiDoc/Rmd/qmd documents, and both path forms are covered.
+- The SessionStart hook skipped every site check in silence on a box without `timeout`: the
+  "command not found" went to a discarded stderr. It now runs them unbounded and says so at the top
+  of the payload, and a check's stderr reaches the payload too.
+- macOS: `sweep.sh` probes for GNU `xargs -r` instead of assuming it (BSD xargs rejected the flag
+  and every sweep died); `dolt-guard.sh` falls back from `ss` to `lsof` and `netstat` and says so
+  when none exists, and proceeds without `flock` instead of reporting a timeout that never
+  happened. Still untested there; see "Known limitations".
+- `audit_wikilinks.py` is executable, in the repo and as installed (skill and site-check scripts
+  get 755); the template `AGENTS.md` names all four hook events and the `scripts/` gate;
+  `agent_docs_test.sh` cases are numbered in the order they run.
+
 - The SessionStart hook's suite no longer refuses to run without `jq`; it tests the hook's
   fallback banner instead, which is the behaviour on that box, and a nested run with `jq` hidden
   keeps that branch honest. `./selftest.sh` used to fail on a box the README calls supported.

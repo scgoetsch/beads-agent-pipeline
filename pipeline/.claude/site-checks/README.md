@@ -9,8 +9,9 @@ an alarm at the top of the session payload**.
 block, and is then worthless on the day it has something to say. Exit status is ignored; output is
 the signal.
 
-Each check is bounded by `timeout 20` and its failure is swallowed, because a monitor that can
-hang or fail session start is worse than the outage it reports.
+Each check is bounded by `timeout 20` where the box has `timeout` (stock macOS does not; the checks
+then run unbounded and the session payload says so). Its exit status is ignored, and **both streams
+count as output**: a check that dies with "command not found" on stderr is reported, not skipped.
 
 ## What belongs here
 
