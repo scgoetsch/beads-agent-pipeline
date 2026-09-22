@@ -107,13 +107,54 @@ where tasks and memory live, because harnesses will contradict them repeatedly.
 `checks-narrower-than-what-they-check.md`: twelve instances of the one defect class every guard
 here is built against, with the diagnostic question to ask of your own checks.
 
-## Setting up a fresh box — for agents
+## Letting an agent install it — the runbook
 
-`AGENTS.md` in this directory (and `CLAUDE.md`, a symlink to it) is a runbook an agent can follow
-top to bottom on a machine that has never seen bd: install the prerequisites, self-test the
-pipeline, install it into a project, initialise bd, and prove every guard through `git commit`,
-with a gate after each phase and a report shape at the end. It is what found most of the bugs in
-this repository's history, so run it as written and file whatever deviates.
+`AGENTS.md` in this directory (and `CLAUDE.md`, a symlink to it) is a runbook an agent follows top
+to bottom on a machine that has never seen bd: install the prerequisites, self-test the pipeline,
+install it into a project, initialise bd, prove every guard through `git commit`, exercise the
+session hooks, and report in a fixed shape. Eight phases, a gate after each. It is the procedure
+that was run by hand on the first fresh box, and running it as written is what found most of the
+bugs in this repository's history — so it is also the acceptance test for a new platform.
+
+**On the box itself.** Clone, start your harness inside the clone, and tell it what to do:
+
+```bash
+git clone https://github.com/scgoetsch/beads-agent-pipeline ~/beads-agent-pipeline
+cd ~/beads-agent-pipeline
+claude          # reads CLAUDE.md on startup; Codex reads AGENTS.md — same file
+```
+
+Then one instruction: *"Follow AGENTS.md end to end. Install into `~/proj/<name>`. Stop at any
+gate that fails and report it verbatim. Finish with the report in section 8."* A harness that does
+not read either file on startup (agy, a Grok REPL) needs *"read `~/beads-agent-pipeline/AGENTS.md`
+first"* in front of that, and the absolute path — some of them do not know their working
+directory. Name the project directory yourself: the runbook tells the agent never to work in a
+tree another session is using.
+
+**From another machine.** The first run was driven over ssh from a session on a different box,
+which works because every step is a shell command with a checkable result. Give the agent the
+alias (`ssh <box>`) and the same instruction; tell it `~/.local/bin` is not on PATH in the
+non-login shells ssh gives it, which the runbook also says. Anything that needs a password —
+`sudo` for `apt`, typically — is the one thing it cannot do for you; give it a box where the
+prerequisites are already there, or run those two lines yourself first.
+
+**Permissions.** Interactive is the default and the right choice the first time: the run asks you
+to approve two `curl | bash` installs (bd's and Claude Code's) and an `apt-get`. An unattended run
+needs your harness's unattended permission mode, which grants the agent a full shell — read the
+runbook once before you grant that, so you know what it will do with it.
+
+**What you get back.** The section-8 report — versions, `RESULT:` lines, the three git proofs,
+and every gate that did not match, with its output. Read the deviations. Each is either a platform
+difference worth recording in the runbook or a bug in this repository; file it at
+https://github.com/scgoetsch/beads-agent-pipeline/issues with the command and its output. Two
+gates failed the first time the runbook was run as written (the settings.json re-merge counted
+as a problem; an empty memory store treated as a failed export); both were real and both are now
+fixed and tested.
+
+**What it will not do.** Sign in to Claude Code, so the session hooks are verified by running
+each script by hand rather than by watching them fire — section 7 says which is which. Install the
+peer layer, unless you ask for `--with-peer`. Bypass a guard: the runbook forbids
+`git commit --no-verify`, and an agent that reaches for it has found a bug, not a shortcut.
 
 ## Verify it
 
