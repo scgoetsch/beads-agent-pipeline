@@ -1,7 +1,7 @@
 # beads-agent-pipeline
 
 Session machinery for coding agents, built around [beads](https://github.com/gastownhall/beads)
-(`bd`). One command installs it into any git repo: the agent gets its rules, its issue queue and
+(`bd`). One command installs it into a git repo: the agent gets its rules, its issue queue and
 its durable memory at session start, and the repo gets guards that fail **loudly** instead of
 silently.
 
@@ -11,11 +11,23 @@ cd /path/to/your-project
 /path/to/beads-agent-pipeline/install.sh
 ```
 
+You need `git`, `python3` and [`bd`](https://github.com/gastownhall/beads) first (the table under
+[Requirements](#requirements) has the rest), and the install is not finished until you have run
+the three lines under [After installing](#after-installing) — `bd init`, `bd hooks install
+--shared`, the suite. If you would rather hand the whole thing to an agent, see
+[the runbook](#letting-an-agent-install-it--the-runbook). Releases are tagged; the changes in
+each are in [CHANGELOG.md](CHANGELOG.md). Problems go to
+[the issue tracker](https://github.com/scgoetsch/beads-agent-pipeline/issues), with the command
+and its output.
+
 Nothing is overwritten. An existing `settings.json` is merged; an existing `tools/` or `docs/` file
 is kept and ours lands beside it as `.new`. An existing `AGENTS.md` is kept and nothing is written
 beside it — it is meant to diverge from the template, and the log says where the template is.
 `--check` inspects, `--dry-run` prints every action, `--no-shell` skips the one thing written
-outside the repo. Re-running repairs a checkout whose config drifted.
+outside the repo: a marker-managed block in `~/.bashrc` that sources `tools/dolt-guard.sh` — one
+project per `.bashrc`, and a no-op on an embedded bd store (see the guard below). Re-running
+repairs a checkout whose config drifted; a tool that changed upstream lands as `.new` for you to
+adopt.
 
 **`--with-peer` is opt-in**, because running several agent sessions against one repo is an
 environment question, not a default. Without it the concurrency doc is not installed and the
@@ -40,10 +52,12 @@ cannot pass its own suite.
 
 ## What you get
 
-**Session machinery** (`.claude/`) — a SessionStart hook that emits the session rules, the bd
-context, your hot memories in full and an index of the rest (and again before a context
-compaction, via PreCompact); a PreToolUse guard; a Stop hook that warns about unclosed issues. Each resolves the repo root from **its own file location**, never a
-literal path, and `tools/hook_portability_test.sh` relocates them to a throwaway root to prove it.
+**Session machinery** (`.claude/`) — three hook scripts on four Claude Code events. SessionStart
+emits the session rules, the bd context, your hot memories in full and an index of the rest, and
+PreCompact emits the same again before a context compaction; PreToolUse is the guard below; Stop
+warns about in-progress issues at session end. Each resolves the repo root from **its own file
+location**, never a literal path, and `tools/hook_portability_test.sh` relocates them to a
+throwaway root to prove it.
 
 **The PreToolUse guard** blocks three things. Two were measured to cause real damage; the third is
 a discipline you may not want, and it is one line to turn off:
@@ -99,9 +113,10 @@ cannot drift. The workspace this came from had them as two real files that diver
 before anyone noticed, and the part missing from the copy one tool read was the protocol for
 keeping claims consistent. A guard asserts the link and its target on every commit; the two ways
 it breaks (a tool replacing the link, and a checkout without symlink support) and the fallback for
-a filesystem that has no symlinks are in `docs/ops/agent-docs-symlink.md`. It includes the section most people need and few write: an
-explicit statement that these rules **supersede** the harness's own injected instructions about
-where tasks and memory live, because harnesses will contradict them repeatedly.
+a filesystem that has no symlinks are in `docs/ops/agent-docs-symlink.md`. It includes the
+section most people need and few write: an explicit statement that these rules **supersede** the
+harness's own injected instructions about where tasks and memory live, because harnesses will
+contradict them repeatedly.
 
 **Docs** (`docs/ops/`) — the reasoning behind each guard, including the measurements. Start with
 `checks-narrower-than-what-they-check.md`: twelve instances of the one defect class every guard
@@ -112,9 +127,10 @@ here is built against, with the diagnostic question to ask of your own checks.
 `AGENTS.md` in this directory (and `CLAUDE.md`, a symlink to it) is a runbook an agent follows top
 to bottom on a machine that has never seen bd: install the prerequisites, self-test the pipeline,
 install it into a project, initialise bd, prove every guard through `git commit`, exercise the
-session hooks, and report in a fixed shape. Eight phases; the first seven end in a gate, the eighth is the report. It is the procedure
-that was run by hand on the first fresh box, and running it as written is what found most of the
-bugs in this repository's history — so it is also the acceptance test for a new platform.
+session hooks, and report in a fixed shape. Eight phases; the first seven end in a gate, the
+eighth is the report. It is the procedure that was run by hand on the first fresh box, and running
+it as written is what found most of the bugs in this repository's history — so it is also the
+acceptance test for a new platform.
 
 **On the box itself.** Clone, start your harness inside the clone, and tell it what to do:
 
@@ -149,10 +165,11 @@ gates failed the first time the runbook was run as written (the settings.json re
 as a problem; an empty memory store treated as a failed export); both were real and both are now
 fixed and tested.
 
-**What it will not do.** Sign in to Claude Code, so the session hooks are verified by running
-each script by hand rather than by watching them fire — section 7 says which is which. Install the
-peer layer, unless you ask for `--with-peer`. Bypass a guard: the runbook forbids
-`git commit --no-verify`, and an agent that reaches for it has found a bug, not a shortcut.
+**What it will not do.** Sign in to Claude Code for you. On a box that is not signed in, the
+session hooks are verified by running each script by hand; on one that is, section 7 proves they
+fire with a `claude -p` sentinel check. Install the peer layer, unless you ask for `--with-peer`.
+Bypass a guard: the runbook forbids `git commit --no-verify`, and an agent that reaches for it has
+found a bug, not a shortcut.
 
 ## Verify it
 
@@ -160,9 +177,15 @@ peer layer, unless you ask for `--with-peer`. Bypass a guard: the runbook forbid
 ./selftest.sh
 ```
 
-Installs into a throwaway git repo, runs every shipped guard there, checks idempotence, checks
-that it refuses to clobber your files, and checks that `--dry-run` and `--check` write nothing.
-Nothing outside the temp directory is touched.
+Installs into throwaway git repos and, there: runs every shipped guard's suite; proves the
+git-layer guards through real `git commit`s (a cache path refused, a broken symlink refused, the
+whole payload committing clean under its own hooks); installs with `bd` hidden from PATH and
+checks the hooks are wired anyway; re-runs after what `bd init` and `bd hooks install --shared`
+do and requires a no-op; checks it never clobbers your files, names any installed file your
+`.gitignore` would eat, reports the memory-graph ledger's state, and writes nothing under
+`--dry-run` or `--check`. Nothing outside the temp directories is touched. It needs the same
+things the pipeline needs; without `jq` the SessionStart suite tests the fallback instead of the
+tiering and says so.
 
 ## Requirements
 
@@ -173,11 +196,14 @@ on any other platform and file what fails.
 
 | | | |
 | --- | --- | --- |
-| [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those three fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix. Install below |
+| [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires three hook scripts on four events (SessionStart, PreCompact, PreToolUse, Stop), and those fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix. Install below |
 | `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
 | [`bd`](https://github.com/gastownhall/beads) | required | the issue tracker and memory store. bd manages its own Dolt: 1.3's default is an embedded, in-process store, and a server mode exists (`bd dolt start`). No separate `dolt` binary is needed and nothing here calls one |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
+| `rg` | optional | only `sweep_test.sh`'s demonstration of the bare-grep hazard uses it; the sweep itself does not |
+| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; embedded stores never reach it |
+| `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) a hung site check can stall session start |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
 `install.sh --check` reports exactly what is present and what each absence costs. It states the
@@ -193,7 +219,7 @@ claude doctor                                       # check the install
 
 `claude install <stable|latest|version>` manages the native build and `claude update` upgrades it.
 The native installer puts a versioned binary under `~/.local/share/claude/versions/` and symlinks
-`~/.local/bin/claude` at it. If you would rather not install it, everything except those three
+`~/.local/bin/claude` at it. If you would rather not install it, everything except the session
 hooks still works — see `docs/ops/other-harnesses.md`, which also shows how to prime a session by
 hand.
 
@@ -201,7 +227,7 @@ hand.
 
 - **Not a bd replacement or fork.** bd is unmodified; this is configuration, hooks and guards
   around it.
-- **Not tied to one agent harness — but be precise about it.** The three SESSION hooks are Claude
+- **Not tied to one agent harness — but be precise about it.** The SESSION hooks are Claude
   Code's `settings.json` format and do nothing under agy, a Grok REPL or Cursor. Everything at the
   git layer (`.beads-hooks/pre-commit`: memory graph, agent-cache paths, agent-docs symlink, bd's
   own hooks), every tool, the shell guard and `AGENTS.md` itself work anywhere. That split is
@@ -230,6 +256,39 @@ installed stays for you to commit). `bd hooks install --shared` rewrites its own
 re-running the installer leaves both alone. Our SessionStart hook runs `bd prime` itself, so the
 installer replaces bd's; after that `bd setup claude --check` reports "No hooks installed", which
 is expected — re-running `bd setup claude` would only re-add a duplicate.
+
+## Known limitations
+
+- **No upgrade path.** The installer never overwrites a file you have. When a shipped tool changes
+  upstream, re-running the installer lands it as `tools/<name>.new` with a `DIFFERS` line; diff it,
+  `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
+- **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
+  install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
+- **Tested on Ubuntu only.** The bash-4-only and GNU-only constructs that were found are gone, but
+  nobody has run this on macOS or Windows/WSL.
+- **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`
+  is not set here. The self-test proves the installed payload commits clean under the guards; the
+  root files (`README.md`, `AGENTS.md`, `selftest.sh`) are checked only by a manual sweep.
+
+## What it touches, and how to remove it
+
+Inside the target repo: `.claude/` (three hook scripts, `memory-hot.txt`, `settings.json` merged
+with a backup at `settings.json.bak.<epoch>`, `skills/`, `site-checks/`), `tools/`, `docs/ops/`,
+`.beads-hooks/pre-commit`, `AGENTS.md` (only if absent) and the `CLAUDE.md` symlink, plus
+`core.hooksPath` in `.git/config`. Outside it: the one `~/.bashrc` block. To remove everything:
+
+```bash
+git config --unset core.hooksPath          # or point it back where it was
+rm -rf .claude/bd-*-hook.sh .claude/memory-hot.txt .claude/skills .claude/site-checks \
+       tools docs/ops .beads-hooks
+# the OLDEST backup (epoch suffix, so it sorts first) is your pre-install settings.json, if any
+cp -f "$(ls .claude/settings.json.bak.* | sort | sed -n 1p)" .claude/settings.json \
+  && rm -f .claude/settings.json.bak.*
+sed -i.bak '/# >>> bd dolt-guard >>>/,/# <<< bd dolt-guard <<</d' ~/.bashrc
+```
+
+`AGENTS.md` and `CLAUDE.md` are yours by then; keep or delete as you like. `bd` and its store are
+untouched by any of this.
 
 ## License
 

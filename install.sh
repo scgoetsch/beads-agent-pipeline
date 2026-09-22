@@ -99,7 +99,7 @@ command -v bd-memgraph >/dev/null 2>&1 || {
   say "    add it:  git clone https://github.com/scgoetsch/bd-memgraph"
   say "             ln -sf \"\$PWD/bd-memgraph/bd-memgraph.py\" ~/.local/bin/bd-memgraph"; }
 
-# THE HARNESS IS A DEPENDENCY, AND IT IS NOT A BINARY TO PROBE FOR. The three session hooks are
+# THE HARNESS IS A DEPENDENCY, AND IT IS NOT A BINARY TO PROBE FOR. The session hook scripts are
 # run BY the harness; this installer is normally invoked from a plain shell, so the presence or
 # absence of a `claude` CLI proves nothing about whether those hooks will fire. State it rather
 # than detect it. An undetectable dependency left unstated is exactly how someone satisfies every
@@ -111,7 +111,8 @@ if command -v claude >/dev/null 2>&1; then
 else
   say "claude CLI — not on PATH (not conclusive; what matters is the harness that runs the hooks)"
 fi
-say "The THREE SESSION HOOKS (.claude/settings.json) fire in Claude Code and NOWHERE ELSE."
+say "The SESSION HOOKS (.claude/settings.json: three scripts on four events — SessionStart, PreCompact,"
+say "  PreToolUse, Stop) fire in Claude Code and NOWHERE ELSE."
 say "  Under agy, a Grok REPL, Cursor or a plain shell they do nothing and nothing reports it."
 say "  Everything else installed here works anywhere: the git-layer guards in .beads-hooks/,"
 say "  every tool in tools/, the shell guard, and AGENTS.md itself."

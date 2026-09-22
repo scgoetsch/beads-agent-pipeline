@@ -13,7 +13,6 @@
 set -uo pipefail
 HOOK=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.claude/bd-prime-hook.sh
 [ -f "$HOOK" ] || { echo "missing: $HOOK" >&2; exit 2; }
-command -v jq >/dev/null 2>&1 || { echo "jq is required to run this suite" >&2; exit 2; }
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
@@ -37,6 +36,22 @@ STUB
 chmod +x "$T/bin/bd"
 cp -f "$HOOK" "$T/ws/.claude/bd-prime-hook.sh"
 run_hook() { (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null; }
+
+# jq is OPTIONAL for the pipeline (README says so): without it the hook cannot tier and must fall
+# back to the full dump, loudly. This suite used to exit 2 without jq, which made the whole
+# self-test fail on a box the README calls supported. Without jq, test the fallback -- that IS
+# the behaviour on this box -- and say which branch ran.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "### jq is absent here: the hook must fall back to the full dump and say so (tiering untestable)"
+  : > "$T/ws/.claude/memory-hot.txt"
+  out=$(run_hook)
+  chk "first line names the missing jq and the fallback" "$(printf '%s' "$out" | head -1 | grep -c 'jq is not installed.*FULL bd prime dump')" 1
+  chk "the rules still follow"                          "$(grep -c 'MANDATORY SESSION RULES' <<<"$out")" 1
+  chk "the full dump follows"                           "$(grep -c 'BODY sentinel' <<<"$out")" 2
+  echo
+  printf 'RESULT: %d passed, %d failed (jq absent: fallback path only)\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]; exit
+fi
 
 echo "### an EMPTY hot list is a configuration, not a fallback: index only"
 : > "$T/ws/.claude/memory-hot.txt"
@@ -111,6 +126,17 @@ chk "wired (relative path) -> no alarm"        "$(grep -c 'NOT WIRED' <<<"$out")
 git -C "$T/ws" config core.hooksPath "$T/ws/.beads-hooks"
 out=$(run_hook)
 chk "wired (absolute path, as bd 1.3 sets it) -> no alarm" "$(grep -c 'NOT WIRED' <<<"$out")" 0
+
+echo "### this suite's no-jq branch: run it again with jq hidden, and require it to pass"
+# A PATH of symlinks to everything the fallback path needs, minus jq. If the nested run exits
+# non-zero, a jq-less box would fail the whole self-test while the README calls jq optional.
+mkdir -p "$T/nojq"
+for tool in bash sh mktemp rm cp chmod mkdir cat grep head tail wc git dirname ls sed awk sort cut tr date env timeout; do
+  b=$(command -v "$tool" 2>/dev/null) && ln -sf "$b" "$T/nojq/$tool"
+done
+nested=$(PATH="$T/nojq" bash "${BASH_SOURCE[0]}" 2>&1); nrc=$?
+chk "nested run without jq exits 0"          "$nrc" 0
+chk "and it says it took the fallback branch" "$(grep -c 'jq absent: fallback path only' <<<"$nested")" 1
 
 echo "### every fallback names itself"
 rm -f "$T/ws/.claude/memory-hot.txt"

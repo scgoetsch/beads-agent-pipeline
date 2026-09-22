@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- The SessionStart hook's suite no longer refuses to run without `jq`; it tests the hook's
+  fallback banner instead, which is the behaviour on that box, and a nested run with `jq` hidden
+  keeps that branch honest. `./selftest.sh` used to fail on a box the README calls supported.
+- README: a reader following the quickstart is now told what to install first and what to run
+  after; "Known limitations" and "What it touches, and how to remove it" sections; the requirements
+  table lists `rg`, `ss` and `timeout` and describes the four hook events; "any git repo" no longer
+  claimed; stale wording on how the session hooks are verified; "Verify it" says what the self-test
+  actually proves; three lines re-wrapped.
+- `install.sh --check` names the four hook events instead of "three hooks".
+
 ## v0.1.0 — 2026-09-22
 
 First release. Session machinery for coding agents around `bd`: a SessionStart hook that replaces
