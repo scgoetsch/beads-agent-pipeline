@@ -121,9 +121,12 @@ fi
 
 # --- repo discovery -----------------------------------------------------------
 # Root repo first, then every nested .git (dir or file, for worktrees/submodules).
-mapfile -t REPOS < <(
+# `while read` and `-exec dirname`, not `mapfile` and `-printf`: the first is bash 4, the second
+# GNU find. On macOS (bash 3.2, BSD find) the old form silently discovered no nested repo at all.
+REPOS=()
+while IFS= read -r r; do REPOS+=("$r"); done < <(
   printf '.\n'
-  find . -mindepth 2 -maxdepth "$DEPTH" -name .git -prune -printf '%h\n' 2>/dev/null | sort
+  find . -mindepth 2 -maxdepth "$DEPTH" -name .git -prune -exec dirname {} \; 2>/dev/null | sort
 )
 
 # --- helpers ------------------------------------------------------------------

@@ -74,7 +74,8 @@ grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
          tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh \
-         tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh; do
+         tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
+         tools/audit_wikilinks_test.sh; do
   if (cd "$T" && ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; sed -n '1,25p' "$T/.suite.log" | sed 's/^/        /'; fi
 done
@@ -190,7 +191,8 @@ grep -q 'nothing to do' "$T/.install2.log" && ok "second run is a no-op" \
 # rewritten to its own version. Neither is drift to "repair". On the first fresh install both
 # made every re-run report a change, leave a .new, warn that no guard fires, and exit 1.
 git -C "$T" config core.hooksPath "$T/.beads-hooks"
-sed -i 's/BEADS INTEGRATION v1\.1\.2/BEADS INTEGRATION v9.9.9/' "$T/.beads-hooks/pre-commit"
+sed 's/BEADS INTEGRATION v1\.1\.2/BEADS INTEGRATION v9.9.9/' "$T/.beads-hooks/pre-commit" > "$T/.pc" \
+  && cat "$T/.pc" > "$T/.beads-hooks/pre-commit"   # not sed -i: BSD sed spells it differently
 "$SRC/install.sh" --no-shell "$T" >"$T/.install3.log" 2>&1
 grep -q 'nothing to do' "$T/.install3.log" && ok "still a no-op after bd rewrote hooksPath and its own stanza" \
   || { bad "still a no-op after bd rewrote hooksPath and its own stanza"; grep -E '^\s+[+!]' "$T/.install3.log" | sed 's/^/        /'; }
@@ -221,6 +223,17 @@ jq '.hooks.PreToolUse += [{"matcher":"","hooks":[{"type":"command","command":"ec
 "$SRC/install.sh" --no-shell "$T" >"$T/.install6.log" 2>&1
 grep -q 'REPLACED 1 hook command(s) of yours' "$T/.install6.log" && ok "a hook of the USER's that gets replaced still warns" \
   || bad "a hook of the USER's that gets replaced still warns"
+# A hook under an event we do NOT define (Notification here) is preserved by the merge and must
+# not be counted as replaced: with bd's hook back in SessionStart and a Notification hook of the
+# user's, the re-run must report bd's replacement only, keep the Notification hook, and exit 0.
+jq '.hooks.Notification = [{"matcher":"","hooks":[{"type":"command","command":"notify-send done"}]}]
+    | .hooks.SessionStart = [{"matcher":"","hooks":[{"type":"command","command":"bd prime --hook-json"}]}]' \
+  "$T/.claude/settings.json" > "$T/.settings.mixed" && cp -f "$T/.settings.mixed" "$T/.claude/settings.json"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install7.log" 2>&1; rc7=$?
+grep -q 'REPLACED .* of yours' "$T/.install7.log" && bad "a hook under an untouched event is not counted as replaced" \
+  || ok "a hook under an untouched event is not counted as replaced"
+chk "the untouched event's hook survives the merge" "$(jq -r '.hooks.Notification[0].hooks[0].command' "$T/.claude/settings.json")" "notify-send done"
+if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then chk "...and that re-run exits 0" "$rc7" "0"; fi
 rm -f "$T"/.claude/settings.json.bak.*
 
 printf '\n\033[1m### it refuses to clobber your content, and drops nothing beside AGENTS.md\033[0m\n'

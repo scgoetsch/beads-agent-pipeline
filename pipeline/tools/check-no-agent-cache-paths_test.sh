@@ -29,6 +29,7 @@ HOME_OF=/home/someone; UID_OF=1000
 BAD_DOC="$HOME_OF/.claude/projects/$(uuidgen 2>/dev/null || echo 1234)/figure.png"
 BAD_TMP="/tmp/claude-$UID_OF/scratch/out.txt"
 BAD_AGY="$HOME_OF/.gemini/antigravity-cli/brain/abc/plot.png"
+ROOT_OF=/root; BAD_ROOT="$ROOT_OF/.claude/projects/abc/figure.png"   # Docker, cloud VMs, WSL as root
 
 echo "### a clean tree passes"
 printf 'see [fig](results/figure.png)\n' > "$T/clean.md"
@@ -39,6 +40,12 @@ echo "### BLOCK: a cache path in a document"
 printf 'see ![fig](%s)\n' "$BAD_DOC" > "$T/report.md"
 git -C "$T" add report.md
 chk "claude projects path in .md blocked" "$(run_guard)" 1
+git -C "$T" rm -q --cached report.md; rm -f "$T/report.md"
+
+echo "### BLOCK: the same path under /root — the regex used to require /home or /Users"
+printf 'see ![fig](%s)\n' "$BAD_ROOT" > "$T/report.md"
+git -C "$T" add report.md
+chk "claude projects path under /root blocked" "$(run_guard)" 1
 git -C "$T" rm -q --cached report.md; rm -f "$T/report.md"
 
 echo "### BLOCK: agy brain path, and a /tmp scratch path in generated JSON"

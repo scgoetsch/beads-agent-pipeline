@@ -53,6 +53,24 @@ chk "hot body emitted in full"              "$(grep -c 'ALPHA-BODY sentinel' <<<
 chk "cold body NOT emitted"                 "$(grep -c 'BETA-BODY sentinel' <<<"$out")" 0
 chk "cold key in the index, hot key not"    "$(grep -cE '^- beta-key$' <<<"$out"):$(grep -cE '^- alpha-key$' <<<"$out")" "1:0"
 
+echo "### a hot key that is not in the store is named, and the index arithmetic stays right"
+# Counting raw lines of memory-hot.txt made EXPECT != GOT here, and the hook then printed
+# "INDEX IS INCOMPLETE ... fix .claude/bd-prime-hook.sh" on every session: a false alarm that
+# pointed at the wrong file. Duplicates counted twice for the same reason.
+printf 'alpha-key\nno-such-key\nalpha-key\n' > "$T/ws/.claude/memory-hot.txt"
+out=$(run_hook)
+chk "unknown hot key is named in a warning"  "$(grep -c '>   no-such-key' <<<"$out")" 1
+chk "no false INDEX IS INCOMPLETE"           "$(grep -c 'INDEX IS INCOMPLETE' <<<"$out")" 0
+chk "HOT tier counts the ONE real key"       "$(grep -c 'HOT tier (1 always-loaded guards of 2 total)' <<<"$out")" 1
+chk "duplicate hot key emitted once"         "$(grep -c 'ALPHA-BODY sentinel' <<<"$out")" 1
+chk "index still lists beta only"            "$(grep -cE '^- beta-key$' <<<"$out"):$(grep -c 'index (1 more' <<<"$out")" "1:1"
+
+echo "### scratch files are per process — nothing fixed under /tmp"
+rm -f /tmp/bd-prime-mm.jsonl /tmp/bd-prime-index /tmp/bd-prime-err   # the old fixed names
+run_hook >/dev/null
+chk "no fixed-name scratch file created under /tmp" "$(ls -d /tmp/bd-prime-mm.jsonl /tmp/bd-prime-index /tmp/bd-prime-err 2>/dev/null | wc -l)" 0
+chk "its temp dir is removed on exit"           "$(ls -d "${TMPDIR:-/tmp}"/bd-prime.* 2>/dev/null | wc -l)" 0
+
 echo "### a store with no memories yet is tiered as 0 of 0, not treated as a failed export"
 # The normal state of a fresh project. This used to print the fallback banner on every session
 # until the first `bd remember`.
@@ -81,6 +99,18 @@ case "$1" in
   *) exit 0 ;;
 esac
 STUB
+
+echo "### a clone whose hooks are not wired is told so, at the top"
+# core.hooksPath is local config; a clone has the guards in the tree and nothing running them.
+git -C "$T/ws" init -q 2>/dev/null; mkdir -p "$T/ws/.beads-hooks"; printf '#!/bin/sh\n' > "$T/ws/.beads-hooks/pre-commit"
+out=$(run_hook)
+chk "unwired clone -> alarm before the rules"  "$(printf '%s' "$out" | head -1 | grep -c 'GUARDS ARE NOT WIRED')" 1
+git -C "$T/ws" config core.hooksPath .beads-hooks
+out=$(run_hook)
+chk "wired (relative path) -> no alarm"        "$(grep -c 'NOT WIRED' <<<"$out")" 0
+git -C "$T/ws" config core.hooksPath "$T/ws/.beads-hooks"
+out=$(run_hook)
+chk "wired (absolute path, as bd 1.3 sets it) -> no alarm" "$(grep -c 'NOT WIRED' <<<"$out")" 0
 
 echo "### every fallback names itself"
 rm -f "$T/ws/.claude/memory-hot.txt"

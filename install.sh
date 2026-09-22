@@ -19,14 +19,16 @@
 # IDEMPOTENT. Re-running is also how you repair a checkout whose config drifted: it reports
 # what it changed and what was already right.
 #
-# IT NEVER OVERWRITES YOUR CONTENT. An existing AGENTS.md, settings.json or tools/ file that
-# differs from ours is left in place and the new version is written beside it as `.new`, with
-# a line telling you. The one exception is a file this installer wrote earlier and you have
-# not edited, which is updated in place.
+# IT NEVER OVERWRITES YOUR CONTENT. An existing tools/ or docs/ file that differs from ours is left
+# in place and ours is written beside it as `.new`, with a line telling you; adopting it is a
+# manual `mv` (there is no upgrade path yet). An existing .claude/settings.json is MERGED: the
+# hook events we define replace yours, anything under other events survives, a backup is kept.
+# An existing AGENTS.md is kept and nothing is written beside it -- it is meant to diverge.
 #
 # WHAT IT TOUCHES OUTSIDE THE REPO: exactly one marker-managed block in ~/.bashrc that sources
-# tools/dolt-guard.sh. Without it, a reboot leaves the bd Dolt server dead and `bd` writes
-# silently fail to land while reads still look fine. Skip it with --no-shell.
+# tools/dolt-guard.sh -- one project per ~/.bashrc; a second install replaces it. The guard only
+# matters for a server-mode bd store; on bd 1.3's default embedded store it has nothing to do and
+# stays silent. Skip the block with --no-shell.
 
 set -uo pipefail
 
@@ -184,7 +186,14 @@ elif command -v jq >/dev/null 2>&1; then
       # anything else is a real loss and stays a `!`. Counting bd's as a problem made the first
       # re-run after bd init exit 1 on every fresh box, for behaviour the README calls expected.
       had_bd_hook=$(grep -c 'bd prime' "$SET" 2>/dev/null || true)
-      had_other=$(jq -r '[.hooks // {} | .[]? | .[]? | .hooks[]? | .command] | map(select((test("bd prime") or test("bd-(prime|prerun|stop)-hook\\.sh")) | not)) | length' "$SET" 2>/dev/null || echo 0)
+      # Only the events OUR file defines get replaced by the merge; hooks under any other event
+      # (Notification, PostToolUse, ...) survive untouched. Counting those too made a project with
+      # its own unrelated hooks get a "REPLACED ... of yours" warning, a backup and exit 1 for a
+      # loss that had not happened.
+      had_other=$(jq -r --slurpfile ours "$PAYLOAD/.claude/settings.json" '
+          ($ours[0].hooks | keys) as $ev
+          | [ .hooks // {} | to_entries[] | select(.key as $k | $ev | index($k)) | .value[]? | .hooks[]? | .command ]
+          | map(select((test("bd prime") or test("bd-(prime|prerun|stop)-hook\\.sh")) | not)) | length' "$SET" 2>/dev/null || echo 0)
       run cp -f "$SET" "$SET.bak.$(date +%s)"
       if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m merge hooks into %s\n' "$SET"
       else printf '%s\n' "$merged" > "$SET"; fi
@@ -351,7 +360,8 @@ $GE"
     if [ "$cur_block" = "$BLOCK" ]; then say "dolt-guard already current in $RC"
     else
       cp "$RC" "$RC.bak.$(date +%s)" && say "backed up $RC"
-      [ -n "$cur_block" ] && sed -i "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/d" "$RC"
+      # not `sed -i`: BSD sed needs an argument to -i, so the GNU spelling breaks on macOS
+      [ -n "$cur_block" ] && { sed "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/d" "$RC" > "$RC.bap.$$" && mv -f "$RC.bap.$$" "$RC"; }
       printf '\n%s\n' "$BLOCK" >> "$RC"
       did "dolt-guard installed in $RC — open a new shell, or: . $GUARD_SRC"
     fi

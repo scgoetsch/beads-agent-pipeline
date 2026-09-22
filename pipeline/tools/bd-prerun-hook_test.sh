@@ -75,5 +75,40 @@ echo "### REGRESSION: the pre-existing memory gate still works"
 blocks "bd remember without --key"      "bd remember 'some floating fact'"
 allows "bd remember with --key"         "bd remember --key some-topic 'a durable fact about scripts/x.py'"
 
+echo "### the allowlist is judged per pkill INVOCATION, not over the whole line"
+# `ls -h && pkill -f x`: the -h belongs to ls. The old whole-line test read it as pkill's
+# --help and let the bare kill through.
+blocks "an allowed-looking flag on ANOTHER command licenses nothing" "ls -h && pkill -f rsync"
+blocks "grep -o before a bare pkill"                                  "grep -o x f; pkill -f rsync"
+allows "the age filter on the pkill itself is still allowed"         "ls && pkill -O 60 -f rsync"
+blocks "one allowed and one bare invocation: still blocked"          "pkill -O 60 -f a; pkill -f b"
+
+echo "### the untracked-scripts gate: consults bd, needs an in_progress issue, fails open"
+# A stub bd on PATH answers `bd list --status=in_progress` with whatever BD_STUB_LIST holds.
+# This gate had no coverage at all while three documents said this suite covered it.
+STUB=$(mktemp -d); trap 'rm -rf "$STUB"' EXIT
+printf '#!/usr/bin/env bash\ncase "$*" in *in_progress*) printf "%%s\\n" "$BD_STUB_LIST" ;; esac\nexit 0\n' > "$STUB/bd"
+chmod +x "$STUB/bd"
+export BD_STUB_LIST=""
+PATH="$STUB:$PATH" blocks "python3 scripts/run.py with nothing in_progress"   "python3 scripts/run.py"
+PATH="$STUB:$PATH" blocks "bash scripts/x.sh with nothing in_progress"        "bash scripts/x.sh"
+PATH="$STUB:$PATH" blocks "a direct scripts/run_* invocation"                 "scripts/run_analysis --fast"
+PATH="$STUB:$PATH" blocks "an admitted bd remember does not license the script after it" \
+                          "bd remember --key k 'fact' && python3 scripts/run.py"
+PATH="$STUB:$PATH" allows "a script outside scripts/ is not gated"            "python3 other/run.py"
+PATH="$STUB:$PATH" allows "the word scripts/ in prose is not a script run"    "git commit -m 'moved scripts/x.py'"
+export BD_STUB_LIST="● proj-1 P2 something in flight"
+PATH="$STUB:$PATH" allows "with an issue in_progress the script runs"        "python3 scripts/run.py"
+unset BD_STUB_LIST
+# bd absent entirely: the gate must fail OPEN (a broken bd must not block all work).
+bare_path=""; oldifs=$IFS; IFS=:
+for d in $PATH; do [ -x "$d/bd" ] || bare_path="${bare_path:+$bare_path:}$d"; done
+IFS=$oldifs
+if PATH="$bare_path" command -v python3 >/dev/null 2>&1 && ! PATH="$bare_path" command -v bd >/dev/null 2>&1; then
+  PATH="$bare_path" allows "no bd on PATH: the scripts gate fails open"         "python3 scripts/run.py"
+else
+  bad "no bd on PATH: the scripts gate fails open" "could not build a PATH without bd but with python3"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

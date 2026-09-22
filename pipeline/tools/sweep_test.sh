@@ -73,7 +73,7 @@ if command -v rg >/dev/null; then
     corpus=$(( corpus + $(rg --files "$_repo" 2>/dev/null | wc -l) ))
   done < <(printf '.\n'
            find . -mindepth 2 -maxdepth "${SWEEP_DEPTH:-4}" -name .git -prune \
-                -printf '%h\n' 2>/dev/null | sort)
+                -exec dirname {} \; 2>/dev/null | sort)   # not -printf: GNU-only
   # THE DENOMINATOR IS ASSERTED BEFORE THE RATIO IS TRUSTED. A corpus measure that silently
   # returned ~0 would satisfy any ratio trivially -- a guard weaker than the check it gates,
   # one level down. Here it decides whether there is anything to measure at all: a repo with

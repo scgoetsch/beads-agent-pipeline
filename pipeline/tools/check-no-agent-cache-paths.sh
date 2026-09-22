@@ -38,10 +38,10 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 # pinned to one literal home directory, which is fine in one workspace and useless in a repo
 # other people clone.
 FORBIDDEN_PATTERNS=(
-    '/(home|Users)/[^/[:space:]]+/\.gemini/antigravity-cli/brain/'
-    '/(home|Users)/[^/[:space:]]+/\.claude/projects/'
+    '/(home/[^/[:space:]]+|Users/[^/[:space:]]+|root)/\.gemini/antigravity-cli/brain/'
+    '/(home/[^/[:space:]]+|Users/[^/[:space:]]+|root)/\.claude/projects/'
     '/tmp/claude-[0-9]+/'
-    'file:///(home|Users)/[^/[:space:]]+/\.(gemini|claude)/'
+    'file:///(home/[^/[:space:]]+|Users/[^/[:space:]]+|root)/\.(gemini|claude)/'
 )
 FORBIDDEN_RE=$(IFS='|'; echo "${FORBIDDEN_PATTERNS[*]}")
 
@@ -51,12 +51,16 @@ violations=0
 # .json/.tsv/.csv are included because generated manifests are exactly where captured
 # paths accumulate: a generator that catches an error verbatim writes the scratch path
 # into the artifact, and the artifact gets committed.
-mapfile -t doc_files < <(
+# `while read`, not `mapfile`: mapfile is bash 4, and macOS ships bash 3.2. There the array
+# stayed unset and the guard either aborted every commit (set -u) or, without it, passed
+# everything -- the silent shape. Neither is a guard.
+doc_files=()
+while IFS= read -r f; do doc_files+=("$f"); done < <(
     git diff --cached --name-only --diff-filter=ACMR -- \
         '*.md' '*.markdown' '*.rst' '*.txt' '*.ipynb' '*.html' \
         '*.json' '*.tsv' '*.csv' 2>/dev/null
 )
-for f in "${doc_files[@]}"; do
+for f in ${doc_files[@]+"${doc_files[@]}"}; do
     [ -f "$f" ] || continue
     if matches=$(grep -nEI "$FORBIDDEN_RE" "$f" 2>/dev/null); then
         echo "ERROR: $f contains forbidden agent-cache path(s):" >&2
@@ -66,11 +70,12 @@ for f in "${doc_files[@]}"; do
 done
 
 # ---- code: added lines only -------------------------------------------------------
-mapfile -t code_files < <(
+code_files=()
+while IFS= read -r f; do code_files+=("$f"); done < <(
     git diff --cached --name-only --diff-filter=ACMR -- \
         '*.py' '*.sh' '*.R' '*.pl' '*.rb' '*.js' '*.ts' '*.toml' '*.yaml' '*.yml' 2>/dev/null
 )
-for f in "${code_files[@]}"; do
+for f in ${code_files[@]+"${code_files[@]}"}; do
     [ -f "$f" ] || continue
     # awk, not `grep -E '^\+' | grep -v '^\+\+\+'` — see the header. The second grep needs
     # -E or the pattern is a malformed BRE and -v silently drops every line.

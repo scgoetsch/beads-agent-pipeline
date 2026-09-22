@@ -18,7 +18,13 @@ if [ -z "$WS" ] || [ ! -d "$WS/.claude" ]; then
   exit 0
 fi
 cd "$WS" || { echo "# 🚨 bd-prime-hook: cannot cd to '$WS' — session NOT primed."; exit 0; }
-HOTFILE="$WS/.claude/memory-hot.txt"; MM=/tmp/bd-prime-mm.jsonl
+HOTFILE="$WS/.claude/memory-hot.txt"
+# Scratch files are per process. Fixed names under /tmp were shared by every user on the box
+# (the second user hit Permission denied on the first user's 0644 files and silently fell back)
+# and by every concurrent session of one user (the --with-peer case), which raced on the index.
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/bd-prime.XXXXXX") || { echo "# 🚨 bd-prime-hook: cannot create a temp dir — session NOT primed."; exit 0; }
+trap 'rm -rf "$TMPD"' EXIT
+MM="$TMPD/mm.jsonl"; ERR="$TMPD/err"; INDEX="$TMPD/index"
 # SITE CHECKS — optional, repo-local health checks, run at session start.
 #
 # Drop any executable script into .claude/site-checks/. The contract is the one property that
@@ -48,7 +54,21 @@ emit_site_checks() {
     echo ""
   done
 }
+# The git-layer guards live in .beads-hooks/, but git only runs them if core.hooksPath says so,
+# and that is local config that no clone inherits. Say it at the TOP of the payload (hosts truncate
+# the bottom), in both the tiered and the fallback path.
+emit_hooks_unwired() {
+  local hp want got
+  [ -f "$WS/.beads-hooks/pre-commit" ] || return 0
+  hp=$(git -C "$WS" config core.hooksPath 2>/dev/null || true)
+  case "$hp" in ""|/*) ;; *) hp="$WS/$hp" ;; esac
+  want=$(cd "$WS/.beads-hooks" 2>/dev/null && pwd -P); got=$( [ -n "$hp" ] && cd "$hp" 2>/dev/null && pwd -P)
+  [ -n "$got" ] && [ "$got" = "$want" ] && return 0
+  echo "# 🚨 GIT-LAYER GUARDS ARE NOT WIRED IN THIS CLONE: core.hooksPath is '${hp:-unset}', so nothing in"
+  echo "#    .beads-hooks/ runs on commit. Fix now:  git config core.hooksPath .beads-hooks"; echo ""
+}
 emit_rules() {
+  emit_hooks_unwired
   echo "# 🚨 MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨"; echo ""
   echo "1. Run \`bd ready\` NOW to check for available work before doing anything else."
   echo "2. Use \`bd create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
@@ -64,7 +84,7 @@ emit_rules() {
 # is how this file ships. The old `[ -s "$HOTFILE" ]` test meant a default install got the
 # full dump with no line saying so.
 fallback_full() { echo "# ⚠ bd-prime-hook: $1 — emitting the FULL bd prime dump (no memory tiering)."; emit_rules
-  if ! bd prime 2>/tmp/bd-prime-err; then echo "# WARNING: bd prime failed"; cat /tmp/bd-prime-err; fi; }
+  if ! bd prime 2>"$ERR"; then echo "# WARNING: bd prime failed"; cat "$ERR"; fi; }
 command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
 [ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
 bd export --include-memories -o "$MM" 2>/dev/null || { fallback_full "bd export --include-memories failed"; exit 0; }
@@ -76,13 +96,24 @@ bd export --include-memories -o "$MM" 2>/dev/null || { fallback_full "bd export 
 emit_rules
 # bd workflow context + command reference, with the full memory dump removed
 # (delete from "## Persistent Memories" up to but NOT including "## Core Rules")
-bd prime 2>/tmp/bd-prime-err | sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}'
-TOTAL=$(grep -c '"_type":"memory"' "$MM"); HOTN=$(grep -c . "$HOTFILE")
+bd prime 2>"$ERR" | sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}'
+TOTAL=$(grep -c '"_type":"memory"' "$MM")
+# HOT = the keys in memory-hot.txt that EXIST in the store. Counting raw lines instead meant a
+# typo, a duplicate or a key not yet remembered made the index arithmetic below come out wrong,
+# and the hook then said "INDEX IS INCOMPLETE ... fix bd-prime-hook.sh" on every session -- a
+# false alarm pointing at the wrong file. Name the unknown keys instead; that is the fix.
+HOTLIST=$(jq -R -s 'split("\n") | map(select(length > 0)) | unique' "$HOTFILE")
+HOTN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h))] | length' "$MM")
+UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h) | not)] | .[]' "$MM")
 echo ""; echo "## Persistent Memories — HOT tier ($HOTN always-loaded guards of $TOTAL total)"
+if [ -n "$UNKNOWN" ]; then
+  echo "> ⚠ .claude/memory-hot.txt names memories that are not in the store — fix the list or \`bd remember\` them:"
+  printf '%s\n' "$UNKNOWN" | sed 's/^/>   /'; echo ""
+fi
 [ "$TOTAL" -eq 0 ] && echo "_The store has no memories yet — nothing to tier. \`bd remember --key <slug> \"<fact>\"\` adds the first._"
 echo "_Only recurring-mistake guards are injected in full below. Retrieve any other memory on demand with \`bd memories <keyword>\`._"; echo ""
-while IFS= read -r k; do [ -z "$k" ] && continue
-  jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM"; done < "$HOTFILE"
+jq -r '.[]' <<<"$HOTLIST" | while IFS= read -r k; do [ -z "$k" ] && continue
+  jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM"; done
 echo "## Persistent Memories — index ($(($TOTAL-$HOTN)) more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"
 echo "_Keys only. They are written as sentences precisely so this index does not need previews._"
 # KEYS ONLY, NO 70-CHAR PREVIEW. Measured on a live store: the preview made this index
@@ -95,7 +126,7 @@ echo "_Keys only. They are written as sentences precisely so this index does not
 # matched by substring, so any key that is a PREFIX of another would have hidden the longer one
 # from the index. Not observed to have bitten, but it is a silent-omission bug in the one
 # component whose whole job is to tell you what exists.
-HOTJSON=$(jq -R -s 'split("\n") | map(select(length > 0))' "$HOTFILE")
+HOTJSON=$HOTLIST
 # NOTE THE `.key as $k` BINDING -- it is load-bearing. Writing the obvious
 # `select(($hot | index(.key)) == null)` silently emits NOTHING: inside the pipe, `.key` is
 # evaluated against $hot (the array) rather than the memory, jq errors per line on stderr, and
@@ -103,14 +134,14 @@ HOTJSON=$(jq -R -s 'split("\n") | map(select(length > 0))' "$HOTFILE")
 # only because the byte count fell further than the change could explain.
 jq -r --argjson hot "$HOTJSON" \
    'select(._type=="memory") | .key as $k | select($hot | index($k) | not) | "- \($k)"' \
-   "$MM" > /tmp/bd-prime-index
+   "$MM" > "$INDEX"
 # The index is the one component whose whole job is to say what EXISTS, so an empty or short one
 # is worse than a large one: it reads as "there is nothing else" rather than as a failure.
 # Assert the arithmetic instead of trusting it.
-EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . /tmp/bd-prime-index)
+EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . "$INDEX")
 if [ "$GOT" -ne "$EXPECT" ]; then
   echo "> ⚠ INDEX IS INCOMPLETE — listing $GOT of an expected $EXPECT memories."
   echo "> Do not read the list below as the full set. Use \`bd memories <keyword>\` to search the"
   echo "> store directly, and fix .claude/bd-prime-hook.sh."; echo ""
 fi
-cat /tmp/bd-prime-index
+cat "$INDEX"

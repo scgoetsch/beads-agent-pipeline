@@ -57,7 +57,16 @@ if echo "$command" | grep -qE '(^|[;&|(]|[$][(])[[:space:]]*(sudo[[:space:]]+)?(
     # the age filter -O / --older SECONDS. --older-than is KILLALL's spelling and
     # is NOT a pkill flag -- the request that prompted this guard suggested it for
     # pkill, which would not have worked. Check your own procps before editing.
-    if ! echo "$command" | grep -qE '(^|[[:space:]])(-O|--older|-o|--older-than|-F|--pidfile|-h|--help)([[:space:]]|=|$)'; then
+    #
+    # Checked per INVOCATION, not over the whole line: `ls -h && pkill -f x` carries an `-h`
+    # that belongs to ls, and the old whole-line test let the bare pkill through on it. Each
+    # pkill/killall is cut at the next command separator and must carry its own allowed flag.
+    bare=0
+    while IFS= read -r inv; do
+        [ -n "$inv" ] || continue
+        echo "$inv" | grep -qE '(^|[[:space:]])(-O|--older|-o|--older-than|-F|--pidfile|-h|--help)([[:space:]]|=|$)' || bare=1
+    done < <(echo "$command" | grep -oE '(pkill|killall)([^;&|)]*)')
+    if [ "$bare" -eq 1 ]; then
         cat >&2 <<KILLGATE
 ⛔ BARE pkill / killall BLOCKED
 
@@ -152,7 +161,8 @@ GATE
     if echo "$command" | grep -qE '"[^"]{1600,}"'; then
         echo "⚠ memory-curate gate: large inline memory body (>~1.5KB) — keep load-bearing facts, move long detail to a repo doc + pointer. (Allowed.)" >&2
     fi
-    exit 0
+    # No `exit 0` here: an admitted `bd remember` used to end the hook, so
+    # `bd remember --key k "fact" && python3 scripts/run.py` never reached the scripts gate below.
 fi
 
 # ── Detect analysis script execution ─────────────────────────────────────────
