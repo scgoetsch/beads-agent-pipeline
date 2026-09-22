@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.0 — 2026-09-22 (unreleased until tagged)
+## v0.1.0 — 2026-09-22
 
 First release. Session machinery for coding agents around `bd`: a SessionStart hook that replaces
 the raw `bd prime` dump with rules, context, a hot tier and a key-only index; a PreToolUse guard
