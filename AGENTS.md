@@ -34,12 +34,13 @@ command -v git python3 jq iconv || sudo apt-get install -y git python3 jq   # ic
 curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
 bd --version                                     # e.g. "bd version 1.3.0"
 
-# bd-memgraph — optional; typed [[wikilinks]] over memories and a pre-commit graph guard.
+# bd-memgraph — typed [[wikilinks]] over memories and a pre-commit graph guard. The pipeline
+# works without it (its stanza self-skips), but this runbook installs the full environment.
 git clone https://github.com/scgoetsch/bd-memgraph ~/bd-memgraph
 ln -sf ~/bd-memgraph/bd-memgraph.py ~/.local/bin/bd-memgraph
 bd-memgraph --help | head -1                     # "usage: bd-memgraph ..."
 
-# Claude Code — needed ONLY for the three session hooks. Sign-in is not needed for this runbook.
+# Claude Code — the three session hooks fire only inside it. Sign-in is not needed for this runbook.
 curl -fsSL https://claude.ai/install.sh | bash
 claude doctor                                    # must end "No installation issues found."
 ```
@@ -48,7 +49,11 @@ The bd installer may print `~/.local/bin is not in your PATH` when run from a no
 Ubuntu, `~/.profile` adds it at the next login once the directory exists; the `export` above covers
 the current shell.
 
-**Gate 1:** `bash -lc 'command -v bd claude bd-memgraph'` prints three paths.
+**Gate 1:** `bash -lc 'command -v bd claude bd-memgraph'` prints three paths. The runbook installs
+all three by default; only `bd` is required by the pipeline itself. If the instruction you were
+given said to skip Claude Code or bd-memgraph, the gate is the paths that remain — and the report
+in section 8 must say which were skipped, because later gates change: without bd-memgraph the
+memory-graph stanza self-skips, and without Claude Code section 7 has nothing to run.
 
 ## 2. Clone the pipeline and run its own self-test first
 
