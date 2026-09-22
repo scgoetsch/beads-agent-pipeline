@@ -121,15 +121,13 @@ bugs in this repository's history — so it is also the acceptance test for a ne
 ```bash
 git clone https://github.com/scgoetsch/beads-agent-pipeline ~/beads-agent-pipeline
 cd ~/beads-agent-pipeline
-claude          # reads CLAUDE.md on startup; Codex reads AGENTS.md — same file
+claude          # or codex, agy, grok — each reads AGENTS.md (CLAUDE.md is the same file) on startup
 ```
 
 Then one instruction: *"Follow AGENTS.md end to end. Install into `~/proj/<name>`. Stop at any
-gate that fails and report it verbatim. Finish with the report in section 8."* A harness that does
-not read either file on startup (agy, a Grok REPL) needs *"read `~/beads-agent-pipeline/AGENTS.md`
-first"* in front of that, and the absolute path — some of them do not know their working
-directory. Name the project directory yourself: the runbook tells the agent never to work in a
-tree another session is using.
+gate that fails and report it verbatim. Finish with the report in section 8."* Start the harness
+inside the clone, not somewhere above it — that is where it looks. Name the project directory
+yourself: the runbook tells the agent never to work in a tree another session is using.
 
 **From another machine.** The first run was driven over ssh from a session on a different box,
 which works because every step is a shell command with a checkable result. Give the agent the
