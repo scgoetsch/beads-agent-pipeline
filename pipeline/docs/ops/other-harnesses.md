@@ -16,7 +16,7 @@ which parts fire where, so you are never guessing about what is protecting you.
 | bd's own hooks | `.beads-hooks/*` | **yes** | **yes** | **yes** |
 | `tools/*.sh` | plain shell | **yes** | **yes** | **yes** |
 | `AGENTS.md` as the rules | the file itself | via the `CLAUDE.md` symlink | reads `AGENTS.md` | reads `AGENTS.md` if it looks for that name |
-| Dolt server after a reboot | `~/.bashrc` → `dolt-guard.sh` | **yes** | **yes** | **yes** (any login shell) |
+| Dolt server after a reboot | `~/.bashrc` → `dolt-guard.sh` | **yes** | **yes** | **yes** (any *interactive* bash — Ubuntu's `.bashrc` returns early for non-interactive shells; one project per `.bashrc`; a no-op on an embedded store) |
 
 bd primes itself in Claude Code and Codex when it resolves a beads workspace. Everywhere else,
 priming is something you or your harness does.

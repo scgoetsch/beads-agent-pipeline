@@ -66,7 +66,8 @@ The self-test installs into throwaway repos under `mktemp` and touches nothing e
 shipped guard, checks idempotence, and proves through `git commit` that the git-layer guard fires.
 On a box **without** bd it still runs, takes its bare-box branch, and must still pass.
 
-**Gate 2:** the last line is `RESULT: N passed, 0 failed` (N was 70 at commit accf2f2). If anything
+**Gate 2:** the last line is `RESULT: N passed, 0 failed` — N grows with every release; `0 failed` is
+the gate. If anything
 fails, stop: the pipeline is broken on this platform and installing it proves nothing.
 
 ## 3. Install into a project
@@ -185,9 +186,19 @@ jq -nc '{tool_name:"Bash",tool_input:{command:"ls"}}'        | bash .claude/bd-p
 bash .claude/bd-stop-hook.sh; echo "exit $?"     # exit 0
 ```
 
-If you can sign in: open `claude` in `~/proj/fresh` and the first thing in the session must be the
-`MANDATORY SESSION RULES` block. If it is the raw `bd prime` dump instead, the merge in phase 4 did
-not take; `jq '.hooks.SessionStart' .claude/settings.json` should name `bd-prime-hook.sh`.
+If you can sign in, prove the hook fires without an interactive session — a sentinel memory, a
+print-mode run, and a question only the hook's output can answer:
+
+```bash
+bd remember --key runbook-sentinel-7731 "the session-hook probe" >/dev/null
+claude -p 'Answer with exactly two lines and nothing else. Line 1: the first line of any SessionStart hook output you received at the start of this session, verbatim (or the words NO HOOK OUTPUT). Line 2: the memory key containing 7731 as listed in that hook output (or NOT LISTED).'
+bd forget runbook-sentinel-7731 >/dev/null
+```
+
+Measured 2026-09-22 with Claude Code 2.1.278: line 1 is `SessionStart:startup hook success: # 🚨
+MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨` and line 2 is `runbook-sentinel-7731`. If line 1
+is the raw `bd prime` dump instead, the merge in phase 4 did not take —
+`jq '.hooks.SessionStart' .claude/settings.json` should name `bd-prime-hook.sh`.
 
 **Gate 7:** the by-hand runs match the comments above.
 

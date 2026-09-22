@@ -41,8 +41,8 @@ cannot pass its own suite.
 ## What you get
 
 **Session machinery** (`.claude/`) — a SessionStart hook that emits the session rules, the bd
-context, your hot memories in full and an index of the rest; a PreToolUse guard; a Stop hook that
-warns about unclosed issues. Each resolves the repo root from **its own file location**, never a
+context, your hot memories in full and an index of the rest (and again before a context
+compaction, via PreCompact); a PreToolUse guard; a Stop hook that warns about unclosed issues. Each resolves the repo root from **its own file location**, never a
 literal path, and `tools/hook_portability_test.sh` relocates them to a throwaway root to prove it.
 
 **The PreToolUse guard** blocks three things. Two were measured to cause real damage; the third is
@@ -112,7 +112,7 @@ here is built against, with the diagnostic question to ask of your own checks.
 `AGENTS.md` in this directory (and `CLAUDE.md`, a symlink to it) is a runbook an agent follows top
 to bottom on a machine that has never seen bd: install the prerequisites, self-test the pipeline,
 install it into a project, initialise bd, prove every guard through `git commit`, exercise the
-session hooks, and report in a fixed shape. Eight phases, a gate after each. It is the procedure
+session hooks, and report in a fixed shape. Eight phases; the first seven end in a gate, the eighth is the report. It is the procedure
 that was run by hand on the first fresh box, and running it as written is what found most of the
 bugs in this repository's history — so it is also the acceptance test for a new platform.
 
@@ -166,11 +166,16 @@ Nothing outside the temp directory is touched.
 
 ## Requirements
 
+**Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
+scripts avoid bash-4-only builtins and GNU-only flags where they were found, but **macOS and
+Windows/WSL are untested**; on macOS you will want bash from Homebrew. Run `./selftest.sh` first
+on any other platform and file what fails.
+
 | | | |
 | --- | --- | --- |
 | [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires SessionStart, PreToolUse and Stop, and those three fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix. Install below |
 | `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
-| [`bd`](https://github.com/gastownhall/beads) | required | the issue tracker and memory store. bd runs its own Dolt server (`bd dolt start`); a separate `dolt` binary is not needed and nothing here calls one |
+| [`bd`](https://github.com/gastownhall/beads) | required | the issue tracker and memory store. bd manages its own Dolt: 1.3's default is an embedded, in-process store, and a server mode exists (`bd dolt start`). No separate `dolt` binary is needed and nothing here calls one |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |

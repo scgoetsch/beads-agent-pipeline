@@ -13,6 +13,20 @@ and the no-symlinks fallback: **`docs/ops/agent-docs-symlink.md`**.
 > guards in `tools/`. Add your project's own conventions as you go — the sections most worth
 > extending are "Conventions & Patterns" and "Build & Test".
 
+## Setting up a clone
+
+`core.hooksPath` is local git config; it does not travel with a clone. A fresh clone of this repo
+has `.beads-hooks/pre-commit` in the tree and **nothing running it** — every guard present, none
+firing, and no error. Once per clone, before the first commit:
+
+```bash
+git config core.hooksPath .beads-hooks
+```
+
+or re-run the beads-agent-pipeline installer against the clone, which sets it and verifies the
+rest. In Claude Code the session-start hook says so at the top of the payload when it finds the
+hooks unwired; under any other harness, check `git config core.hooksPath` yourself.
+
 ## Issue tracking: bd (beads)
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` for the full command
@@ -24,7 +38,7 @@ bd show <id>            # view an issue
 bd update <id> --claim  # claim work
 bd note <id> "..."      # APPEND to a running record
 bd close <id>           # complete work
-bd dolt push            # push the bd store (separate from git push)
+bd dolt push            # ONLY if the store has a remote (`bd dolt status`); an embedded store has none
 ```
 
 ### Rules
@@ -166,10 +180,13 @@ succeeds.
 1. **File issues for remaining work.**
 2. **Run the relevant quality gates** (see Build & Test below).
 3. **Update issue status** — close finished work.
-4. **Push**, in this order:
+4. **Push**, in this order. `bd dolt push` applies only when the bd store has a remote configured;
+   bd 1.3's default is an embedded, in-process store with none, and there the command has nothing
+   to push to — skip it, do not treat its failure as a blocker. A repo with no git remote has
+   nothing to `git push` to either; say so in the handoff instead of stopping.
    ```bash
    git pull --rebase
-   bd dolt push
+   bd dolt push        # only with a bd remote
    git push
    git status          # MUST show "up to date with origin"
    ```
@@ -222,6 +239,7 @@ tools/sweep_test.sh              # corpus sweep: searched-and-found-nothing vs d
 tools/dolt-guard_test.sh         # the shell guard that restarts the Dolt server
 tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember, untracked scripts)
 tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and names every fallback
+tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from the store
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
 tools/check-agent-docs-linked.sh # CLAUDE.md is still a symlink to AGENTS.md

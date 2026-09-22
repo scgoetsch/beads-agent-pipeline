@@ -41,19 +41,24 @@ and bd has no decay/compaction of its own. This skill adds the missing lifecycle
    keeping a `Supersedes:` line + `[[links]]` so the trail is traceable.
 3. Confirm → `bd remember --key <merged> "<text>"` + `bd forget` the sources.
 
-### `tier`  — the structural win (shrink prime permanently, ~340 KB → ~25 KB)
+### `tier`  — the structural win (shrink prime permanently; measured 76 KB → 7 KB on a 40-memory store)
+The tiering itself is already built: `.claude/bd-prime-hook.sh` injects the memories listed in
+`.claude/memory-hot.txt` in full and a key-only index of the rest. **Do not edit the hook** — an
+earlier version of this skill said to, and following it would rewrite a tested file. This mode
+decides what goes on the list:
 1. Classify HOT (always-relevant guards, ~top 10-20) vs SITUATIONAL.
-2. Mark HOT (key-prefix or a `tier:hot` line in the body).
-3. Edit `.claude/bd-prime-hook.sh` to inject **only HOT + a one-line index** of the rest, instead
-   of the full `bd prime` dump.
-4. Mid-session, pull situational detail on demand via `bd memories <kw>` (or mesh `search`).
+2. Write the HOT keys to `.claude/memory-hot.txt`, one per line. Keys not in the store are named
+   at the next session start rather than silently ignored.
+3. Mid-session, pull situational detail on demand via `bd memories <kw>` (or mesh `search`).
    Cold-start is safe because the always-on guards are exactly what's needed before the task is known.
 
 ### `gate`  — write discipline (stop future bloat at the source) — **IMPLEMENTED**
 Enforced automatically by the `PreToolUse` hook `.claude/bd-prerun-hook.sh` (no per-call action
 needed). On any `bd remember`:
-- **BLOCK** (exit 2, with fix instructions): missing `--key`; transient session/status state
-  (`handoff`, `wrap-up`, `pushed @hash`, `status: done/blocked`, `set-up-running`, `pickup`).
+- **BLOCK** (exit 2, with fix instructions): missing `--key`; a body that is STRUCTURALLY a
+  handoff memo (status lines, next-step lists, commit hashes as state). The test is structural:
+  the words `handoff`, `wrap-up`, `pickup` alone only WARN, because a vocabulary blocklist once
+  refused the memory that documented the rule while a rephrase walked through.
 - **WARN** (allowed): oversized inline body (>~1.5 KB) → keep load-bearing facts, move detail to a doc.
 - Fails open on any error; scoped strictly to `bd remember` (all other commands untouched).
 - Limitation: body checks only see content that is literal in the command string (not `"$(cat file)"`);

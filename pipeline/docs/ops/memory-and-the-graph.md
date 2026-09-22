@@ -42,8 +42,10 @@ way. Two measurements from a live store that shaped this design:
 - Hosts truncate the session payload (~39 KB was observed). **Anything appended at the bottom is
   invisible precisely when it matters**, which is why alarms are emitted at the top.
 
-An empty `memory-hot.txt` is fine and is the right default for a new repo: the hook falls back to
-the full `bd prime` output.
+An empty `memory-hot.txt` is fine and is how it ships: the hook emits the rules, the bd context and a
+key-only index of every memory, with nothing in full. It does NOT fall back to the full `bd prime`
+dump for an empty list (an earlier version did, silently); it falls back only when it cannot tier at
+all — no `jq`, no hot file, a failed export — and then says so on its first line.
 
 ## bd-memgraph
 

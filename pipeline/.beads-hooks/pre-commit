@@ -31,7 +31,7 @@ fi
 # CLAUDE.md must stay a symlink to AGENTS.md so the two cannot diverge, and the
 # workspace protocol must stay outside the bd-managed markers. Logic lives in the
 # repo so it is reviewable; this stanza is only the invocation.
-# Bypass once with: git commit --no-verify   Reinstall with: tools/setup-repo.sh
+# Bypass once with: git commit --no-verify   Reinstall: re-run beads-agent-pipeline's install.sh
 if [ -x tools/check-agent-docs-linked.sh ]; then
   tools/check-agent-docs-linked.sh || exit 1
 fi
