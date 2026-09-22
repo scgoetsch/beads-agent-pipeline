@@ -173,6 +173,21 @@ printf '\n\033[1m### re-running changes nothing (idempotence)\033[0m\n'
 grep -q 'nothing to do' "$T/.install2.log" && ok "second run is a no-op" \
   || { bad "second run is a no-op"; grep -E '^\s+\+' "$T/.install2.log" | sed 's/^/        /'; }
 
+# ...and it stays one after what `bd init` + `bd hooks install --shared` (bd 1.3.0) do to a
+# checkout: core.hooksPath rewritten to an ABSOLUTE path, and bd's stanza in the pre-commit
+# rewritten to its own version. Neither is drift to "repair". On the first fresh install both
+# made every re-run report a change, leave a .new, warn that no guard fires, and exit 1.
+git -C "$T" config core.hooksPath "$T/.beads-hooks"
+sed -i 's/BEADS INTEGRATION v1\.1\.2/BEADS INTEGRATION v9.9.9/' "$T/.beads-hooks/pre-commit"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install3.log" 2>&1
+grep -q 'nothing to do' "$T/.install3.log" && ok "still a no-op after bd rewrote hooksPath and its own stanza" \
+  || { bad "still a no-op after bd rewrote hooksPath and its own stanza"; grep -E '^\s+[+!]' "$T/.install3.log" | sed 's/^/        /'; }
+chk "the absolute hooksPath is left alone" "$(git -C "$T" config core.hooksPath)" "$T/.beads-hooks"
+[ -e "$T/.beads-hooks/pre-commit.new" ] && bad "no pre-commit.new left behind" || ok "no pre-commit.new left behind"
+grep -q 'NONE of them fires' "$T/.install3.log" && bad "verify does not cry wolf on the absolute path" \
+  || ok "verify does not cry wolf on the absolute path"
+git -C "$T" config core.hooksPath .beads-hooks
+
 printf '\n\033[1m### it refuses to clobber your content\033[0m\n'
 printf 'MY OWN DOC\n' > "$T/AGENTS.md.mine"; cp -f "$T/AGENTS.md" "$T/.agents.orig"
 printf 'MY OWN DOC\n' > "$T/AGENTS.md"

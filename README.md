@@ -71,6 +71,8 @@ only, a ratchet rather than a flag day.
 
 **`tools/dolt-guard.sh`** — restarts bd's Dolt server after a reboot. Without it, `bd` reads keep
 working while writes silently fail to land, which is the worst possible shape for a data store.
+It applies to a server-mode store only: bd 1.3's default is an embedded, in-process store with no
+server (`bd dolt status` says so), and there the guard has nothing to guard and stays silent.
 
 **Skills** — `memory-curate` (audit, dedupe and tier the memory store) and `triage` (surface and
 plan the top ready issue, read-only, without claiming it). Both are **inert until you invoke
@@ -154,6 +156,15 @@ tools/agent_docs_test.sh     # then the rest of the suite listed in AGENTS.md
 ```
 
 Then open `AGENTS.md` and make it yours. It is a starting point, not a fixed file.
+
+What current bd (1.3) does at that point, measured on a fresh box, so none of it surprises you:
+`bd init` appends its own managed block to `AGENTS.md`, adds its SessionStart hook to
+`.claude/settings.json`, and **makes a commit** carrying those two files (the rest of what was
+installed stays for you to commit). `bd hooks install --shared` rewrites its own stanza in
+`.beads-hooks/pre-commit` and sets `core.hooksPath` to an absolute path; both are fine, and
+re-running the installer leaves both alone. Our SessionStart hook runs `bd prime` itself, so the
+installer replaces bd's; after that `bd setup claude --check` reports "No hooks installed", which
+is expected — re-running `bd setup claude` would only re-add a duplicate.
 
 ## License
 

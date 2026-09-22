@@ -56,6 +56,17 @@ chk "no BEADS markers -> nothing to check" "$(run)" 0
   printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
 chk "protocol inside the markers is caught" "$(run)" 1
 
+# bd's OWN block must pass, whatever bd chooses to put in it. bd 1.3.0 generates a
+# "## Session Completion" section between its markers; the guard once listed that heading as
+# protocol-of-ours and blocked every commit on a fresh install. The shape below is the real
+# 1.3.0 block, cut down: a versioned marker, bd's headings, nothing of ours.
+{ printf '# Agent Instructions\n\nrules\n\n'
+  printf '<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:1105d646 -->\n'
+  printf '## Beads Issue Tracker\n\nRun `bd prime`.\n\n'
+  printf '## Session Completion\n\n**When ending a work session**, close issues and push.\n'
+  printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
+chk "bd 1.3.0's own block (with its Session Completion heading) passes" "$(run)" 0
+
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

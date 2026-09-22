@@ -55,6 +55,21 @@ warn() { printf '  \033[33m!\033[0m %s\n' "$1" >&2; problems=$((problems+1)); }
 hdr()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
 run()  { if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m %s\n' "$*"; else "$@"; fi; }
 
+# Is git running $TARGET/.beads-hooks? core.hooksPath may be the relative `.beads-hooks` we set
+# or the absolute path bd 1.3.0's `bd hooks install --shared` rewrites it to. Both run the same
+# file, so compare the directory it resolves to, not the string. A string compare said "NOT
+# wired" and rewrote the value on every re-run of the first fresh install we did.
+HOOKS_PATH_VALUE=""
+hooks_wired() {
+  local hp want got
+  hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true); HOOKS_PATH_VALUE=$hp
+  [ -n "$hp" ] || return 1
+  case "$hp" in /*) ;; *) hp="$TARGET/$hp" ;; esac
+  want=$(cd "$TARGET/.beads-hooks" 2>/dev/null && pwd -P) || return 1
+  got=$(cd "$hp" 2>/dev/null && pwd -P) || return 1
+  [ "$got" = "$want" ]
+}
+
 # ---------------------------------------------------------------- preflight --
 hdr "dependencies"
 need() { # need <cmd> <why> <how>
@@ -113,9 +128,8 @@ fi
 
 if [ "$MODE" = check ]; then
   if [ -d "$TARGET/.git" ]; then
-    hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
-    if [ "$hp" = ".beads-hooks" ]; then say "core.hooksPath=.beads-hooks — the shared pre-commit is wired"
-    else say "core.hooksPath=${hp:-unset} — the shared pre-commit is NOT wired; install will set it"; fi
+    if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs the shared .beads-hooks/"
+    else say "core.hooksPath=${HOOKS_PATH_VALUE:-unset} — the shared pre-commit is NOT wired; install will set it"; fi
   fi
   hdr "check only"
   say "no changes made. Re-run without --check to install."
@@ -158,11 +172,19 @@ elif command -v jq >/dev/null 2>&1; then
     if [ "$(printf '%s' "$merged" | jq -S .)" = "$(jq -S . "$SET" 2>/dev/null)" ]; then
       say ".claude/settings.json (hooks already present)"
     else
+      had_bd_hook=$(grep -c 'bd prime --hook-json' "$SET" 2>/dev/null || true)
       run cp -f "$SET" "$SET.bak.$(date +%s)"
       if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m merge hooks into %s\n' "$SET"
       else printf '%s\n' "$merged" > "$SET"; fi
       did ".claude/settings.json — merged our hooks in (backup kept)"
       warn "our 'hooks' block REPLACED any same-named block of yours. Check the backup if you had one."
+      # bd init / bd setup claude register their own SessionStart hook in this file. Ours runs
+      # `bd prime` itself, so replacing it loses nothing -- but bd's own check will now say so.
+      if [ "${had_bd_hook:-0}" -gt 0 ]; then
+        say "    that included bd's own SessionStart hook (bd prime --hook-json). Ours runs bd prime"
+        say "    itself, so nothing is lost — but \`bd setup claude --check\` will report 'No hooks"
+        say "    installed' from now on. That is expected; do not re-run bd setup to fix it."
+      fi
     fi
   else
     run cp -f "$PAYLOAD/.claude/settings.json" "$SET.new"
@@ -197,7 +219,20 @@ while IFS= read -r rel; do
 done < <(cd "$PAYLOAD" && find docs -type f | sort)
 
 hdr "repo guards (.beads-hooks/)"
-install_file ".beads-hooks/pre-commit" 755
+# `bd hooks install --shared` rewrites the region between bd's own markers (v1.1.2 shipped,
+# v1.3.0 written on the first fresh install we ran), so byte-identity with our payload is the
+# wrong test after that step: it said DIFFERS, left a .new and failed every re-run. Compare what
+# is OUTSIDE bd's markers; inside them is bd's to manage, and the verify step below checks each
+# guard is still present by name.
+HK_DST="$TARGET/.beads-hooks/pre-commit"; HK_SRC="$PAYLOAD/.beads-hooks/pre-commit"
+outside_bd() { sed '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d' "$1"; }
+if [ -e "$HK_DST" ] && ! cmp -s "$HK_SRC" "$HK_DST" \
+   && [ "$(outside_bd "$HK_SRC")" = "$(outside_bd "$HK_DST")" ]; then
+  say ".beads-hooks/pre-commit (current — differs only inside bd's own block, which bd manages)"
+  [ -e "$HK_DST.new" ] && run rm -f "$HK_DST.new" && say "    removed the stale .beads-hooks/pre-commit.new an earlier run left"
+else
+  install_file ".beads-hooks/pre-commit" 755
+fi
 
 # ------------------------------------------------------------- agent docs --
 hdr "agent docs (AGENTS.md + CLAUDE.md)"
@@ -251,9 +286,8 @@ fi
 # -- the git layer guarded nothing. Instance 12 in docs/ops/checks-narrower-than-what-they-check.md.
 hdr "git hooks"
 if [ -d "$TARGET/.git" ]; then
-  cur=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
-  if [ "$cur" = ".beads-hooks" ]; then say "core.hooksPath already .beads-hooks"
-  else run git -C "$TARGET" config core.hooksPath .beads-hooks && did "set core.hooksPath=.beads-hooks (was ${cur:-unset})"; fi
+  if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE already runs .beads-hooks/"
+  else run git -C "$TARGET" config core.hooksPath .beads-hooks && did "set core.hooksPath=.beads-hooks (was ${HOOKS_PATH_VALUE:-unset})"; fi
   stale=$(ls "$TARGET/.git/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
   [ "${stale:-0}" -gt 0 ] && warn "$stale stale hook(s) in .git/hooks — git ignores them now; delete them so nobody mistakes them for live."
 fi
@@ -322,9 +356,8 @@ if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
   done
   # Presence in the file is a textual claim. Whether git RUNS the file is core.hooksPath, and
   # that was the piece this installer used to skip without saying so. Assert the wiring too.
-  hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true)
-  if [ "$hp" = ".beads-hooks" ]; then say "core.hooksPath=.beads-hooks — git runs that file"
-  else warn "core.hooksPath is '${hp:-unset}', not .beads-hooks — every stanza above is present and NONE of them fires"; fi
+  if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs that file"
+  else warn "core.hooksPath is '${HOOKS_PATH_VALUE:-unset}', which is not .beads-hooks/ — every stanza above is present and NONE of them fires"; fi
 fi
 if [ "$MODE" = dryrun ]; then
   say "dry run — nothing was changed, so nothing to verify."

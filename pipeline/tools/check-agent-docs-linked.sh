@@ -91,7 +91,11 @@ if command grep -q 'BEGIN BEADS INTEGRATION' AGENTS.md; then
         exit 1
     fi
 
-    for pattern in 'sweep\.sh' 'memgraph' 'SUPERSEDE' 'Session Completion'; do
+    # Only wording that is OURS belongs on this list. 'Session Completion' was on it and was
+    # wrong: bd 1.3.0's own generated block carries a "## Session Completion" heading, so on a
+    # fresh install every commit was blocked, with advice ("move it below the END marker") that
+    # would have been wrong to follow. Found 2026-09-22 on the first box with a current bd.
+    for pattern in 'sweep\.sh' 'memgraph' 'SUPERSEDE'; do
         if printf '%s' "$managed" | command grep -qE "$pattern"; then
             echo "agent-docs: '$pattern' is INSIDE the BEADS INTEGRATION markers in AGENTS.md." >&2
             echo "  \`bd setup\` regenerates that region and would silently destroy it." >&2

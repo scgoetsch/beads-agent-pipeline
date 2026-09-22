@@ -78,6 +78,16 @@ check "does not invoke bd" "$([ -e "$TMP/CALLED-1" ] && echo called || echo no)"
 check "stays silent" "$(wc -c <"$TMP/err")" "0"
 echo
 
+# ---------------------------------------------------------------- 1b
+echo "embedded store (bd 1.3.0 default): no server exists, so nothing to guard"
+ws1b=$(make_ws ws1b); mkdir -p "$ws1b/.beads/embeddeddolt"; port1b=$(free_port)
+stub_never1b=$(make_bd never1b "touch '$TMP/CALLED-1b'; exit 0")
+run_guard "$ws1b" "$port1b" "$stub_never1b"; rc=$?
+check "returns 0 with no server listening" "$rc" "0"
+check "does not invoke bd" "$([ -e "$TMP/CALLED-1b" ] && echo called || echo no)" "no"
+check "stays silent (it used to say bd writes will NOT land)" "$(wc -c <"$TMP/err")" "0"
+echo
+
 # ---------------------------------------------------------------- 2
 echo "server already up (the 99% path)"
 ws2=$(make_ws ws2); port2=$(free_port)

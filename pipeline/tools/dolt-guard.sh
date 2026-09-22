@@ -68,6 +68,14 @@ bd_dolt_guard() {
     # Nothing to guard on a machine that has no such workspace.
     [ -d "$ws/.beads" ] || return 0
 
+    # Nothing to guard on an EMBEDDED store either: bd 1.3.0's default is in-process Dolt with
+    # no server (`bd dolt status`: "embedded (in-process, no server)", data under
+    # .beads/embeddeddolt/). The hazard this guard exists for -- a server that did not come back
+    # after a reboot -- cannot occur there, and probing :27575 instead printed "FAILED to start
+    # dolt server — bd writes will NOT land" in every new shell of the first fresh install we
+    # did, while bd writes landed fine. A false alarm on every shell is how a guard gets ignored.
+    [ -d "$ws/.beads/embeddeddolt" ] && return 0
+
     # The only path taken 99% of the time. No lock, no subprocess but `ss`.
     __bd_dolt_guard_listening "$port" && return 0
 
