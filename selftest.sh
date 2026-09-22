@@ -73,7 +73,7 @@ grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
 
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
-         tools/bd-prerun-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh \
+         tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/dolt-guard_test.sh tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh; do
   if (cd "$T" && ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; sed -n '1,25p' "$T/.suite.log" | sed 's/^/        /'; fi

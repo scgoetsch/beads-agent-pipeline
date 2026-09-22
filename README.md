@@ -45,7 +45,8 @@ context, your hot memories in full and an index of the rest; a PreToolUse guard;
 warns about unclosed issues. Each resolves the repo root from **its own file location**, never a
 literal path, and `tools/hook_portability_test.sh` relocates them to a throwaway root to prove it.
 
-**The PreToolUse guard** blocks two things measured to cause real damage:
+**The PreToolUse guard** blocks three things. Two were measured to cause real damage; the third is
+a discipline you may not want, and it is one line to turn off:
 
 - **Bare `pkill` / `killall`.** `pkill -f PATTERN` matches the full command line — including the
   shell running it — so it kills its own caller. It comes back as exit 143/144, reads like an
@@ -55,6 +56,16 @@ literal path, and `tools/hook_portability_test.sh` relocates them to a throwaway
   is structurally a handoff memo, is refused with a pointer to `bd note` instead. The test is
   structural, not lexical — an earlier vocabulary-based version blocked the memory that documented
   the rule while a rephrase walked straight through.
+- **Running a script under `scripts/` with no bd issue `in_progress`.** Untracked analysis runs
+  are how reproducibility gaps start, so the hook asks for a claimed issue first. It fails open
+  if bd is unavailable. The directory name is the one-line knob `SCRIPT_DIRS_RE` in
+  `.claude/bd-prerun-hook.sh`; set it to something that matches nothing to drop the rule.
+
+**The SessionStart hook** replaces bd's raw `bd prime` dump (76 KB on a 40-memory store, past
+what hosts keep of a session payload) with the rules, the bd context, the memories listed in
+`.claude/memory-hot.txt` in full, and a key-only index of the rest. The hot list ships empty, and
+empty means "index only", not "unconfigured". If the hook has to fall back to the full dump — no
+`jq`, no export — it says so on its first line rather than looking like the tiered output.
 
 **`tools/sweep.sh`** — corpus-wide search with a **positive control per repo**. It lifts real lines
 out of each repo and greps for them through the identical code path; if they do not come back, that

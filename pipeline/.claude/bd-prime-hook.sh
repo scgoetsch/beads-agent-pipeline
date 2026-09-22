@@ -57,11 +57,18 @@ emit_rules() {
   echo "5. Use \`bd remember\` for persistent knowledge — never MEMORY.md files."; echo ""
   emit_site_checks
 }
-fallback_full() { emit_rules; if ! bd prime 2>/tmp/bd-prime-err; then echo "# WARNING: bd prime failed"; cat /tmp/bd-prime-err; fi; }
-command -v jq >/dev/null 2>&1 || { fallback_full; exit 0; }
-[ -s "$HOTFILE" ] || { fallback_full; exit 0; }
-bd export --include-memories -o "$MM" 2>/dev/null || { fallback_full; exit 0; }
-grep -q '"_type":"memory"' "$MM" 2>/dev/null || { fallback_full; exit 0; }
+# Every fallback SAYS it is one, and why. The full dump is the degraded path -- it was measured
+# at 76 KB on a 40-memory store, past what hosts keep of a session payload -- and a silent
+# fallback reads exactly like the tiered output it replaced. An EMPTY hot list is not a reason
+# to fall back: it is a valid configuration (nothing in full, everything in the index), and it
+# is how this file ships. The old `[ -s "$HOTFILE" ]` test meant a default install got the
+# full dump with no line saying so.
+fallback_full() { echo "# ⚠ bd-prime-hook: $1 — emitting the FULL bd prime dump (no memory tiering)."; emit_rules
+  if ! bd prime 2>/tmp/bd-prime-err; then echo "# WARNING: bd prime failed"; cat /tmp/bd-prime-err; fi; }
+command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
+[ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
+bd export --include-memories -o "$MM" 2>/dev/null || { fallback_full "bd export --include-memories failed"; exit 0; }
+grep -q '"_type":"memory"' "$MM" 2>/dev/null || { fallback_full "bd export produced no memories"; exit 0; }
 emit_rules
 # bd workflow context + command reference, with the full memory dump removed
 # (delete from "## Persistent Memories" up to but NOT including "## Core Rules")

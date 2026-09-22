@@ -220,7 +220,8 @@ after touching its tool.
 ```bash
 tools/sweep_test.sh              # corpus sweep: searched-and-found-nothing vs did-not-search
 tools/dolt-guard_test.sh         # the shell guard that restarts the Dolt server
-tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember)
+tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember, untracked scripts)
+tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and names every fallback
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
 tools/check-agent-docs-linked.sh # CLAUDE.md is still a symlink to AGENTS.md
