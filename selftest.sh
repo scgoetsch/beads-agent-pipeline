@@ -224,6 +224,24 @@ grep -q "our template: $SRC/pipeline/AGENTS.md" "$T/.agents2.log" && ok "the log
   || bad "the log points at the template instead"
 cp -f "$T/.agents.orig" "$T/AGENTS.md"
 
+printf '\n\033[1m### the memory-graph ledger: ignored, untracked, tracked — each named\033[0m\n'
+# The doc used to recommend `.beads/` + `!.beads/memgraph-ledger.json`, which ignores the ledger:
+# git cannot re-include a file under an excluded directory. Verify says which state it is in.
+mkdir -p "$T/.beads"; printf '{}\n' > "$T/.beads/memgraph-ledger.json"
+printf '.beads/\n' > "$T/.gitignore"
+"$SRC/install.sh" --no-shell "$T" >"$T/.ledger1.log" 2>&1
+grep -q 'memgraph-ledger.json is GITIGNORED' "$T/.ledger1.log" && ok "ledger under an excluded .beads/ is reported as ignored" \
+  || bad "ledger under an excluded .beads/ is reported as ignored"
+printf '.beads/*\n!.beads/memgraph-ledger.json\n' > "$T/.gitignore"
+"$SRC/install.sh" --no-shell "$T" >"$T/.ledger2.log" 2>&1
+grep -q 'memgraph-ledger.json is untracked' "$T/.ledger2.log" && ok "with the working re-include it is reported as untracked" \
+  || bad "with the working re-include it is reported as untracked"
+git -C "$T" add .beads/memgraph-ledger.json
+"$SRC/install.sh" --no-shell "$T" >"$T/.ledger3.log" 2>&1
+grep -q 'memgraph-ledger.json is tracked' "$T/.ledger3.log" && ok "once added it is reported as tracked" \
+  || bad "once added it is reported as tracked"
+git -C "$T" rm -q --cached .beads/memgraph-ledger.json; rm -rf "$T/.beads" "$T/.gitignore"
+
 printf '\n\033[1m### --dry-run and --check touch nothing\033[0m\n'
 D=$(mktemp -d); git -C "$D" init -q
 "$SRC/install.sh" --dry-run "$D" >/dev/null 2>&1

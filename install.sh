@@ -374,6 +374,19 @@ if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
   if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs that file"
   else warn "core.hooksPath is '${HOOKS_PATH_VALUE:-unset}', which is not .beads-hooks/ — every stanza above is present and NONE of them fires"; fi
 fi
+# The memory-graph ledger only helps the next machine if it is in git. bd does not ignore it, but
+# a root .gitignore that excludes `.beads/` wholesale does -- and a `!` re-include under an
+# excluded directory has no effect (docs/ops/memory-and-the-graph.md has the working form).
+LEDGER=".beads/memgraph-ledger.json"
+if [ -f "$TARGET/$LEDGER" ] && [ -d "$TARGET/.git" ]; then
+  if [ -n "$(git -C "$TARGET" ls-files --others --ignored --exclude-standard -- "$LEDGER" 2>/dev/null)" ]; then
+    warn "$LEDGER is GITIGNORED — the memory graph's history will not travel. Exclude .beads/* not .beads/, then re-include it (see docs/ops/memory-and-the-graph.md)"
+  elif [ -n "$(git -C "$TARGET" ls-files --others --exclude-standard -- "$LEDGER" 2>/dev/null)" ]; then
+    say "$LEDGER is untracked — git add it once; it is meant to be committed"
+  else
+    say "$LEDGER is tracked"
+  fi
+fi
 if [ "$MODE" = dryrun ]; then
   say "dry run — nothing was changed, so nothing to verify."
 else

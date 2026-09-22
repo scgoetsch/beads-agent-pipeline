@@ -82,12 +82,20 @@ the installer afterwards to confirm rather than assuming — it prints one line 
   A non-observing run says so on its own status line — read it.
 
 **Commit the ledger.** `bd-memgraph` writes `.beads/memgraph-ledger.json`, which carries tombstone
-history so a superseded key stays known after `bd forget`. `.beads/` is normally gitignored, so
-re-include the ledger explicitly — without this the history is local-only and the next machine
-re-learns nothing:
+history so a superseded key stays known after `bd forget`. Without it in git the history is
+local-only and the next machine re-learns nothing. bd itself does not ignore it: bd 1.1.2 and 1.3.0
+both ship a `.beads/.gitignore` that excludes specific state files (`sync-state.json`, `*.db`, …),
+not the directory, and `git check-ignore -v .beads/memgraph-ledger.json` prints nothing on either.
+So the whole step is `git add .beads/memgraph-ledger.json` once; a tracked file is not subject to
+ignore rules afterwards. The installer's verify step says so if it finds a ledger that is ignored.
+
+Only if your own root `.gitignore` excludes `.beads/` wholesale do you need a re-include, and then
+it must exclude the directory's **contents**, not the directory — git cannot re-include a file
+under an excluded directory, so the pair this doc used to show (`.beads/` then
+`!.beads/memgraph-ledger.json`) ignored the ledger anyway, verified 2026-09-22:
 
 ```gitignore
-.beads/
+.beads/*
 !.beads/memgraph-ledger.json
 ```
 
