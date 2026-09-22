@@ -66,7 +66,10 @@ fails, stop: the pipeline is broken on this platform and installing it proves no
 
 ## 3. Install into a project
 
-Make a project of your own (do not use a tree another session is working in):
+The target is the directory you were told to install into. If it is already a git repo, skip the
+four lines that create one below and start at `--check`; the installer keeps whatever is there
+(an existing `AGENTS.md` is never touched — the template lands only where there is none). If it
+does not exist yet, create it. Either way, not a tree another session is working in:
 
 ```bash
 mkdir -p ~/proj/fresh && cd ~/proj/fresh
