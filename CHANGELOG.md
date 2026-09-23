@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **An index too large for the budget is omitted, not sliced; the trim alarm is for real loss.**
+  On a 385-memory store the bounded index listed the alphabetical first 85 keys — about 4 KB that
+  told the reader almost nothing and crowded out the HOT tier. It is now replaced by one explicit
+  `INDEX OMITTED` line with the count and a pointer to `bd memories` search. The loud
+  `PAYLOAD TRIMMED` banner now fires only when a HOT body is dropped; an omitted index or bd
+  context is expected on a large store and gets at most one quiet line. On that store the payload
+  went from 9.7 KB with 5 of 12 HOT bodies and an alarm every session to 8.2 KB with all 6 of a
+  trimmed list and no alarm. Three new cases in `tools/bd-prime-hook_test.sh`.
 - **Session-scoped stop reminder and scripts gate.** Claude Code's Stop and Pi's `agent_settled`
   fire after EVERY turn, and the bd store is shared by every session on a machine, all claiming as
   the same actor. The stop hook therefore repeated every in-progress issue in the store after each

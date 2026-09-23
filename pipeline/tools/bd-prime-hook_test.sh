@@ -311,7 +311,9 @@ STUB
 export BD_TEST_EXPORT="$T/many.jsonl"
 out=$(run_hook)
 chk "400-key output fits the 10 KB host limit" "$(( $(bytes "$out") <= 10000 ))" 1
-chk "the index says PARTIAL, never implies it is complete" "$(grep -c 'INDEX PARTIAL' <<<"$out")" 1
+chk "the index says OMITTED, never implies it is complete" "$(grep -c 'INDEX OMITTED' <<<"$out")" 1
+chk "no arbitrary slice of keys is listed" "$(grep -c '^- long-operational-memory-key' <<<"$out")" 0
+chk "an omitted index alone is not a TRIMMED alarm" "$(grep -c 'PAYLOAD TRIMMED' <<<"$out")" 0
 chk "the total count is still disclosed" "$(grep -c 'index (400 more' <<<"$out")" 1
 chk "the end marker survives" "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
 

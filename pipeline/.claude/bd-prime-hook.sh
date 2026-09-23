@@ -241,25 +241,19 @@ if [ "$BUDGET" -gt 0 ]; then
   index_cap=$((BUDGET - other)); [ "$index_cap" -gt 4000 ] && index_cap=4000
   [ "$index_cap" -gt 350 ] || index_cap=350
   if [ "$INDEX_FULL_BYTES" -gt "$index_cap" ]; then
-    INDEX_PARTIAL=1; INDEX_SHOWN=0; selected_bytes=0
-    : > "$TMPD/index.selected"
-    # Leave room for a header and explicit PARTIAL warning.
-    while IFS= read -r key; do
-      b=$(printf '%s\n' "$key" | wc -c | tr -d ' ')
-      [ $((selected_bytes + b + 350)) -le "$index_cap" ] || break
-      printf '%s\n' "$key" >> "$TMPD/index.selected"
-      selected_bytes=$((selected_bytes + b)); INDEX_SHOWN=$((INDEX_SHOWN+1))
-    done < "$INDEX"
+    # Too many keys to list. An arbitrary prefix of them (alphabetical: 85 of 385 on one real
+    # store) tells the reader almost nothing and spends the budget the HOT tier needs, so list
+    # NONE and say so plainly; search is the discovery path. Never implies the list is complete.
+    INDEX_PARTIAL=1; INDEX_SHOWN=0
     {
       echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"
-      echo "> ⚠ INDEX PARTIAL — showing $INDEX_SHOWN of $EXPECT keys; $((EXPECT - INDEX_SHOWN)) omitted. Search via \`bd memories <keyword>\` or list keys with \`bd export --include-memories\`."
-      cat "$TMPD/index.selected"
+      echo "> INDEX OMITTED — $EXPECT keys are too many to list within the host budget. Search with \`bd memories <keyword>\`; list every key with \`bd export --include-memories\`."
     } > "$TMPD/s.index"
   fi
 fi
 # ---- assemble against the budget ------------------------------------------------------------
 # Priority when something has to go: alarms, rules, site checks and hot header stay first;
-# the index is explicitly PARTIAL if its keys alone would exceed the cap. Hot bodies are kept
+# the index is replaced by an explicit OMITTED line if its keys would exceed the cap. Hot bodies are kept
 # in list order while they fit; the bd context goes first, because AGENTS.md carries bd's quick reference and
 # `bd prime` prints the rest on demand. Whatever is dropped is named at the top so the reader
 # can fetch it, instead of not knowing it existed.
@@ -284,11 +278,15 @@ for f in "$TMPD"/hot.[0-9]*; do
   if [ $((used + b)) -le "$BUDGET" ]; then used=$((used + b)); kept="$kept $(basename "$f")"; else dropped="$dropped $k"; fi
 done
 ctx_in=0; if [ $((used + ctx)) -le "$BUDGET" ]; then ctx_in=1; used=$((used + ctx)); fi
-echo "# ⚠ bd-prime-hook: PAYLOAD TRIMMED TO FIT THIS HOST — the tiered output is $all bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000). Not shipped, fetch on demand:"
-[ "$INDEX_PARTIAL" -eq 1 ] && echo "#   memory key index: $INDEX_SHOWN of $EXPECT shown; find the rest with \`bd memories <keyword>\` or \`bd export --include-memories\`"
-[ -n "$dropped" ] && echo "#   hot memories, in full via \`bd recall <key>\`:$dropped"
-[ "$ctx_in" -eq 0 ] && echo "#   bd's workflow context and command reference: run \`bd prime\`"
-echo "#   Fix: trim .claude/memory-hot.txt or shrink the bodies it names (/memory-curate). BD_PRIME_BUDGET=0 lifts the cap on a host that has none."; echo ""
+if [ -n "$dropped" ]; then
+  echo "# ⚠ bd-prime-hook: PAYLOAD TRIMMED TO FIT THIS HOST — the tiered output is $all bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000). Not shipped, fetch on demand:"
+  echo "#   hot memories, in full via \`bd recall <key>\`:$dropped"
+  [ "$ctx_in" -eq 0 ] && echo "#   bd's workflow context and command reference: run \`bd prime\`"
+  echo "#   Fix: trim .claude/memory-hot.txt or shrink the bodies it names (/memory-curate). BD_PRIME_BUDGET=0 lifts the cap on a host that has none."; echo ""
+elif [ "$ctx_in" -eq 0 ]; then
+  # Expected on a large store, not an alarm: AGENTS.md carries bd's quick reference.
+  echo "# bd-prime-hook: bd's workflow context is not inlined (host budget) — run \`bd prime\` for it."; echo ""
+fi
 cat "$TMPD/s.unwired" "$TMPD/s.rules" "$TMPD/s.site" "$TMPD/s.index" "$TMPD/s.hothdr"
 emit_hot "$kept"
 [ "$ctx_in" -eq 1 ] && cat "$TMPD/s.ctx"

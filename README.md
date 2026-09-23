@@ -89,7 +89,7 @@ not want, and it is one line to turn off:
 
 **The SessionStart hook** (cached at Pi `session_start` when opted in) replaces bd's raw
 `bd prime` dump (76 KB on a 40-memory store) with, in this order, the rules, a key-only index of
-the store (explicitly PARTIAL if its keys alone exceed the host budget), the memories listed in
+the store (replaced by an explicit INDEX OMITTED line if its keys alone exceed the host budget), the memories listed in
 `.claude/memory-hot.txt` while space permits, and the bd context. The hot list ships empty, and empty means
 "index only", not "unconfigured". If the hook has to fall back to the full dump — no `jq`, no
 export — it says so on its first line rather than looking like the tiered output.
@@ -102,10 +102,11 @@ states the same numbers and no setting to raise them). A 15.9 KB tiered payload 
 tier and its index that way while every line of it read as success. So the hook budgets:
 `BD_PRIME_BUDGET` (default 10000; `0` lifts the cap on a host that has none) bounds what it
 emits, hot bodies that do not fit are named at the top instead of shipped (`bd recall <key>`
-fetches one), and an index too large for the remaining budget is capped at whole keys and marked
-PARTIAL with the missing count (`bd memories <keyword>` searches the store directly). The bd
+fetches one), and an index too large for the remaining budget is replaced by one INDEX OMITTED line with
+the count (`bd memories <keyword>` searches the store directly). A loud PAYLOAD TRIMMED banner
+means a HOT body was dropped; an omitted index or bd context alone is expected, not an alarm. The bd
 context is the first thing dropped, and the full-dump fallback is cut with a line saying so.
-The index can use up to 4 KB of the host allowance; keep the hot list to essential guards.
+A listed index can use up to 4 KB of the host allowance; keep the hot list to essential guards.
 
 **`tools/sweep.sh`** — corpus-wide search with a **positive control per repo**. It lifts real lines
 out of each repo and greps for them through the identical code path; if they do not come back, that

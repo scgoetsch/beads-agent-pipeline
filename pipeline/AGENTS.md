@@ -149,7 +149,7 @@ Full rationale: **`docs/ops/why-a-bare-grep-misses-the-corpus.md`**.
 
 `bd remember --key <key>` holds durable knowledge; `.claude/memory-hot.txt` lists priority
 keys for full session-start injection **while the host budget permits**. Omitted HOT bodies are
-named, and an index that cannot fit all remaining keys says **PARTIAL** with an omitted count.
+named, and an index that cannot fit all remaining keys is replaced by one **INDEX OMITTED** line.
 Use `bd memories` and `bd recall` to retrieve what was not injected.
 
 If `bd-memgraph` is installed, `[[wikilinks]]` in memory bodies form a typed graph
