@@ -15,8 +15,17 @@ The adapter does not fork the policy in JavaScript. It calls the installed `.cla
 | `session_start` | Run `tools/dolt-guard.sh` (Pi's non-interactive Bash does not source `~/.bashrc`), then `bd-prime-hook.sh`; cache its budgeted stdout. |
 | `before_agent_start` | Put cached context in a system-prompt section, once per agent run. **Do not rerun bd here.** The section is not summarized away by compaction. |
 | `session_before_compact` | Refresh the cache with `bd-prime-hook.sh`, as Claude Code's PreCompact does; the next run uses the fresh section. |
-| `tool_call` (`bash`) and `user_bash` (`!`) | Send `{"tool_name":"Bash","tool_input":{"command":"..."}}` on stdin to `bd-prerun-hook.sh`. Exit 2 blocks (for `!`, return an error result); exit 0 allows. Missing, failing or timed-out hook **allows with a visible warning**, never silently. |
-| `agent_settled` | Show nonempty `bd-stop-hook.sh` output as a UI notice (stderr in print mode). Never use `agent_before_settle` / `continue:true`: an open issue would loop. |
+| `tool_call` (`bash`) and `user_bash` (`!`) | Send `{"tool_name":"Bash","tool_input":{"command":"..."},"session_id":"pi-<id>","hook_event_name":"PreToolUse"}` on stdin to `bd-prerun-hook.sh`. Exit 2 blocks (for `!`, return an error result); exit 0 allows. Missing, failing or timed-out hook **allows with a visible warning**, never silently. The hook records this session's `bd update <id> --claim` and scopes the scripts gate to it. |
+| `agent_settled` | Fires after **every** agent run, not at session end. Run `bd-stop-hook.sh` as a turn end (`{"hook_event_name":"Stop","session_id":...}`): it prints only this session's claimed in-progress issues, only when that set changed; show it as an info notice (stderr in print mode). Never use `agent_before_settle` / `continue:true`: an open issue would loop. |
+| `session_shutdown` | On `quit` or `new` only (`reload`/`resume`/`fork` continue the session): run the stop hook as `SessionEnd`, the close reminder for this session's still-open claims, as a warning. |
+
+**Why session-scoped.** The bd store is shared by every session and project on a machine, and
+every session claims as the same actor, so bd cannot say whose an in-progress issue is. Globally,
+the reminder repeated every other session's work after every turn, and the scripts gate was
+licensed by anyone's stale claim. The id is Pi's own (`ctx.sessionManager.getSessionId()`), so a
+resumed session keeps its record; work picked up from another session is re-claimed (`--claim`
+is idempotent). The record lives in `.git/bd-session-claims/` (never committed; pruned after 30
+days; `BD_SESSION_CLAIMS_DIR` overrides it).
 
 From a pipeline source checkout (`pipeline/`) **or an installed opt-in project**, after
 configuring model authentication:

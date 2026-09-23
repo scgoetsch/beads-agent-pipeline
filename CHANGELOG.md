@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Session-scoped stop reminder and scripts gate.** Claude Code's Stop and Pi's `agent_settled`
+  fire after EVERY turn, and the bd store is shared by every session on a machine, all claiming as
+  the same actor. The stop hook therefore repeated every in-progress issue in the store after each
+  turn, and the untracked-scripts gate was licensed by any session's (often stale) claim, so it
+  could never fire. `bd-prerun-hook.sh` now records each session's `bd update <id> --claim` (or
+  `--status in_progress`) under the hook payload's `session_id` in `.git/bd-session-claims/`; the
+  scripts gate needs an issue THIS session claimed, and `bd-stop-hook.sh`, given a session id,
+  reports only that session's claimed in-progress issues -- at a turn end (`Stop`) only when the
+  set changes, at `SessionEnd` always. Without a session id both keep the old global behaviour.
+  The Pi adapter sends Pi's session id, treats `agent_settled` as a turn end and
+  `session_shutdown` (quit/new) as the close. A new Pi regression test drives the real hooks over
+  a store full of other sessions' work.
+- **PreToolUse no longer fails open on text it cannot tokenize.** An unbalanced quote (an
+  apostrophe in an unquoted heredoc body is the everyday case) made the tokenizer raise and the
+  hook exit 0, switching off the pkill guard, memory admission and the scripts gate at once.
+  Heredoc bodies that feed data are now removed before any check (shell-fed bodies are kept and
+  checked); text that still cannot be tokenized is judged by the line-based checks; and the
+  memory gate identifies `bd remember` calls by tokens, so quoted prose in other commands no
+  longer trips it while `env`/`bash -c`/`$(...)`-wrapped calls no longer escape it.
+
 - Opt-in `--with-pi` installs a trusted project-local Pi extension. It reuses the Claude hook
   scripts for startup and compaction priming, model Bash and `!` command guards, Dolt startup,
   and settled-run reminders; cached priming is injected per run without re-running bd. Broken

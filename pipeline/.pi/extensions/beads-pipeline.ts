@@ -2,6 +2,7 @@
 // this extension reuses their scripts rather than reimplementing their policies in TypeScript.
 // This file is project-local and loads ONLY after Pi grants project trust.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
@@ -12,7 +13,21 @@ const PREFIX = "⚠ beads-agent-pipeline (Pi):";
 const LIMIT = 256_000; // Bound captured text even if a script regresses to an unbudgeted dump.
 const TIMEOUT_MS = 30_000;
 type ScriptResult = { code: number | null; stdout: string; stderr: string; fault?: string };
-type NoticeContext = { cwd: string; hasUI: boolean; ui: { notify(message: string, level: "warning"): void } };
+type NoticeContext = {
+  cwd: string; hasUI: boolean; ui: { notify(message: string, level: "info" | "warning"): void };
+  sessionManager?: { getSessionId?(): string };
+};
+// The bd store is shared by every session and all of them claim as the same actor, so the hooks
+// scope "in progress" to what THIS session claimed, keyed by the session id.
+// Pi's own id when available, so a resumed session keeps its record; else one per runtime.
+const RUNTIME_KEY = `pi-${randomUUID()}`;
+function sessionKey(ctx: NoticeContext): string {
+  try {
+    const id = ctx.sessionManager?.getSessionId?.();
+    if (typeof id === "string" && id) return `pi-${id}`;
+  } catch { /* fall through */ }
+  return RUNTIME_KEY;
+}
 
 function inProject(cwd: string): boolean {
   const dir = resolve(cwd);
@@ -24,11 +39,11 @@ function missingWarning(script: string): string {
   return `${PREFIX} ${script} NOT FOUND at ${path} — bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.`;
 }
 
-function notice(ctx: NoticeContext, message: string): void {
+function notice(ctx: NoticeContext, message: string, level: "info" | "warning" = "warning"): void {
   // Never throw from a tool_call handler: Pi treats thrown errors as a BLOCK. The Claude
   // guard intentionally fails open on infrastructure errors, but says so loudly.
   try {
-    if (ctx.hasUI) { ctx.ui.notify(message, "warning"); return; }
+    if (ctx.hasUI) { ctx.ui.notify(message, level); return; }
   } catch { /* fall through to stderr */ }
   console.error(message);
 }
@@ -117,7 +132,7 @@ export default function beadsPipeline(pi: ExtensionAPI) {
         notice(ctx, `${PREFIX} guard disabled outside ${root}; command ALLOWED without checking.`);
         return;
       }
-      const json = JSON.stringify({ tool_name: "Bash", tool_input: { command } });
+      const json = JSON.stringify({ tool_name: "Bash", tool_input: { command }, session_id: sessionKey(ctx), hook_event_name: "PreToolUse" });
       const result = await runScript(".claude/bd-prerun-hook.sh", json);
       if (result.code === 2 && !result.fault) return result.stderr.trim() || "Blocked by bd-prerun-hook.sh (exit 2).";
       if (result.fault || result.code !== 0) {
@@ -153,15 +168,26 @@ export default function beadsPipeline(pi: ExtensionAPI) {
     const reason = await gate(event.command, ctx);
     if (reason) return { result: { output: reason, exitCode: 2, cancelled: false, truncated: false } };
   });
-  pi.on("agent_settled", async (_event, ctx) => {
+  // agent_settled ends EVERY agent run (each turn), not the session. The stop hook,
+  // told it is a turn end ("Stop") and whose session this is, reports only this session's claimed
+  // issues and only when that set changes; the close reminder is for session_shutdown below.
+  async function reminder(ctx: NoticeContext, hookEvent: "Stop" | "SessionEnd"): Promise<void> {
     if (!inProject(ctx.cwd)) return;
-    const result = await runScript(".claude/bd-stop-hook.sh");
+    const payload = JSON.stringify({ hook_event_name: hookEvent, session_id: sessionKey(ctx) });
+    const result = await runScript(".claude/bd-stop-hook.sh", payload);
     if (result.fault || result.code !== 0) {
       notice(ctx, result.fault?.includes("NOT FOUND")
         ? missingWarning("bd-stop-hook.sh")
         : `${PREFIX} bd-stop-hook.sh FAILED (${result.fault || `exit ${result.code}`}); no in-progress check ran. ${result.stderr.trim()}`);
     } else if (result.stdout.trim()) {
-      notice(ctx, result.stdout.trim()); // advisory only; NEVER continue a settled run
+      // advisory only; NEVER continue a settled run
+      notice(ctx, result.stdout.trim(), hookEvent === "SessionEnd" ? "warning" : "info");
     } else if (result.stderr.trim()) notice(ctx, `${PREFIX} ${result.stderr.trim()}`);
+  }
+  pi.on("agent_settled", async (_event, ctx) => { await reminder(ctx, "Stop"); });
+  pi.on("session_shutdown", async (event, ctx) => {
+    // quit and new end this session; reload, resume and fork carry it on under the same id.
+    const reason = (event as { reason?: string }).reason;
+    if (reason === "quit" || reason === "new") await reminder(ctx, "SessionEnd");
   });
 }

@@ -248,7 +248,7 @@ tools/sweep_test.sh              # corpus sweep: searched-and-found-nothing vs d
 tools/dolt-guard_test.sh         # the shell guard that restarts the Dolt server
 tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember, untracked scripts)
 tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and names every fallback
-tools/bd-stop-hook_test.sh       # the Stop hook's in-progress count is the number of issues, not of ● glyphs
+tools/bd-stop-hook_test.sh       # turn-end/close reminder: this session's claims only, rows not ● glyphs
 tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from the store
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/pi-extension_test.sh       # if installed: Pi event adapter's priming, gate, fail-open and reminder
@@ -280,8 +280,13 @@ at the top, and every payload ends with `# — end of bd-prime-hook payload —`
 that line, the host cut the payload — run `bash .claude/bd-prime-hook.sh` yourself) and runs
 again before a context compaction; `bd-prerun-hook.sh` is a
 PreToolUse guard that blocks bare `pkill`/`killall`, malformed `bd remember`, and a run of a
-script under the scripts directory with no bd issue in progress (which directory is the
-one-line knob `SCRIPT_DIRS_RE` in the hook); `bd-stop-hook.sh` warns about in-progress issues at stop.
+script under the scripts directory with no issue claimed by THIS session in progress (which
+directory is the one-line knob `SCRIPT_DIRS_RE` in the hook); `bd-stop-hook.sh` runs after each
+turn and reports only this session's claimed in-progress issues, when that set changes. Both are
+session-scoped because the bd store is shared by every session on the machine and all of them
+claim as the same actor: the prerun hook records each session's `bd update <id> --claim` in
+`.git/bd-session-claims/`. Picking up work claimed in an earlier session? Re-claim it; `--claim`
+is idempotent.
 **Each resolves the repo root from its own file location, never a literal path** — see
 `docs/ops/hooks-and-portability.md`. Optional site checks live in `.claude/site-checks/`.
 

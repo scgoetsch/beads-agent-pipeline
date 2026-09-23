@@ -15,15 +15,24 @@ if [ -z "$WS" ] || ! cd "$WS"; then
     exit 0
 fi
 
-# ── Parse command from hook JSON payload ──────────────────────────────────────
-command=$(python3 -c "
-import sys, json
+# ── Parse the hook JSON payload: session id (line 1), then the command ─────────
+# session_id is what Claude Code sends with every hook call (the Pi adapter sends its own); it
+# scopes the untracked-scripts gate to what THIS session claimed. Sanitized, because
+# it names a file.
+parsed=$(python3 -c '
+import sys, json, re
 try:
     data = json.load(sys.stdin)
-    print(data.get('tool_input', {}).get('command', ''))
 except Exception:
-    print('')
-" 2>/dev/null)
+    data = {}
+if not isinstance(data, dict): data = {}
+print(re.sub(r"[^A-Za-z0-9._-]", "_", str(data.get("session_id") or ""))[:128])
+tool = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+print(tool.get("command", "") if isinstance(tool.get("command", ""), str) else "")
+' 2>/dev/null)
+session_id=${parsed%%$'\n'*}
+command=${parsed#*$'\n'}
+[ "$command" = "$parsed" ] && command=""
 
 [ -z "$command" ] && exit 0
 
@@ -99,7 +108,44 @@ def safe_kill(name, args):
                 break
     return False
 
+def remember_call(name, args):
+    """(is a `bd remember` call, lacks --key) for one unwrapped command. Help is not a write."""
+    if name != 'bd': return False, False
+    sub = next((a for a in args if not a.startswith('-')), None)
+    if sub != 'remember' or any(a in ('-h', '--help') for a in args): return False, False
+    return True, not any(a == '--key' or a.startswith('--key=') for a in args)
+
+ISSUE_ID = re.compile(r'[A-Za-z][A-Za-z0-9]*-[A-Za-z0-9]+(?:\.[0-9]+)*')
+# bd update flags that take NO value; every other flag's next word is its value, not an issue id.
+BD_BOOL = {'--claim', '--allow-empty-description', '--ephemeral', '--history', '--no-history',
+           '--persistent', '--stdin', '-h', '--help', '--json', '--profile', '--global',
+           '--ignore-schema-skew'}
+BD_GLOBAL_VALUED = {'--actor', '--db', '-C', '--directory', '--dolt-auto-commit'}
+
+def claim_call(name, args):
+    """Issue ids this command moves to in_progress: bd update <id...> --claim | --status in_progress.
+
+    Recorded per session, because the bd store is shared by every session and all of them claim
+    as the same actor: bd itself cannot say which in-progress issue is whose."""
+    if name != 'bd': return set()
+    i = 0
+    while i < len(args) and args[i].startswith('-'):
+        i += 2 if args[i] in BD_GLOBAL_VALUED else 1
+    if i >= len(args) or args[i] != 'update': return set()
+    rest = args[i + 1:]; ids = set(); claim = False; j = 0
+    while j < len(rest):
+        a = rest[j]; j += 1
+        if a == '--claim': claim = True
+        elif a.startswith(('--status=', '-s=')): claim |= a.split('=', 1)[1] == 'in_progress'
+        elif a in ('--status', '-s'):
+            if j < len(rest): claim |= rest[j] == 'in_progress'; j += 1
+        elif a.startswith('-'):
+            if '=' not in a and a not in BD_BOOL: j += 1
+        elif ISSUE_ID.fullmatch(a): ids.add(a)
+    return ids if claim else set()
+
 def inspect(command, depth=0):
+    """-> (bare kill, analysis script, bd remember call, bd remember WITHOUT --key, claimed ids)."""
     if depth > 8: raise ValueError('nested shell command limit exceeded')
     lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()\n')
     lexer.whitespace = ' \t\r'; lexer.whitespace_split = True
@@ -110,23 +156,27 @@ def inspect(command, depth=0):
             unit = []
         else: unit.append(token)
     if unit: units.append(unit)
-    bare = script = False
+    flags = [False] * 4 + [set()]
+    def merge(more):
+        for k, v in enumerate(more): flags[k] |= v
     # Retain the previous guard's conservative coverage of literal command substitutions,
     # including ones shlex folds into a quoted argument. No substitution is ever evaluated.
     for sub in re.finditer(r'\$\(([^()]*)\)|`([^`]*)`', command):
-        b, s = inspect(sub[1] if sub[1] is not None else sub[2], depth + 1)
-        bare |= b; script |= s
+        merge(inspect(sub[1] if sub[1] is not None else sub[2], depth + 1))
     for words in units:
         words = unwrap(words)
         if not words: continue
         name = os.path.basename(words[0]); args = words[1:]
-        if name in ('pkill', 'killall') and not safe_kill(name, args): bare = True
+        if name in ('pkill', 'killall') and not safe_kill(name, args): flags[0] = True
+        is_remember, keyless = remember_call(name, args)
+        if is_remember: flags[2] = True; flags[3] |= keyless
+        flags[4] |= claim_call(name, args)
         if name in ('bash', 'sh', 'zsh'):
             for i, arg in enumerate(args):
                 if arg.startswith('-') and not arg.startswith('--') and 'c' in arg and i + 1 < len(args):
-                    b, s = inspect(args[i + 1], depth + 1); bare |= b; script |= s
+                    merge(inspect(args[i + 1], depth + 1))
                     break
-        if script_path.search(words[0]): script = True
+        if script_path.search(words[0]): flags[1] = True
         if re.fullmatch(r'python(?:[0-9]+(?:\.[0-9]+)*)?|Rscript|bash|sh', name):
             i = 0
             while i < len(args):
@@ -134,18 +184,76 @@ def inspect(command, depth=0):
                 if arg in ('-c', '-m', '-e') or (name in ('bash', 'sh') and arg.startswith('-') and 'c' in arg): break
                 if arg in ('-W', '-X') and i < len(args): i += 1; continue
                 if arg.startswith('-'): continue
-                if script_path.search(arg): script = True
+                if script_path.search(arg): flags[1] = True
                 break  # later arguments belong to the script, not the interpreter
-    return bare, script
+    return tuple(flags)
 
+def line_fallback(command):
+    """The pre-tokenizer checks, for text shlex cannot parse.
+
+    An unbalanced quote -- `don't` in the body of an unquoted heredoc is the everyday case --
+    makes shlex raise. This used to exit 0 and switch off ALL THREE gates for the whole command,
+    while the regex hook it replaced had caught exactly those commands. So when tokenizing
+    fails, judge the raw text line by line, the way the old hook did: a command word at line
+    start or after ; & | ( $( counts, whatever the quoting. It over-matches prose that begins a
+    line with the word, which is the safe direction for an accident guard."""
+    pos = r'(?:^|[;&|(]|\$\()[ \t]*'
+    bare = False
+    for m in re.finditer(pos + r'(?:sudo[ \t]+)?(?:\S*/)?(pkill|killall)(?=[ \t]|$)', command, re.M):
+        segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
+        if not safe_kill(m[1], segment.split()): bare = True
+    calls = [command[m.end():].split('\n', 1)[0]
+             for m in re.finditer(pos + r'bd[ \t]+remember(?=[ \t]|$)', command, re.M)]
+    calls = [c for c in calls if not re.match(r'[ \t]+(?:-h|--help)(?:[ \t]|$)', c)]
+    keyless = any(not re.search(r'--key(?:[ \t]|=)', c) for c in calls)
+    d = sys.argv[2]
+    script = bool(re.search(r'(?:^|[ \t])(?:python3?|Rscript)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.(?:py|R)(?:[ \t]|$)', command, re.M)
+                  or re.search(r'(?:^|[ \t])(?:bash|sh)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.sh(?:[ \t]|$)', command, re.M)
+                  or re.search(pos + r'(?:\S*/)?(?:' + d + r')/\S+', command, re.M))
+    claims = set()
+    for m in re.finditer(pos + r'bd[ \t]+(?:\S+[ \t]+)*?update(?=[ \t])', command, re.M):
+        segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
+        if re.search(r'--claim\b|(?:--status|-s)[ \t=]+in_progress\b', segment):
+            claims |= {w for w in segment.split() if ISSUE_ID.fullmatch(w)}
+    return bare, script, bool(calls), keyless, claims
+
+SHELLS = ('bash', 'sh', 'zsh', 'dash', 'ksh', 'ssh')
+
+def drop_data_heredocs(command):
+    """Remove the bodies of heredocs that feed DATA to a command (cat, git commit -F -, tee ...).
+
+    A heredoc body is text, not commands -- unless the command reading it is a shell (bash <<EOF,
+    ssh host <<EOF), whose body is kept and checked like any other lines. Bodies were the main
+    source of both failures fixed here: prose such as "don't" made the whole command
+    untokenizable, and a prose line that happened to START with a guarded word ("bd remember
+    ...", "pkill -f is ...") was judged as a call. A body is dropped only when its terminator
+    line is found; an unterminated operator (e.g. '<<EOF' quoted in prose) leaves the text as is.
+    """
+    lines = command.split('\n')
+    out = []; i = 0
+    op = re.compile(r'(?<!<)<<(-?)[ \t]*(["\']?)([A-Za-z_][A-Za-z0-9_]*)\2')
+    while i < len(lines):
+        line = lines[i]; out.append(line); i += 1
+        for m in op.finditer(line):
+            head = re.split(r'[;&|(]', line[:m.start()])[-1].split()
+            feeds_shell = bool(head) and os.path.basename(unwrap(head)[0] if unwrap(head) else head[0]) in SHELLS
+            end = re.compile(('\t*' if m[1] else '') + re.escape(m[3]) + r'[ \t]*$')
+            j = next((k for k in range(i, len(lines)) if end.fullmatch(lines[k])), None)
+            if j is None: continue
+            if feeds_shell: out.extend(lines[i:j + 1])
+            i = j + 1
+    return '\n'.join(out)
+
+text = drop_data_heredocs(sys.argv[1])
 try:
-    print(*(int(x) for x in inspect(sys.argv[1])))
+    flags = inspect(text)
 except (ValueError, re.error) as exc:
-    print('bd-prerun-hook: cannot parse command policy; guards fail open: ' + str(exc), file=sys.stderr)
-    sys.exit(1)
+    print('bd-prerun-hook: command not tokenizable (' + str(exc) + '); judged by the line-based fallback checks instead', file=sys.stderr)
+    flags = line_fallback(text)
+print(*(int(x) for x in flags[:4]), ','.join(sorted(flags[4])) or '-')
 PY
-) || exit 0
-read -r bare is_script <<< "$policy"
+) || exit 0   # python itself failed: open, as the header says
+read -r bare is_script remember remember_keyless claims <<< "$policy"
 if [ "$bare" -eq 1 ]; then
     cat >&2 <<KILLGATE
 ⛔ BARE pkill / killall BLOCKED
@@ -176,11 +284,14 @@ fi
 # ── GATE: bd remember admission control (memory-curate "gate" mode) ───────────
 # Keep the persistent-memory store lean at the SOURCE. Blocks only unambiguous
 # violations (missing --key; transient session/status state); warns on oversized
-# inline bodies; fails open. Scoped strictly to `bd remember` invocations.
-if echo "$command" | grep -qE '(^|[;&|])[[:space:]]*bd[[:space:]]+remember([[:space:]]|$)' \
-   && ! echo "$command" | grep -qE 'remember[[:space:]]+(-h|--help)([[:space:]]|$)'; then
+# inline bodies; fails open. Scoped strictly to `bd remember` invocations -- which the parser
+# above identifies by TOKENS. The old trigger was a regex over the raw text, so a
+# quoted argument of another command ("... ; bd remember without --key" in a bd create
+# description) was gated as a write, while `env X=1 bd remember ...` or `bash -c "bd remember"`
+# escaped it. Unparsable text falls back to that regex, line by line.
+if [ "$remember" -eq 1 ]; then
     gate_reason=""
-    if ! echo "$command" | grep -qE '[-]{2}key([[:space:]]|=)'; then
+    if [ "$remember_keyless" -eq 1 ]; then
         gate_reason='"bd remember" without --key. Auto-generated keys cannot be deduped or updated
 in place — that is how the store bloats. Re-run with a stable slug:
 
@@ -244,9 +355,80 @@ GATE
     # `bd remember --key k "fact" && python3 scripts/run.py` never reached the scripts gate below.
 fi
 
+# ── Session scope: which in-progress issues are THIS session's ────────────
+# The bd store is SHARED by every session and project on this machine, and every session claims
+# as the same actor, so bd cannot say whose an in-progress issue is. A busy store always holds some
+# in-progress issue -- often a stale one -- so "any issue in progress" licensed every script
+# everywhere and this gate could never fire. So the hook records what each session CLAIMS (bd update <id>
+# --claim / --status in_progress, recognized above) under its session id, in the git dir where it
+# is never committed. A session's issues are the ones it claimed that are still in progress.
+# bd-stop-hook.sh reads the same record; keep claims_dir and in_progress_ids identical there.
+claims_dir() {
+    if [ -n "${BD_SESSION_CLAIMS_DIR:-}" ]; then printf '%s' "$BD_SESSION_CLAIMS_DIR"; return; fi
+    local g; g=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    if [ -n "$g" ]; then printf '%s/bd-session-claims' "$g"
+    else printf '%s/bd-session-claims-%s' "${TMPDIR:-/tmp}" "$(id -u)"; fi
+}
+# "<id><TAB><title>" per in-progress issue; returns 1 when bd is unavailable.
+in_progress_rows() {
+    local json rows text
+    if json=$(bd --json list --status=in_progress 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert isinstance(d, list)
+for x in d:
+    if isinstance(x, dict) and x.get("id"): print("%s\t%s" % (x["id"], x.get("title", "")))
+' 2>/dev/null); then
+        printf '%s' "$rows"; return 0
+    fi
+    text=$(bd list --status=in_progress 2>/dev/null) || return 1
+    # rows start with the in_progress glyph after any tree prefix; the legend never does
+    printf '%s\n' "$text" | awk '/^[^[:alnum:]]*◐ /{ sub(/^[^[:alnum:]]*◐ +/, ""); id = $1;
+        sub(/^[^ ]+ */, ""); print id "\t" $0 }'
+}
+
+if [ -n "$session_id" ] && [ "$claims" != "-" ]; then
+    d=$(claims_dir)
+    if mkdir -p "$d" 2>/dev/null; then
+        printf '%s\n' ${claims//,/ } >> "$d/$session_id" && sort -u -o "$d/$session_id" "$d/$session_id"
+        find "$d" -type f -mtime +30 -delete 2>/dev/null
+    else
+        echo "⚠ bd-prerun-hook: cannot record this session's claim in $d — its scripts gate cannot see it." >&2
+    fi
+fi
+
 # ── Analysis script execution was classified with the literal commands above ──
 
 [ "$is_script" -eq 0 ] && exit 0
+
+if [ -n "$session_id" ]; then
+    # A claim in the SAME command licenses it: `bd update X --claim && python3 scripts/run.py`.
+    [ "$claims" != "-" ] && exit 0
+    rows=$(in_progress_rows) || exit 0      # bd unavailable — fail open rather than block all work
+    mine=$(printf '%s\n' "$rows" | cut -f1 | grep -Fx -f "$(claims_dir)/$session_id" 2>/dev/null | head -1)
+    [ -n "$mine" ] && exit 0
+    others=$(printf '%s\n' "$rows" | grep -c . || true)
+    cat >&2 <<SBLOCK
+⛔ UNTRACKED WORK BLOCKED
+
+No issue claimed by THIS session is in progress. The $others in progress in the shared bd store
+belong to other sessions or projects; they do not cover this work.
+
+Claim the issue this work belongs to -- also when it is already in progress from an earlier
+session; --claim is idempotent:
+
+  bd update <id> --claim
+  (new work: bd create --title="..." --description="..." --type=task, then claim it)
+
+Then re-run your command.
+
+Blocked command: $command
+SBLOCK
+    exit 2
+fi
+
+# No session id (a manual run, an older adapter): the pre-session behaviour, global.
+
 
 # ── Check for an in_progress beads issue ─────────────────────────────────────
 # Count issue ROWS, not ● glyphs: ● is bd's priority bullet on every row and its BLOCKED glyph in

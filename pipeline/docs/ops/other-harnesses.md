@@ -9,7 +9,7 @@ Neither is a substitute for the git-layer guards. This page says which parts fir
 | --- | --- | --- | --- | --- |
 | Session start + memories | `.claude/settings.json` | `.pi/extensions/beads-pipeline.ts` calls the same script | bd primes it | **no** |
 | `pkill` / memory-admission guard | Claude PreToolUse | Pi `tool_call` + `user_bash` | no | **no** |
-| Unclosed-issue reminder | Claude Stop | Pi `agent_settled` | no | **no** |
+| Unclosed-issue reminder (this session's claims) | Claude Stop (each turn) | Pi `agent_settled` (each turn) + `session_shutdown` (close) | no | **no** |
 | Pre-compaction refresh | Claude PreCompact | Pi `session_before_compact` | no | **no** |
 | Git guards (`.beads-hooks/`) | **yes** | **yes** | **yes** | **yes** (if wired in this clone) |
 | `tools/*.sh` | **yes** | **yes** | **yes** | **yes** |
@@ -59,8 +59,14 @@ arguments, and writes its payload to stdout:
 
 ```bash
 bash .claude/bd-prime-hook.sh     # session start: rules + bd context + memories
-bash .claude/bd-stop-hook.sh      # session end: warn about in-progress issues
+bash .claude/bd-stop-hook.sh      # no payload: warn about EVERY in-progress issue in the store
 ```
+
+The stop hook also reads an optional JSON payload on stdin, `{"hook_event_name":"Stop"|"SessionEnd",
+"session_id":"..."}`, and with it reports only the issues that session claimed (recorded by
+`bd-prerun-hook.sh` when it sees `bd update <id> --claim` in a payload carrying the same
+`session_id`): at `Stop` only when that set changed, at `SessionEnd` always. A harness that can
+supply a stable session id should, because the store is shared by every session on the machine.
 
 `.claude/bd-prerun-hook.sh` is the one with a real interface: it reads a Claude Code tool-call
 JSON object on **stdin** (`{"tool_name":"Bash","tool_input":{"command":"..."}}`) and signals a
