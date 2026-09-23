@@ -30,9 +30,11 @@ race — see `docs/ops/concurrent-sessions.md`, installed only with `install.sh 
 
 ## The hot tier
 
-`.claude/memory-hot.txt` lists, one key per line, the memories injected **in full** at session
-start. Everything else appears as a key-only index, retrievable with `bd memories <keyword>` or
-`bd recall <key>`.
+`.claude/memory-hot.txt` lists, one key per line and in priority order, memories selected for
+**full** injection at session start *when they fit the host budget*. Omitted HOT bodies are named
+at the top. Other memories appear in a key-only index; if its keys alone exceed the budget, it
+is explicitly marked **PARTIAL** with the omitted count. Search the whole store with
+`bd memories <keyword>` and fetch a body with `bd recall <key>`.
 
 Keep the hot list to recurring-mistake guards — the things an agent must not rediscover the hard
 way. Two measurements from a live store that shaped this design:
@@ -44,10 +46,11 @@ way. Two measurements from a live store that shaped this design:
   anthropics/claude-code#70460); an earlier ~39 KB figure was wrong. **Anything appended at the
   bottom is invisible precisely when it matters**, which is why alarms come first, the index comes
   before the hot bodies, and the hook trims to `BD_PRIME_BUDGET` (default 10000) rather than
-  letting the host trim for it: what it drops it names, what the host drops nobody sees.
+  letting the host trim for it: it names omitted HOT bodies and marks an index that cannot fit
+as PARTIAL, whereas what the host drops nobody sees.
 
 An empty `memory-hot.txt` is fine and is how it ships: the hook emits the rules, the bd context and a
-key-only index of every memory, with nothing in full. It does NOT fall back to the full `bd prime`
+key-only index (bounded and marked PARTIAL on large stores), with nothing in full. It does NOT fall back to the full `bd prime`
 dump for an empty list (an earlier version did, silently); it falls back only when it cannot tier at
 all — no `jq`, no hot file, a failed export — and then says so on its first line.
 

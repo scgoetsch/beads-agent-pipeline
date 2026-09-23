@@ -12,8 +12,8 @@
 # payload lost its hot tier AND its index that way while looking like a successful run from the
 # outside -- the open-and-silent shape this pipeline exists to prevent. So this hook budgets:
 # BD_PRIME_BUDGET (default 10000; 0 = no limit) bounds what it emits; the load-bearing parts come
-# first; hot bodies that do not fit are NAMED instead of shipped; the bd context is the first
-# thing dropped; and any trimming is announced at the top. Guard: tools/bd-prime-hook_test.sh.
+# first; index keys and hot bodies that do not fit are NAMED instead of silently lost;
+# the bd context is the first thing dropped; any trimming is announced at the top. Guard: tools/bd-prime-hook_test.sh.
 #
 # REPO ROOT COMES FROM THIS FILE'S OWN LOCATION (.claude/ -> repo root), never a literal.
 # This is load-bearing, and it was learned the hard way: an earlier version said
@@ -184,7 +184,7 @@ HOTLIST=$(jq -R -s 'split("\n") | map(select(length > 0)) | reduce .[] as $k ([]
 HOTN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h))] | length' "$MM")
 UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h) | not)] | .[]' "$MM")
 {
-  echo ""; echo "## Persistent Memories — HOT tier ($HOTN always-loaded guards of $TOTAL total)"
+  echo ""; echo "## Persistent Memories — HOT tier ($HOTN selected keys of $TOTAL total; bodies included while budget permits)"
   if [ -n "$UNKNOWN" ]; then
     echo "> ⚠ .claude/memory-hot.txt names memories that are not in the store — fix the list or \`bd remember\` them:"
     printf '%s\n' "$UNKNOWN" | sed 's/^/>   /'; echo ""
@@ -231,19 +231,45 @@ EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . "$INDEX")
   fi
   cat "$INDEX"
 } > "$TMPD/s.index"
+# Even a keys-only index can exceed the host limit on a mature store. Keep only whole keys that
+# fit a fixed discovery allowance; disclose both the expected count and the omitted count,
+# prominently and through a separate top-of-payload warning. NEVER call this a full index.
+INDEX_FULL_BYTES=$(size "$TMPD/s.index"); INDEX_PARTIAL=0; INDEX_SHOWN=$EXPECT
+if [ "$BUDGET" -gt 0 ]; then
+  # Save space for alarms, rules, site checks, hot header, trim notice and some hot body text.
+  other=$(( $(size "$TMPD/s.unwired") + $(size "$TMPD/s.rules") + $(size "$TMPD/s.site") + $(size "$TMPD/s.hothdr") + ${#FOOTER} + 1600 ))
+  index_cap=$((BUDGET - other)); [ "$index_cap" -gt 4000 ] && index_cap=4000
+  [ "$index_cap" -gt 350 ] || index_cap=350
+  if [ "$INDEX_FULL_BYTES" -gt "$index_cap" ]; then
+    INDEX_PARTIAL=1; INDEX_SHOWN=0; selected_bytes=0
+    : > "$TMPD/index.selected"
+    # Leave room for a header and explicit PARTIAL warning.
+    while IFS= read -r key; do
+      b=$(printf '%s\n' "$key" | wc -c | tr -d ' ')
+      [ $((selected_bytes + b + 350)) -le "$index_cap" ] || break
+      printf '%s\n' "$key" >> "$TMPD/index.selected"
+      selected_bytes=$((selected_bytes + b)); INDEX_SHOWN=$((INDEX_SHOWN+1))
+    done < "$INDEX"
+    {
+      echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"
+      echo "> ⚠ INDEX PARTIAL — showing $INDEX_SHOWN of $EXPECT keys; $((EXPECT - INDEX_SHOWN)) omitted. Search via \`bd memories <keyword>\` or list keys with \`bd export --include-memories\`."
+      cat "$TMPD/index.selected"
+    } > "$TMPD/s.index"
+  fi
+fi
 # ---- assemble against the budget ------------------------------------------------------------
-# Priority when something has to go: alarms, rules, site checks, index and the hot header are
-# never dropped (they are small and they are the point); hot bodies are kept in list order while
-# they fit; the bd context goes first, because AGENTS.md carries bd's quick reference and
+# Priority when something has to go: alarms, rules, site checks and hot header stay first;
+# the index is explicitly PARTIAL if its keys alone would exceed the cap. Hot bodies are kept
+# in list order while they fit; the bd context goes first, because AGENTS.md carries bd's quick reference and
 # `bd prime` prints the rest on demand. Whatever is dropped is named at the top so the reader
 # can fetch it, instead of not knowing it existed.
 fixed=$(( $(size "$TMPD/s.unwired") + $(size "$TMPD/s.rules") + $(size "$TMPD/s.site") + $(size "$TMPD/s.index") + $(size "$TMPD/s.hothdr") + ${#FOOTER} + 2 ))
 hot_total=0; keys_bytes=0
 for f in "$TMPD"/hot.[0-9]*; do [ -f "$f" ] || continue; hot_total=$((hot_total + $(size "$f"))); done
 while IFS= read -r k; do keys_bytes=$((keys_bytes + ${#k} + 2)); done < "$TMPD/hot.keys"
-ctx=$(size "$TMPD/s.ctx"); all=$((fixed + hot_total + ctx))
+ctx=$(size "$TMPD/s.ctx"); all=$((fixed + hot_total + ctx + INDEX_FULL_BYTES - $(size "$TMPD/s.index")))
 emit_hot() { local f; for f in "$TMPD"/hot.[0-9]*; do [ -f "$f" ] || continue; case " $1 " in *" $(basename "$f") "*) cat "$f" ;; esac; done; }
-if [ "$BUDGET" -eq 0 ] || [ "$all" -le "$BUDGET" ]; then
+if [ "$BUDGET" -eq 0 ] || { [ "$all" -le "$BUDGET" ] && [ "$INDEX_PARTIAL" -eq 0 ]; }; then
   cat "$TMPD/s.unwired" "$TMPD/s.rules" "$TMPD/s.site" "$TMPD/s.index" "$TMPD/s.hothdr"
   for f in "$TMPD"/hot.[0-9]*; do [ -f "$f" ] && cat "$f"; done
   cat "$TMPD/s.ctx"
@@ -252,13 +278,14 @@ if [ "$BUDGET" -eq 0 ] || [ "$all" -le "$BUDGET" ]; then
 fi
 # Over budget. Reserve room for the alarm (its text plus every hot key it might have to name),
 # keep hot bodies in list order while they fit, then the context only if it still fits.
-reserve=$((560 + keys_bytes)); used=$((fixed + reserve)); kept=""; dropped=""; i=0
+reserve=$((650 + keys_bytes)); used=$((fixed + reserve)); kept=""; dropped=""; i=0
 for f in "$TMPD"/hot.[0-9]*; do
   [ -f "$f" ] || continue; i=$((i+1)); k=$(sed -n "${i}p" "$TMPD/hot.keys"); b=$(size "$f")
   if [ $((used + b)) -le "$BUDGET" ]; then used=$((used + b)); kept="$kept $(basename "$f")"; else dropped="$dropped $k"; fi
 done
 ctx_in=0; if [ $((used + ctx)) -le "$BUDGET" ]; then ctx_in=1; used=$((used + ctx)); fi
 echo "# ⚠ bd-prime-hook: PAYLOAD TRIMMED TO FIT THIS HOST — the tiered output is $all bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000). Not shipped, fetch on demand:"
+[ "$INDEX_PARTIAL" -eq 1 ] && echo "#   memory key index: $INDEX_SHOWN of $EXPECT shown; find the rest with \`bd memories <keyword>\` or \`bd export --include-memories\`"
 [ -n "$dropped" ] && echo "#   hot memories, in full via \`bd recall <key>\`:$dropped"
 [ "$ctx_in" -eq 0 ] && echo "#   bd's workflow context and command reference: run \`bd prime\`"
 echo "#   Fix: trim .claude/memory-hot.txt or shrink the bodies it names (/memory-curate). BD_PRIME_BUDGET=0 lifts the cap on a host that has none."; echo ""

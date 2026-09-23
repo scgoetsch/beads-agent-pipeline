@@ -80,7 +80,7 @@ printf 'alpha-key\nno-such-key\nalpha-key\n' > "$T/ws/.claude/memory-hot.txt"
 out=$(run_hook)
 chk "unknown hot key is named in a warning"  "$(grep -c '>   no-such-key' <<<"$out")" 1
 chk "no false INDEX IS INCOMPLETE"           "$(grep -c 'INDEX IS INCOMPLETE' <<<"$out")" 0
-chk "HOT tier counts the ONE real key"       "$(grep -c 'HOT tier (1 always-loaded guards of 2 total)' <<<"$out")" 1
+chk "HOT tier counts the ONE real key"       "$(grep -c 'HOT tier (1 selected keys of 2 total' <<<"$out")" 1
 chk "duplicate hot key emitted once"         "$(grep -c 'ALPHA-BODY sentinel' <<<"$out")" 1
 chk "index still lists beta only"            "$(grep -cE '^- beta-key$' <<<"$out"):$(grep -c 'index (1 more' <<<"$out")" "1:1"
 
@@ -109,7 +109,7 @@ esac
 STUB
 out=$(run_hook)
 chk "empty store -> no fallback banner"     "$(grep -c 'bd-prime-hook:' <<<"$out")" 0
-chk "empty store -> 0 of 0 total"           "$(grep -c 'HOT tier (0 always-loaded guards of 0 total)' <<<"$out")" 1
+chk "empty store -> 0 of 0 total"           "$(grep -c 'HOT tier (0 selected keys of 0 total' <<<"$out")" 1
 chk "empty store -> says so in words"       "$(grep -c 'no memories yet' <<<"$out")" 1
 # restore the two-memory stub for the fallback cases below
 cat > "$T/bin/bd" <<'STUB'
@@ -291,6 +291,29 @@ chk "line 2 says the dump was cut and why"             "$(printf '%s' "$out" | s
 chk "the cut point is marked"                          "$(grep -c 'cut here by bd-prime-hook' <<<"$out")" 1
 chk "the cut fallback still ends with the end marker"  "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
 : > "$T/ws/.claude/memory-hot.txt"
+
+echo "### many memory keys: even the fixed index must fit the host budget or name its omissions"
+python3 - "$T/many.jsonl" <<'PY'
+import json,sys
+with open(sys.argv[1], 'w') as out:
+    for i in range(400):
+        out.write(json.dumps({'_type':'memory','key':f'long-operational-memory-key-{i:03d}-for-discovery',
+                              'value':'body'}, separators=(',', ':')) + '\n')
+PY
+cat > "$T/bin/bd" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  prime) printf '# Beads Workflow Context\n## Persistent Memories (400)\n## Core Rules\n- rule one\n' ;;
+  export) out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
+          cp -f "$BD_TEST_EXPORT" "$out" ;;
+esac
+STUB
+export BD_TEST_EXPORT="$T/many.jsonl"
+out=$(run_hook)
+chk "400-key output fits the 10 KB host limit" "$(( $(bytes "$out") <= 10000 ))" 1
+chk "the index says PARTIAL, never implies it is complete" "$(grep -c 'INDEX PARTIAL' <<<"$out")" 1
+chk "the total count is still disclosed" "$(grep -c 'index (400 more' <<<"$out")" 1
+chk "the end marker survives" "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
 
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
