@@ -55,6 +55,8 @@ FORBIDDEN_PATTERNS=(
 FORBIDDEN_RE=$(IFS='|'; echo "${FORBIDDEN_PATTERNS[*]}")
 
 violations=0
+TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMP"' EXIT
 
 # ---- documents and generated data: whole file -------------------------------------
 # .json/.tsv/.csv are included because generated manifests are exactly where captured
@@ -64,14 +66,15 @@ violations=0
 # stayed unset and the guard either aborted every commit (set -u) or, without it, passed
 # everything -- the silent shape. Neither is a guard.
 doc_files=()
-while IFS= read -r f; do doc_files+=("$f"); done < <(
-    git diff --cached --name-only --diff-filter=ACMR -- \
+while IFS= read -r -d '' f; do doc_files+=("$f"); done < <(
+    git diff --cached --name-only -z --diff-filter=ACMR -- \
         '*.md' '*.markdown' '*.rst' '*.txt' '*.ipynb' '*.html' '*.tex' '*.typ' '*.adoc' \
         '*.Rmd' '*.qmd' '*.json' '*.tsv' '*.csv' 2>/dev/null
 )
 for f in ${doc_files[@]+"${doc_files[@]}"}; do
-    [ -f "$f" ] || continue
-    if matches=$(grep -nEI "$FORBIDDEN_RE" "$f" 2>/dev/null); then
+    # The index is the artifact git commits, regardless of unstaged changes or deletion.
+    git show ":$f" > "$TMP/blob" || { echo "ERROR: cannot read staged $f" >&2; exit 1; }
+    if matches=$(grep -nEI "$FORBIDDEN_RE" "$TMP/blob" 2>/dev/null); then
         echo "ERROR: $f contains forbidden agent-cache path(s):" >&2
         echo "$matches" | sed 's/^/  /' >&2
         violations=1
@@ -80,18 +83,17 @@ done
 
 # ---- code: added lines only -------------------------------------------------------
 code_files=()
-while IFS= read -r f; do code_files+=("$f"); done < <(
+while IFS= read -r -d '' f; do code_files+=("$f"); done < <(
     # The ratchet is exactly as wide as this list: a language missing here commits a cache path
     # clean, the silent pass this guard exists to prevent. It stopped at scripting languages
     # until the 2026-09-22 review. Add, never remove.
-    git diff --cached --name-only --diff-filter=ACMR -- \
+    git diff --cached --name-only -z --diff-filter=ACMR -- \
         '*.py' '*.sh' '*.bash' '*.zsh' '*.R' '*.pl' '*.rb' '*.js' '*.mjs' '*.cjs' '*.jsx' \
         '*.ts' '*.tsx' '*.rs' '*.go' '*.c' '*.h' '*.cc' '*.cpp' '*.cxx' '*.hpp' '*.java' '*.kt' \
         '*.kts' '*.scala' '*.swift' '*.cs' '*.php' '*.lua' '*.zig' '*.jl' '*.ex' '*.exs' '*.erl' \
         '*.hs' '*.sql' '*.toml' '*.yaml' '*.yml' '*.ini' '*.cfg' '*.conf' 2>/dev/null
 )
 for f in ${code_files[@]+"${code_files[@]}"}; do
-    [ -f "$f" ] || continue
     # awk, not `grep -E '^\+' | grep -v '^\+\+\+'` — see the header. The second grep needs
     # -E or the pattern is a malformed BRE and -v silently drops every line.
     if matches=$(git diff --cached -U0 -- "$f" \

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+Second review, rechecked against a08c20d (WS-ispx). Regression tests were added first and failed
+against the previous implementation; the fixes cover:
+
+- Git-layer guards inspect staged blobs/modes, not working copies. The symlink guard has an
+  explicit `--cached` mode for pre-commit; manual checks retain their working-tree behavior.
+  Tests commit conflicting staged/working versions in both directions, including missing files.
+- Settings merges preserve user hooks on shared events and inside mixed groups, plus prompt
+  hooks and matchers. Only the exact standalone bd prime SessionStart registration is removed.
+  The earlier replacement was warned about, but the warning came after user hooks were removed.
+- Sweep discovery is unlimited by default. Explicit depth limits return 2 and cannot certify
+  absence; discovery errors are surfaced. The size cap includes equality, with cap−1/cap/cap+1
+  regression cases.
+- Dolt lock-open failures now warn and return nonzero without attempting an unlocked start.
+- PreToolUse tokenizes literal commands, recognizes common wrappers, interpreter options and
+  quoted paths, and rejects zero age filters and pkill's `-o` (oldest). It remains a heuristic,
+  not a shell sandbox; it never evaluates the command it checks.
+- A normal-path bd prime failure is announced near the top of the budgeted session payload,
+  even when the preceding export succeeded. Failed partial context is not emitted as valid.
+- The installer accepts worktrees and submodules. Linked-worktree hooks use worktree-local
+  config, preserving sibling hooks; tests include a bare parent and a submodule.
+- Test scratch files are isolated and cleaned: the sweep suite no longer overwrites its EXIT
+  trap, the prime suite never removes global /tmp names, and selftest checks every suite for leaks.
+  The installer also uses mktemp for its rendered template. Without jq, selftest explicitly skips
+  the settings-merge cases and still exercises the hook's fallback.
+
+Validated on Linux/WSL2, bash 5.2, git 2.43, Python 3.12, bd 1.1.2 using temporary repos and stub
+stores. This is suite coverage, not a new signed-in Claude Code or macOS/native Windows run.
+
 - The SessionStart hook now fits the host. Claude Code keeps only a 2,000-byte preview of any
   one hook command's output above 10,000 bytes and files the rest (measured 2026-09-22 with
   synthetic hooks; the JSON `additionalContext` form is capped the same; anthropics/claude-code

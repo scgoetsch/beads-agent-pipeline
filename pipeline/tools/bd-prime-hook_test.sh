@@ -15,6 +15,10 @@ HOOK=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.claude/bd-prime-hook.s
 [ -f "$HOOK" ] || { echo "missing: $HOOK" >&2; exit 2; }
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# Every scratch assertion is scoped to a directory this test owns. Never delete another
+# user's/session's fixed /tmp names or count its active bd-prime directories.
+mkdir -p "$T/scratch"
+export TMPDIR="$T/scratch"
 pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));
         else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
@@ -81,10 +85,15 @@ chk "duplicate hot key emitted once"         "$(grep -c 'ALPHA-BODY sentinel' <<
 chk "index still lists beta only"            "$(grep -cE '^- beta-key$' <<<"$out"):$(grep -c 'index (1 more' <<<"$out")" "1:1"
 
 echo "### scratch files are per process — nothing fixed under /tmp"
-rm -f /tmp/bd-prime-mm.jsonl /tmp/bd-prime-index /tmp/bd-prime-err   # the old fixed names
 run_hook >/dev/null
-chk "no fixed-name scratch file created under /tmp" "$(ls -d /tmp/bd-prime-mm.jsonl /tmp/bd-prime-index /tmp/bd-prime-err 2>/dev/null | wc -l)" 0
-chk "its temp dir is removed on exit"           "$(ls -d "${TMPDIR:-/tmp}"/bd-prime.* 2>/dev/null | wc -l)" 0
+chk "no fixed-name scratch file created" "$(ls -d "$TMPDIR/bd-prime-mm.jsonl" "$TMPDIR/bd-prime-index" "$TMPDIR/bd-prime-err" 2>/dev/null | wc -l)" 0
+chk "its temp dir is removed on exit" "$(ls -d "$TMPDIR"/bd-prime.* 2>/dev/null | wc -l)" 0
+mkdir -p "$TMPDIR/bd-prime.other-session"
+printf 'other session sentinel\n' > "$TMPDIR/bd-prime-index"
+run_hook >/dev/null
+chk "another session scratch is untouched" "$(cat "$TMPDIR/bd-prime-index")" "other session sentinel"
+chk "another active temp dir does not interfere" "$(ls -d "$TMPDIR"/bd-prime.* 2>/dev/null | wc -l)" 1
+rm -rf "$TMPDIR/bd-prime.other-session" "$TMPDIR/bd-prime-index"
 
 echo "### a store with no memories yet is tiered as 0 of 0, not treated as a failed export"
 # The normal state of a fresh project. This used to print the fallback banner on every session
@@ -170,6 +179,18 @@ done
 nested=$(PATH="$T/nojq" bash "${BASH_SOURCE[0]}" 2>&1); nrc=$?
 chk "nested run without jq exits 0"          "$nrc" 0
 chk "and it says it took the fallback branch" "$(grep -c 'jq absent: fallback path only' <<<"$nested")" 1
+
+echo "### export can succeed while prime fails: the normal path must say so"
+cp -f "$T/bin/bd" "$T/bin/bd.good"
+cat > "$T/bin/bd" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = prime ]; then echo 'PRIME-FAILED sentinel' >&2; exit 1; fi
+exec "$(dirname "$0")/bd.good" "$@"
+STUB
+out=$(run_hook)
+chk "normal-path prime failure is named" "$(grep -c 'WARNING: bd prime failed' <<<"$out")" 1
+chk "normal-path stderr is surfaced" "$(grep -c 'PRIME-FAILED sentinel' <<<"$out")" 1
+cp -f "$T/bin/bd.good" "$T/bin/bd"
 
 echo "### every fallback names itself"
 rm -f "$T/ws/.claude/memory-hot.txt"

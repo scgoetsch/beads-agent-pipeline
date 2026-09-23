@@ -28,10 +28,7 @@ except Exception:
 [ -z "$command" ] && exit 0
 
 # ── GUARD: bare pkill / killall ────────────────────────────────────────
-# MUST stay ABOVE the "bd remember" gate below: that gate exits 0 for any
-# command containing a bd remember call, so a compound such as
-#     bd remember --key k "..." ; pkill -f rsync
-# would bypass this guard entirely if it came second.
+# Runs before memory admission; all invocations in a compound command are checked.
 #
 # THE TRAP. pkill -f PATTERN matches against the FULL command line, and the
 # agent shell running the command has that very pattern on its own command
@@ -41,33 +38,116 @@ except Exception:
 # running simulations mid-flight (rc=143) plus the shell writing the note that
 # was documenting the trap.
 #
-# Anchored to COMMAND POSITION (line start, or after ; & | ( or a command
-# substitution opener) so the bare word inside prose does not trip it. A line
-# of prose that BEGINS with the word still will. That is the safe direction,
-# and long prose is supposed to go to a file and be passed as "$(cat file)"
-# here anyway.
-if echo "$command" | grep -qE '(^|[;&|(]|[$][(])[[:space:]]*(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
-    # Allowed forms are the ones that cannot select the just-started shell: an
-    # age filter excludes it, an explicit pidfile names its targets, and help
-    # kills nothing. Note -n/--newest and -y/--younger-than are deliberately
-    # NOT allowed: both preferentially select the newest process, which is the
-    # agent shell itself.
-    #
-    # Flags VERIFIED against procps-ng 4.0.4 and psmisc killall. pkill spells
-    # the age filter -O / --older SECONDS. --older-than is KILLALL's spelling and
-    # is NOT a pkill flag -- the request that prompted this guard suggested it for
-    # pkill, which would not have worked. Check your own procps before editing.
-    #
-    # Checked per INVOCATION, not over the whole line: `ls -h && pkill -f x` carries an `-h`
-    # that belongs to ls, and the old whole-line test let the bare pkill through on it. Each
-    # pkill/killall is cut at the next command separator and must carry its own allowed flag.
-    bare=0
-    while IFS= read -r inv; do
-        [ -n "$inv" ] || continue
-        echo "$inv" | grep -qE '(^|[[:space:]])(-O|--older|-o|--older-than|-F|--pidfile|-h|--help)([[:space:]]|=|$)' || bare=1
-    done < <(echo "$command" | grep -oE '(pkill|killall)([^;&|)]*)')
-    if [ "$bare" -eq 1 ]; then
-        cat >&2 <<KILLGATE
+# This is an accident guard, NOT a shell sandbox. Tokenize literal commands to handle quoting,
+# wrappers and interpreter options; never evaluate shell input. Dynamic expansion/aliases and
+# arbitrary shell programs remain outside this heuristic's scope.
+SCRIPT_DIRS_RE='scripts'  # regex alternation, e.g. scripts|pipelines|analysis
+policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" <<'PY'
+import os, re, shlex, sys
+
+script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*')
+assignment = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+def unwrap(words):
+    while words:
+        name = os.path.basename(words[0])
+        if assignment.match(words[0]) or name in ('command', 'exec', 'nohup', 'then', 'do', 'if', '!'):
+            words = words[1:]
+            if words and words[0] == '--': words = words[1:]
+        elif name in ('sudo', 'env'):
+            words = words[1:]
+            takes_value = {'-u', '-g', '-h', '-p', '-C', '-T', '-r', '-t', '--user', '--group', '--host'} if name == 'sudo' else {'-u', '--unset', '-C', '--chdir'}
+            while words and (words[0].startswith('-') or assignment.match(words[0])):
+                opt = words.pop(0)
+                if opt == '--': break
+                if opt in takes_value and words: words.pop(0)
+                elif name == 'env' and opt in ('-S', '--split-string') and words:
+                    words = shlex.split(words.pop(0)) + words
+        elif name in ('pixi', 'uv') and len(words) > 1 and words[1] == 'run':
+            words = words[2:]
+            while words and words[0].startswith('-'):
+                opt = words.pop(0)
+                if opt in ('-e', '--environment', '--manifest-path', '--project', '--directory') and words: words.pop(0)
+        else:
+            break
+    return words
+
+def safe_kill(name, args):
+    # Parse options, not words anywhere in a pattern or an unrelated command. Oldest (-o)
+    # is NOT pkill's age filter; zero/negative/missing age values protect nothing.
+    i = 0
+    while i < len(args):
+        opt = args[i]; i += 1
+        if opt == '--': break
+        if opt in ('-h', '--help'): return True
+        age = ('-O', '--older') if name == 'pkill' else ('-o', '--older-than')
+        pid = ('-F', '--pidfile') if name == 'pkill' else ()
+        for flag in age + pid:
+            value = None
+            if opt == flag:
+                if i < len(args): value = args[i]; i += 1
+            elif opt.startswith(flag + '='):
+                value = opt[len(flag) + 1:]
+            elif len(flag) == 2 and opt.startswith(flag) and len(opt) > 2:
+                value = opt[2:]
+            if value is not None:
+                if flag in pid:
+                    if value and not value.startswith('-'): return True
+                else:
+                    match = re.fullmatch(r'([0-9]+(?:\.[0-9]+)?)([smhdwMy]?)', value)
+                    if match and float(match[1]) > 0 and (name != 'pkill' or not match[2]): return True
+                break
+    return False
+
+def inspect(command, depth=0):
+    if depth > 8: raise ValueError('nested shell command limit exceeded')
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()\n')
+    lexer.whitespace = ' \t\r'; lexer.whitespace_split = True
+    units = []; unit = []
+    for token in lexer:
+        if token and all(c in ';&|()\n' for c in token):
+            if unit: units.append(unit)
+            unit = []
+        else: unit.append(token)
+    if unit: units.append(unit)
+    bare = script = False
+    # Retain the previous guard's conservative coverage of literal command substitutions,
+    # including ones shlex folds into a quoted argument. No substitution is ever evaluated.
+    for sub in re.finditer(r'\$\(([^()]*)\)|`([^`]*)`', command):
+        b, s = inspect(sub[1] if sub[1] is not None else sub[2], depth + 1)
+        bare |= b; script |= s
+    for words in units:
+        words = unwrap(words)
+        if not words: continue
+        name = os.path.basename(words[0]); args = words[1:]
+        if name in ('pkill', 'killall') and not safe_kill(name, args): bare = True
+        if name in ('bash', 'sh', 'zsh'):
+            for i, arg in enumerate(args):
+                if arg.startswith('-') and not arg.startswith('--') and 'c' in arg and i + 1 < len(args):
+                    b, s = inspect(args[i + 1], depth + 1); bare |= b; script |= s
+                    break
+        if script_path.search(words[0]): script = True
+        if re.fullmatch(r'python(?:[0-9]+(?:\.[0-9]+)*)?|Rscript|bash|sh', name):
+            i = 0
+            while i < len(args):
+                arg = args[i]; i += 1
+                if arg in ('-c', '-m', '-e') or (name in ('bash', 'sh') and arg.startswith('-') and 'c' in arg): break
+                if arg in ('-W', '-X') and i < len(args): i += 1; continue
+                if arg.startswith('-'): continue
+                if script_path.search(arg): script = True
+                break  # later arguments belong to the script, not the interpreter
+    return bare, script
+
+try:
+    print(*(int(x) for x in inspect(sys.argv[1])))
+except (ValueError, re.error) as exc:
+    print('bd-prerun-hook: cannot parse command policy; guards fail open: ' + str(exc), file=sys.stderr)
+    sys.exit(1)
+PY
+) || exit 0
+read -r bare is_script <<< "$policy"
+if [ "$bare" -eq 1 ]; then
+    cat >&2 <<KILLGATE
 ⛔ BARE pkill / killall BLOCKED
 
 pkill -f PATTERN matches on the full command line, so PATTERN also matches the
@@ -90,8 +170,7 @@ Do this instead:
 (Guard: .claude/bd-prerun-hook.sh. Tests: tools/bd-prerun-hook_test.sh)
 Blocked command: $command
 KILLGATE
-        exit 2
-    fi
+    exit 2
 fi
 
 # ── GATE: bd remember admission control (memory-curate "gate" mode) ───────────
@@ -165,27 +244,7 @@ GATE
     # `bd remember --key k "fact" && python3 scripts/run.py` never reached the scripts gate below.
 fi
 
-# ── Detect analysis script execution ─────────────────────────────────────────
-# Which directory holds the scripts that count as tracked work. Edit this one line to
-# match your layout (it is a regex alternation: 'scripts|pipelines|analysis').
-# Matches:
-#   python[3] [path/]scripts/<file>.py
-#   Rscript   [path/]scripts/<file>.R
-#   bash/sh   [path/]scripts/<file>.sh
-#   direct:   [path/]scripts/run_* plot_* map_* etc.
-SCRIPT_DIRS_RE='scripts'
-is_script=0
-
-if echo "$command" | grep -qE \
-    '(^|[[:space:]])(python3?|Rscript)[[:space:]]+([^[:space:]]*/)?('"$SCRIPT_DIRS_RE"')/[^[:space:]]+(\.py|\.R)([[:space:]]|$)'; then
-    is_script=1
-elif echo "$command" | grep -qE \
-    '(^|[[:space:]])(bash|sh)[[:space:]]+([^[:space:]]*/)?('"$SCRIPT_DIRS_RE"')/[^[:space:]]+\.sh([[:space:]]|$)'; then
-    is_script=1
-elif echo "$command" | grep -qE \
-    '(^|[;&|]{1,2}[[:space:]]*)([^[:space:]]*/)?('"$SCRIPT_DIRS_RE"')/(run_|plot_|map_|join_|rank_|extract_|prepare_)[^[:space:]]+'; then
-    is_script=1
-fi
+# ── Analysis script execution was classified with the literal commands above ──
 
 [ "$is_script" -eq 0 ] && exit 0
 

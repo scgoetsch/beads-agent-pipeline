@@ -90,6 +90,26 @@ region() {  # region N -> AGENTS.md whose managed block holds N generated-lookin
 region "$tmpl";         chk "a block as long as bd's template ($tmpl) passes"   "$(run)" 0
 region $((tmpl + 40));  chk "a block 40 lines past bd's template is caught"     "$(run)" 1
 
+echo "### --cached validates the index, including the managed block"
+git -C "$T" init -q
+cached() { (cd "$T" && ./tools/check-agent-docs-linked.sh --cached) >/dev/null 2>&1; echo $?; }
+region "$tmpl"; git -C "$T" add AGENTS.md CLAUDE.md
+chk "valid staged pair passes" "$(cached)" 0
+# The working copy deliberately contradicts every staged state below.
+rm -f "$T/CLAUDE.md"; printf 'regular copy\n' > "$T/CLAUDE.md"; git -C "$T" add CLAUDE.md
+rm -f "$T/CLAUDE.md"; ln -s AGENTS.md "$T/CLAUDE.md"
+chk "staged regular copy caught despite working symlink" "$(cached)" 1
+git -C "$T" add CLAUDE.md
+region $((tmpl + 40)); git -C "$T" add AGENTS.md; region "$tmpl"
+chk "staged oversized managed block caught despite clean working doc" "$(cached)" 1
+git -C "$T" add AGENTS.md
+git -C "$T" rm -q --cached AGENTS.md
+chk "staged link with only an untracked target is broken" "$(cached)" 1
+git -C "$T" add AGENTS.md
+rm -f "$T/CLAUDE.md"; printf 'unstaged divergent copy\n' > "$T/CLAUDE.md"
+chk "unstaged link break does not reject valid index" "$(cached)" 0
+chk "manual mode still sees the working-tree break" "$(run)" 1
+
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

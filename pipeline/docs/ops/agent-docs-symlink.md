@@ -41,7 +41,9 @@ the checkout case.
 ## The guard
 
 `tools/check-agent-docs-linked.sh` runs from `.beads-hooks/pre-commit` (via `core.hooksPath`) and
-on demand. It asserts:
+on demand. On commit it receives `--cached` and checks the index's modes, symlink target and
+`AGENTS.md` content; without that flag it checks the working tree. A clean working copy cannot
+launder a bad staged link, and an unstaged edit does not reject a clean staged version. It asserts:
 
 - `CLAUDE.md` is a symlink, not a regular file;
 - it points at `AGENTS.md` specifically;

@@ -20,8 +20,9 @@ each are in [CHANGELOG.md](CHANGELOG.md). Problems go to
 [the issue tracker](https://github.com/scgoetsch/beads-agent-pipeline/issues), with the command
 and its output.
 
-Nothing is overwritten. An existing `settings.json` is merged; an existing `tools/` or `docs/` file
-is kept and ours lands beside it as `.new`. An existing `AGENTS.md` is kept and nothing is written
+Existing tool and documentation files are not overwritten: ours lands beside a differing file as
+`.new`. An existing `settings.json` is merged with a backup: user hooks survive, including on the
+same events, and only bd's standalone `bd prime` SessionStart registration is replaced. An existing `AGENTS.md` is kept and nothing is written
 beside it — it is meant to diverge from the template, and the log says where the template is.
 `--check` inspects, `--dry-run` prints every action, `--no-shell` skips the one thing written
 outside the repo: a marker-managed block in `~/.bashrc` that sources `tools/dolt-guard.sh` — one
@@ -65,7 +66,10 @@ a discipline you may not want, and it is one line to turn off:
 - **Bare `pkill` / `killall`.** `pkill -f PATTERN` matches the full command line — including the
   shell running it — so it kills its own caller. It comes back as exit 143/144, reads like an
   ordinary failure, and takes anything that shell was supervising with it. Age filters and
-  pidfiles are allowed through; `kill` with explicit PIDs is never blocked.
+  pidfiles are allowed through; `kill` with explicit PIDs is never blocked. Age values must be
+  positive; `pkill -o` (oldest) is not an age filter. Literal `env`/`sudo`/`command` wrappers are
+  handled. This is an accident-prevention heuristic, not a shell sandbox: aliases, variable-built
+  commands and arbitrary shell programs are not comprehensively analyzed.
 - **Memory writes that are really session state.** `bd remember` without `--key`, or a body that
   is structurally a handoff memo, is refused with a pointer to `bd note` instead. The test is
   structural, not lexical — an earlier vocabulary-based version blocked the memory that documented
@@ -98,7 +102,9 @@ out of each repo and greps for them through the identical code path; if they do 
 repo was not searched and the sweep exits non-zero. Exit 0 is the only thing that licenses "it
 isn't there". Measured 2026-09-21 in the workspace this came from: a plain `rg` at the root
 reached 131 files; the corpus was 8,993 across 7 repos. Zero hits, no error. Re-measure in your
-own tree — the ratio is the durable claim, and an absolute threshold ages out.
+own tree — the ratio is the durable claim, and an absolute threshold ages out. Repository discovery
+has no implicit depth limit; `--depth N` / `SWEEP_DEPTH=N` explicitly limits it and returns exit 2,
+not a trustworthy zero (`0` means unlimited). Files exactly at the byte cap are included.
 
 **`tools/check-no-agent-cache-paths.sh`** — refuses commits that embed a per-conversation agent
 cache path (`~/.gemini/antigravity-cli/brain/<uuid>/`, `~/.claude/projects/<uuid>/`,
@@ -106,7 +112,9 @@ cache path (`~/.gemini/antigravity-cli/brain/<uuid>/`, `~/.claude/projects/<uuid
 from one is a broken image for every other reader. It runs at the **git layer** on purpose: the
 trap is not specific to one agent, so neither is the guard — it covers the agent that has no
 session hooks at all. Documents and generated JSON are scanned whole-file; code on added lines
-only, a ratchet rather than a flag day.
+only, a ratchet rather than a flag day. Both inspect the **index**, not the working copy. The
+symlink guard likewise uses `--cached` on commit, so partial staging cannot hide a bad artifact;
+its manual invocation still checks the working tree.
 
 **`tools/dolt-guard.sh`** — restarts bd's Dolt server after a reboot. Without it, `bd` reads keep
 working while writes silently fail to land, which is the worst possible shape for a data store.
@@ -131,7 +139,7 @@ harness's own injected instructions about where tasks and memory live, because h
 contradict them repeatedly.
 
 **Docs** (`docs/ops/`) — the reasoning behind each guard, including the measurements. Start with
-`checks-narrower-than-what-they-check.md`: twelve instances of the one defect class every guard
+`checks-narrower-than-what-they-check.md`: fourteen instances of the one defect class every guard
 here is built against, with the diagnostic question to ask of your own checks.
 
 ## Letting an agent install it — the runbook
@@ -202,8 +210,9 @@ tiering and says so.
 ## Requirements
 
 **Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
-scripts avoid bash-4-only builtins and GNU-only flags where they were found, but **macOS and
-Windows/WSL are untested**; on macOS you will want bash from Homebrew. Run `./selftest.sh` first
+self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). This is suite
+coverage, not a fresh signed-in Claude Code run. **macOS and native Windows are untested**;
+on macOS you will want bash from Homebrew. Run `./selftest.sh` first
 on any other platform and file what fails.
 
 | | | |
@@ -276,9 +285,9 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
   `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
 - **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
   install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **Tested on Ubuntu only.** The bash-4-only and GNU-only constructs that were found are gone
-  (`xargs -r` is probed for, `ss` and `flock` degrade with a message), but nobody has run this on
-  macOS or Windows/WSL. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
+- **Platform coverage is Linux, including WSL2 suites, not native Windows or macOS.**
+  `xargs -r` is probed for and `ss`/`flock` degrade with a message, but those fallbacks have not
+  been run on macOS. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
   uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's
   `/bin/bash` 3.2; the installer writes only `~/.bashrc`.
 - **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`
@@ -290,7 +299,12 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
 Inside the target repo: `.claude/` (three hook scripts, `memory-hot.txt`, `settings.json` merged
 with a backup at `settings.json.bak.<epoch>`, `skills/`, `site-checks/`), `tools/`, `docs/ops/`,
 `.beads-hooks/pre-commit`, `AGENTS.md` (only if absent) and the `CLAUDE.md` symlink, plus
-`core.hooksPath` in `.git/config`. Outside it: the one `~/.bashrc` block. To remove everything:
+`core.hooksPath` in git config. Linked worktrees are supported: the installer enables
+`extensions.worktreeConfig` when needed, migrates the main checkout's `core.bare`/`core.worktree`
+values to its `config.worktree`, and sets the target's hooks path with `--worktree`, leaving sibling
+hook settings alone. Submodules use their own config. Outside it: the one `~/.bashrc` block.
+For a linked worktree use `git config --worktree --unset core.hooksPath` when removing it.
+To remove everything:
 
 ```bash
 git config --unset core.hooksPath          # or point it back where it was

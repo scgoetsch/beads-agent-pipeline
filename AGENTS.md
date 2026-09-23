@@ -120,8 +120,8 @@ What current bd (1.3) does here, so none of it reads as a problem:
   is one change, not a problem, and exit 0. After it, `bd setup claude --check` reports "No hooks
   installed" — expected; do not run `bd setup claude` to "fix" it, that re-adds the duplicate.
 
-**Gate 4:** the first re-run exits 0 with exactly that one `+` line (a `!` line means something of
-yours was replaced — read it); the **second** re-run prints `nothing to do — this checkout was
+**Gate 4:** the first re-run exits 0 with exactly that one `+` line. User hooks must survive, even
+on shared events; a `!` line means attention is needed, not permission to discard those hooks. Then the **second** re-run prints `nothing to do — this checkout was
 already set up.` and exits 0.
 
 ## 5. Prove the guards through git — not by running the scripts
@@ -144,7 +144,7 @@ git reset -q bad.md && rm -f bad.md
 
 # 5b. Replacing the CLAUDE.md symlink with a regular file MUST be refused.
 rm CLAUDE.md && cp AGENTS.md CLAUDE.md
-git add CLAUDE.md && git commit -qm "must be refused"; echo "exit $?"   # exit 1, "REGULAR FILE, not a symlink"
+git add CLAUDE.md && git commit -qm "must be refused"; echo "exit $?"   # exit 1, "staged CLAUDE.md is a REGULAR FILE"
 rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md && git add CLAUDE.md
 
 # 5c. The whole installed payload MUST commit under its own guards.

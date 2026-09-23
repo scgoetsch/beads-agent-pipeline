@@ -22,7 +22,8 @@
 # IT NEVER OVERWRITES YOUR CONTENT. An existing tools/ or docs/ file that differs from ours is left
 # in place and ours is written beside it as `.new`, with a line telling you; adopting it is a
 # manual `mv` (there is no upgrade path yet). An existing .claude/settings.json is MERGED: the
-# hook events we define replace yours, anything under other events survives, a backup is kept.
+# user hooks survive even on shared events; only bd's standalone prime registration is replaced.
+# Identical pipeline groups are deduplicated and a backup is kept.
 # An existing AGENTS.md is kept and nothing is written beside it -- it is meant to diverge.
 #
 # WHAT IT TOUCHES OUTSIDE THE REPO: exactly one marker-managed block in ~/.bashrc that sources
@@ -124,21 +125,22 @@ hdr "target"
 if [ ! -d "$TARGET" ]; then warn "no such directory: $TARGET"; exit 1; fi
 TARGET=$(cd "$TARGET" && pwd -P)
 say "$TARGET"
-if [ ! -d "$TARGET/.git" ]; then
-  warn "not a git repository — the hooks, the guards and bd all assume one."
-  say "    fix: git -C \"$TARGET\" init"
-  [ "$MODE" = check ] || exit 1
+TOP=$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null || true)
+if [ -z "$TOP" ] || [ "$(cd "$TOP" && pwd -P)" != "$TARGET" ]; then
+  warn "target must be a git working-tree root — normal repos, worktrees and submodules are supported."
+  say "    fix: git -C \"$TARGET\" init (only if this is not already inside a repo)"
+  exit 1
 fi
+GIT_DIR=$(cd "$TARGET" && cd "$(git rev-parse --git-dir)" && pwd -P) || exit 1
+GIT_COMMON=$(cd "$TARGET" && cd "$(git rev-parse --git-common-dir)" && pwd -P) || exit 1
 if [ "$TARGET" = "$SRC" ]; then
   warn "refusing to install into the pipeline repo itself — pass a target directory."
   exit 1
 fi
 
 if [ "$MODE" = check ]; then
-  if [ -d "$TARGET/.git" ]; then
-    if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs the shared .beads-hooks/"
-    else say "core.hooksPath=${HOOKS_PATH_VALUE:-unset} — the shared pre-commit is NOT wired; install will set it"; fi
-  fi
+  if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs the shared .beads-hooks/"
+  else say "core.hooksPath=${HOOKS_PATH_VALUE:-unset} — the shared pre-commit is NOT wired; install will set it"; fi
   hdr "check only"
   say "no changes made. Re-run without --check to install."
   exit $(( problems > 0 ))
@@ -175,33 +177,32 @@ if [ ! -e "$SET" ]; then
 elif cmp -s "$PAYLOAD/.claude/settings.json" "$SET"; then
   say ".claude/settings.json (already current)"
 elif command -v jq >/dev/null 2>&1; then
-  merged=$(jq -s '.[0] * .[1]' "$SET" "$PAYLOAD/.claude/settings.json" 2>/dev/null)
+  # jq object multiplication REPLACES arrays, deleting unrelated hooks under the same event.
+  # Merge groups instead. Never identify ownership by a substring in an arbitrary command.
+  merged=$(jq -s '
+    def bdprime: .type == "command" and
+      ((.command // "") | test("^bd prime( --hook-json)?$"));
+    .[1].hooks as $ours | .[0] |
+    reduce ($ours | keys[]) as $event (. ;
+      .hooks[$event] = ((.hooks[$event] // []) |
+        map(if $event == "SessionStart" then
+          .hooks |= map(select(bdprime | not)) else . end) |
+        map(select((.hooks | length) > 0))) |
+      reduce $ours[$event][] as $group (. ;
+        if (.hooks[$event] | index($group)) == null then
+          .hooks[$event] += [$group] else . end))
+  ' "$SET" "$PAYLOAD/.claude/settings.json" 2>/dev/null) || merged=""
   if [ -n "$merged" ] && [ "$merged" != "null" ]; then
     if [ "$(printf '%s' "$merged" | jq -S .)" = "$(jq -S . "$SET" 2>/dev/null)" ]; then
       say ".claude/settings.json (hooks already present)"
     else
-      # What are we replacing? Hook commands in the existing file that are neither bd's own
-      # (`bd prime`, which bd init / bd setup claude register) nor already ours. Replacing bd's
-      # is the designed outcome -- ours runs bd prime itself -- and happens on EVERY fresh install
-      # the moment bd init has run, so it is reported but not counted as a problem. Replacing
-      # anything else is a real loss and stays a `!`. Counting bd's as a problem made the first
-      # re-run after bd init exit 1 on every fresh box, for behaviour the README calls expected.
-      had_bd_hook=$(grep -c 'bd prime' "$SET" 2>/dev/null || true)
-      # Only the events OUR file defines get replaced by the merge; hooks under any other event
-      # (Notification, PostToolUse, ...) survive untouched. Counting those too made a project with
-      # its own unrelated hooks get a "REPLACED ... of yours" warning, a backup and exit 1 for a
-      # loss that had not happened.
-      had_other=$(jq -r --slurpfile ours "$PAYLOAD/.claude/settings.json" '
-          ($ours[0].hooks | keys) as $ev
-          | [ .hooks // {} | to_entries[] | select(.key as $k | $ev | index($k)) | .value[]? | .hooks[]? | .command ]
-          | map(select((test("bd prime") or test("bd-(prime|prerun|stop)-hook\\.sh")) | not)) | length' "$SET" 2>/dev/null || echo 0)
+      had_bd_hook=$(jq '[.hooks.SessionStart[]?.hooks[]? |
+        select(.type == "command" and ((.command // "") | test("^bd prime( --hook-json)?$")))] | length' "$SET")
       run cp -f "$SET" "$SET.bak.$(date +%s)"
       if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m merge hooks into %s\n' "$SET"
       else printf '%s\n' "$merged" > "$SET"; fi
       did ".claude/settings.json — merged our hooks in (backup kept)"
-      if [ "${had_other:-0}" -gt 0 ]; then
-        warn "our 'hooks' block REPLACED $had_other hook command(s) of yours that were not bd's. Check the backup."
-      fi
+      say "    preserved user hooks, including hooks on the same events"
       if [ "${had_bd_hook:-0}" -gt 0 ]; then
         say "    replaced bd's own SessionStart hook (bd prime). Ours runs bd prime itself, so nothing is"
         say "    lost — but \`bd setup claude --check\` will report 'No hooks installed' from now on."
@@ -266,7 +267,7 @@ fi
 hdr "agent docs (AGENTS.md + CLAUDE.md)"
 # Render the template for this install: with --with-peer the concurrency section stays (markers
 # removed); without it the whole block goes, so AGENTS.md never cites a doc we did not install.
-AGENTS_RENDERED="${TMPDIR:-/tmp}/bap-agents.$$"
+AGENTS_RENDERED=$(mktemp "${TMPDIR:-/tmp}/bap-agents.XXXXXX") || exit 1
 if [ "$WITH_PEER" -eq 1 ]; then
   sed '/<!-- peer:begin -->/d; /<!-- peer:end -->/d' "$PAYLOAD/AGENTS.md" > "$AGENTS_RENDERED"
 else
@@ -324,12 +325,30 @@ fi
 # hook file copied and reported with a green +, and nothing said that wiring it had been skipped
 # -- the git layer guarded nothing. Instance 12 in docs/ops/checks-narrower-than-what-they-check.md.
 hdr "git hooks"
-if [ -d "$TARGET/.git" ]; then
-  if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE already runs .beads-hooks/"
-  else run git -C "$TARGET" config core.hooksPath .beads-hooks && did "set core.hooksPath=.beads-hooks (was ${HOOKS_PATH_VALUE:-unset})"; fi
-  stale=$(ls "$TARGET/.git/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
-  [ "${stale:-0}" -gt 0 ] && warn "$stale stale hook(s) in .git/hooks — git ignores them now; delete them so nobody mistakes them for live."
+if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE already runs .beads-hooks/"
+else
+  scope=--local
+  if [ "$GIT_DIR" != "$GIT_COMMON" ]; then
+    # core.hooksPath is otherwise shared with the main checkout and every sibling worktree.
+    # Git requires these two main-worktree-only values to move when enabling this extension.
+    if [ "$(git -C "$TARGET" config --bool extensions.worktreeConfig || true)" != true ]; then
+      for key in core.bare core.worktree; do
+        if value=$(git -C "$TARGET" config --local --get "$key"); then
+          run git config --file "$GIT_COMMON/config.worktree" "$key" "$value" || exit 1
+          run git -C "$TARGET" config --local --unset-all "$key" || exit 1
+        fi
+      done
+      run git -C "$TARGET" config extensions.worktreeConfig true || exit 1
+    fi
+    scope=--worktree
+  elif [ "$(git -C "$TARGET" config --bool extensions.worktreeConfig || true)" = true ]; then
+    scope=--worktree
+  fi
+  run git -C "$TARGET" config "$scope" core.hooksPath .beads-hooks || exit 1
+  did "set core.hooksPath=.beads-hooks ($scope; was ${HOOKS_PATH_VALUE:-unset})"
 fi
+stale=$(ls "$GIT_COMMON/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
+[ "${stale:-0}" -gt 0 ] && warn "$stale hook(s) in $GIT_COMMON/hooks — ignored in this worktree; review before deleting (siblings may use them)."
 
 # ------------------------------------------------------------------- beads --
 hdr "bd store"
@@ -402,7 +421,7 @@ fi
 # Nothing installed here helps a clone if the target's .gitignore eats it. The workspace this came
 # from ignores `*.txt`, which swallowed .claude/memory-hot.txt: every clone would have taken the
 # SessionStart hook's full-dump fallback. Check every payload file that landed, not a chosen few.
-if [ "$MODE" != dryrun ] && [ -d "$TARGET/.git" ]; then
+if [ "$MODE" != dryrun ]; then
   eaten=$(cd "$PAYLOAD" && find . -type f | sed 's|^\./||' | while IFS= read -r rel; do
     [ -e "$TARGET/$rel" ] && git -C "$TARGET" ls-files --others --ignored --exclude-standard -- "$rel"; done)
   if [ -n "$eaten" ]; then
@@ -414,7 +433,7 @@ fi
 # a root .gitignore that excludes `.beads/` wholesale does -- and a `!` re-include under an
 # excluded directory has no effect (docs/ops/memory-and-the-graph.md has the working form).
 LEDGER=".beads/memgraph-ledger.json"
-if [ -f "$TARGET/$LEDGER" ] && [ -d "$TARGET/.git" ]; then
+if [ -f "$TARGET/$LEDGER" ]; then
   if [ -n "$(git -C "$TARGET" ls-files --others --ignored --exclude-standard -- "$LEDGER" 2>/dev/null)" ]; then
     warn "$LEDGER is GITIGNORED — the memory graph's history will not travel. Exclude .beads/* not .beads/, then re-include it (see docs/ops/memory-and-the-graph.md)"
   elif [ -n "$(git -C "$TARGET" ls-files --others --exclude-standard -- "$LEDGER" 2>/dev/null)" ]; then

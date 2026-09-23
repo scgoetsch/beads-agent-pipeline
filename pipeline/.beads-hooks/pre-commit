@@ -33,7 +33,7 @@ fi
 # repo so it is reviewable; this stanza is only the invocation.
 # Bypass once with: git commit --no-verify   Reinstall: re-run beads-agent-pipeline's install.sh
 if [ -x tools/check-agent-docs-linked.sh ]; then
-  tools/check-agent-docs-linked.sh || exit 1
+  tools/check-agent-docs-linked.sh --cached || exit 1
 fi
 # <<< agent-docs symlink guard <<<
 

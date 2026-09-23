@@ -11,13 +11,42 @@
 # this repo was in until 2026-08-31 (bd doctor had been reporting it; the two had
 # diverged by ~180 lines).
 #
-# Run manually any time. It is also invoked from .beads-hooks/pre-commit, which git uses via
+# Run manually any time to inspect the working tree. --cached inspects the index instead;
+# .beads-hooks/pre-commit always uses that mode. Git uses the hook via
 # core.hooksPath -- NOT from .git/hooks/, which git ignores entirely while that is set.
 #
 # Exit 0 = linked (or nothing to check), 1 = drifted.
 
 set -uo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 0
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+
+case ${1:-} in
+  --cached)
+    # Snapshot only the two INDEX entries, never checkout the working tree or follow arbitrary
+    # staged symlinks. This also respects GIT_INDEX_FILE (git commit --only's temporary index).
+    mode=$(git ls-files --stage -- CLAUDE.md) || exit 1
+    [ -n "$mode" ] || exit 0  # AGENTS-only is the documented no-symlinks fallback
+    case "$mode" in
+      "120000 "*" 0"$'\t'CLAUDE.md) ;;
+      *) echo "agent-docs: staged CLAUDE.md is a REGULAR FILE or unmerged, not a symlink." >&2; exit 1 ;;
+    esac
+    target=$(git show :CLAUDE.md) || exit 1
+    if [ "$target" != AGENTS.md ]; then
+      echo "agent-docs: staged CLAUDE.md points at '$target', expected 'AGENTS.md'." >&2; exit 1
+    fi
+    mode=$(git ls-files --stage -- AGENTS.md) || exit 1
+    case "$mode" in
+      "100644 "*" 0"$'\t'AGENTS.md|"100755 "*" 0"$'\t'AGENTS.md) ;;
+      *) echo "agent-docs: staged AGENTS.md is missing, unmerged or not a regular file (BROKEN symlink target)." >&2; exit 1 ;;
+    esac
+    snapshot=$(mktemp -d) || exit 1
+    trap 'rm -rf "$snapshot"' EXIT
+    git show :AGENTS.md > "$snapshot/AGENTS.md" || exit 1
+    ln -s AGENTS.md "$snapshot/CLAUDE.md" || exit 1
+    cd "$snapshot" || exit 1 ;;
+  '') ;;
+  *) echo "usage: $0 [--cached]" >&2; exit 2 ;;
+esac
 
 # Nothing to enforce if neither name is present at all.
 [ -e AGENTS.md ] || [ -e CLAUDE.md ] || [ -L CLAUDE.md ] || exit 0

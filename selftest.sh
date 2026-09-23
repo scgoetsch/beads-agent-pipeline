@@ -79,8 +79,12 @@ for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/s
          tools/dolt-guard_test.sh tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
          tools/audit_wikilinks_test.sh; do
-  if (cd "$T" && ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
-  else bad "$s"; sed -n '1,25p' "$T/.suite.log" | sed 's/^/        /'; fi
+  suite_tmp=$(mktemp -d)
+  if (cd "$T" && TMPDIR="$suite_tmp" ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
+  else bad "$s"; tail -35 "$T/.suite.log" | sed 's/^/        /'; fi
+  if [ -z "$(find "$suite_tmp" -mindepth 1 -print -quit)" ]; then ok "$s cleans its scratch directory"
+  else bad "$s leaked scratch files"; fi
+  rm -rf "$suite_tmp"
 done
 
 printf '\n\033[1m### the git-layer guard blocks a real commit (this is what covers OTHER harnesses)\033[0m\n'
@@ -108,6 +112,25 @@ git -C "$G" commit -qm "the whole installed payload" >"$G/.payload.log" 2>&1
 n=$(git -C "$G" log --oneline 2>/dev/null | wc -l)
 chk "the whole installed payload commits clean under its own guards" "$n" "2"
 [ "$n" = "2" ] || sed -n '1,8p' "$G/.payload.log" | sed 's/^/        /'
+# Partial staging must not let a clean working copy launder a bad index.
+printf 'see ![f](%s)\n' "$BADP" > "$G/report.md"; git -C "$G" add report.md
+printf 'see ![f](results/p.png)\n' > "$G/report.md"
+git -C "$G" commit -qm "bad staged report" >"$G/.proof.log" 2>&1
+chk "bad staged document with clean working copy is refused" "$?" "1"
+grep -q 'forbidden agent-cache' "$G/.proof.log" && ok "refusal came from cache-path guard" || bad "refusal came from cache-path guard"
+git -C "$G" add report.md
+rm -f "$G/CLAUDE.md"; ln -s wrong.md "$G/CLAUDE.md"; git -C "$G" add CLAUDE.md
+rm -f "$G/CLAUDE.md"; ln -s AGENTS.md "$G/CLAUDE.md"
+git -C "$G" commit -qm "bad staged link" >"$G/.proof.log" 2>&1
+chk "bad staged link with good working link is refused" "$?" "1"
+grep -q 'agent-docs:' "$G/.proof.log" && ok "refusal came from agent-docs guard" || bad "refusal came from agent-docs guard"
+git -C "$G" add CLAUDE.md
+# Conversely an unstaged problem must NOT reject an otherwise clean staged change.
+printf 'clean change\n' >> "$G/report.md"; git -C "$G" add report.md
+printf 'see ![f](%s)\n' "$BADP" > "$G/report.md"
+rm -f "$G/CLAUDE.md"; printf 'unstaged divergent copy\n' > "$G/CLAUDE.md"
+git -C "$G" commit -qm "clean index despite dirty working copies" >"$G/.proof.log" 2>&1
+chk "clean staged document and link pass despite dirty working copies" "$?" "0"
 rm -rf "$G"
 
 printf '\n\033[1m### ...and it is wired even when bd is not on the box\033[0m\n'
@@ -207,10 +230,10 @@ git -C "$T" config core.hooksPath .beads-hooks
 
 # bd init (1.3) also registers its own `bd prime` SessionStart hook in .claude/settings.json.
 # The next installer run replaces it with ours -- the designed outcome, since ours runs bd prime
-# -- and must SAY so without counting it as a problem. It used to warn, so the first re-run after
-# bd init exited 1 on every fresh box. A hook of the user's own that gets replaced is a real loss
-# and must still warn.
-jq '.hooks.SessionStart = [{"matcher":"","hooks":[{"type":"command","command":"bd prime --hook-json"}]}]' \
+# -- and must SAY so without counting it as a problem. User hooks, including hooks sharing an
+# event or a group with bd, must survive. Only the standalone bd prime registration is replaced.
+if command -v jq >/dev/null 2>&1; then
+jq '.hooks.SessionStart = [{"matcher":"","hooks":[{"type":"command","command":"bd prime --hook-json"}]}]'  \
   "$T/.claude/settings.json" > "$T/.settings.bdinit" && cp -f "$T/.settings.bdinit" "$T/.claude/settings.json"
 "$SRC/install.sh" --no-shell "$T" >"$T/.install4.log" 2>&1; rc4=$?
 grep -q "replaced bd's own SessionStart hook" "$T/.install4.log" && ok "bd's own SessionStart hook is replaced, and said so" \
@@ -224,8 +247,19 @@ grep -q 'nothing to do' "$T/.install5.log" && ok "and the run after that is a no
 jq '.hooks.PreToolUse += [{"matcher":"","hooks":[{"type":"command","command":"echo mine"}]}]' \
   "$T/.claude/settings.json" > "$T/.settings.user" && cp -f "$T/.settings.user" "$T/.claude/settings.json"
 "$SRC/install.sh" --no-shell "$T" >"$T/.install6.log" 2>&1
-grep -q 'REPLACED 1 hook command(s) of yours' "$T/.install6.log" && ok "a hook of the USER's that gets replaced still warns" \
-  || bad "a hook of the USER's that gets replaced still warns"
+chk "user PreToolUse command survives the merge" "$(jq '[.hooks.PreToolUse[].hooks[] | select(.command == "echo mine")] | length' "$T/.claude/settings.json")" "1"
+# Mixed groups, prompt hooks, and commands merely mentioning bd prime are user-owned.
+jq '.hooks.SessionStart = [{"matcher":"startup","hooks":[
+      {"type":"command","command":"bd prime --hook-json"},
+      {"type":"command","command":"echo keep-bd prime"},
+      {"type":"prompt","prompt":"retain this prompt"}]}]' \
+  "$T/.claude/settings.json" > "$T/.settings.mixedgroup"
+cp -f "$T/.settings.mixedgroup" "$T/.claude/settings.json"
+"$SRC/install.sh" --no-shell "$T" >"$T/.mixedgroup.log" 2>&1
+chk "mixed group retains its matcher and non-bd hooks" "$(jq '[.hooks.SessionStart[] | select(.matcher == "startup") | .hooks[]] | length' "$T/.claude/settings.json")" "2"
+cp -f "$T/.claude/settings.json" "$T/.settings.before-rerun"
+"$SRC/install.sh" --no-shell "$T" >/dev/null 2>&1
+cmp -s "$T/.settings.before-rerun" "$T/.claude/settings.json" && ok "merged user hooks are idempotent" || bad "merged user hooks are idempotent"
 # A hook under an event we do NOT define (Notification here) is preserved by the merge and must
 # not be counted as replaced: with bd's hook back in SessionStart and a Notification hook of the
 # user's, the re-run must report bd's replacement only, keep the Notification hook, and exit 0.
@@ -238,6 +272,9 @@ grep -q 'REPLACED .* of yours' "$T/.install7.log" && bad "a hook under an untouc
 chk "the untouched event's hook survives the merge" "$(jq -r '.hooks.Notification[0].hooks[0].command' "$T/.claude/settings.json")" "notify-send done"
 if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then chk "...and that re-run exits 0" "$rc7" "0"; fi
 rm -f "$T"/.claude/settings.json.bak.*
+else
+  echo '  SKIP settings merge tests: jq absent (installer preserves existing settings as-is)'
+fi
 
 printf '\n\033[1m### it refuses to clobber your content, and drops nothing beside AGENTS.md\033[0m\n'
 cp -f "$T/AGENTS.md" "$T/.agents.orig"
@@ -292,6 +329,37 @@ git -C "$T" add .beads/memgraph-ledger.json
 grep -q 'memgraph-ledger.json is tracked' "$T/.ledger3.log" && ok "once added it is reported as tracked" \
   || bad "once added it is reported as tracked"
 git -C "$T" rm -q --cached .beads/memgraph-ledger.json; rm -rf "$T/.beads" "$T/.gitignore"
+
+printf '\n\033[1m### linked worktrees install without changing the main checkout hooks\033[0m\n'
+W=$(mktemp -d)
+git -C "$W" init -q main
+git -C "$W/main" config user.email t@example.com; git -C "$W/main" config user.name t
+git -C "$W/main" commit --allow-empty -qm base
+git -C "$W/main" config core.hooksPath main-hooks
+git -C "$W/main" worktree add -q "$W/linked" -b linked
+"$SRC/install.sh" --no-shell "$W/linked" >"$W/install.log" 2>&1; wrc=$?
+chk "worktree installer exit matches dependency status" "$wrc" "$((missing > 0))"
+chk "linked worktree hooks are wired" "$(git -C "$W/linked" config core.hooksPath)" ".beads-hooks"
+chk "main checkout hooks unchanged" "$(git -C "$W/main" config core.hooksPath)" "main-hooks"
+printf 'see ![f](%s)\n' "$BADP" > "$W/linked/bad.md"; git -C "$W/linked" add bad.md
+git -C "$W/linked" commit -qm bad >"$W/commit.log" 2>&1
+chk "worktree commit runs the installed guard" "$?" "1"
+grep -q 'forbidden agent-cache' "$W/commit.log" && ok "worktree refusal is attributable" || bad "worktree refusal is attributable"
+# A .git file also represents a submodule; it must use its own config, not its parent's.
+git -C "$W/main" -c protocol.file.allow=always submodule add -q "$W/linked" child
+"$SRC/install.sh" --no-shell "$W/main/child" >"$W/submodule.log" 2>&1
+chk "submodule install exit matches dependency status" "$?" "$((missing > 0))"
+chk "submodule hooks are wired" "$(git -C "$W/main/child" config core.hooksPath)" ".beads-hooks"
+chk "submodule install preserves parent hooks" "$(git -C "$W/main" config core.hooksPath)" "main-hooks"
+# Enabling worktreeConfig must migrate core.bare out of the shared config, preserving the
+# main bare repository while the checkout remains non-bare.
+git clone -q --bare "$W/main" "$W/bare.git"
+git --git-dir="$W/bare.git" worktree add -q "$W/bare-linked" -b bare-linked
+"$SRC/install.sh" --no-shell "$W/bare-linked" >"$W/bare.log" 2>&1
+chk "bare-parent worktree install exit matches dependency status" "$?" "$((missing > 0))"
+chk "main bare repo stays bare" "$(git --git-dir="$W/bare.git" rev-parse --is-bare-repository)" "true"
+chk "linked checkout stays non-bare" "$(git -C "$W/bare-linked" rev-parse --is-bare-repository)" "false"
+rm -rf "$W"
 
 printf '\n\033[1m### --dry-run and --check touch nothing\033[0m\n'
 D=$(mktemp -d); git -C "$D" init -q

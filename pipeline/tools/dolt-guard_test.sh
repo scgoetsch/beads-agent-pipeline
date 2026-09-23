@@ -160,6 +160,15 @@ grep -q 'FAILED to start dolt server' "$TMP/err" \
     || bad "reports failure despite bd exiting 0" "stderr: $(cat "$TMP/err")"
 echo
 
+echo "server down, lock cannot be opened"
+wslock=$(make_ws wslock); portlock=$(free_port)
+mkdir -p "$wslock/.beads/.dolt-guard.lock"
+stub_lock=$(make_bd lock "touch '$TMP/CALLED-lock'; exit 0")
+run_guard "$wslock" "$portlock" "$stub_lock"; rc=$?
+check "lock open failure is nonzero" "$rc" "1"
+grep -q 'cannot open.*lock' "$TMP/err" && ok "lock failure is loud" || bad "lock failure is loud" "$(cat "$TMP/err")"
+[ ! -e "$TMP/CALLED-lock" ] && ok "no unlocked start on lock failure" || bad "no unlocked start on lock failure" "bd ran"
+
 # ---------------------------------------------------------------- 7
 echo "concurrent shells race to start it"
 ws7=$(make_ws ws7); port7=$(free_port)

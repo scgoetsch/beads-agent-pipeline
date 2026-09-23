@@ -31,7 +31,9 @@ documents you did not search.
 ## What `tools/sweep.sh` does differently
 
 1. **Enumerates every git repo under the root** and scans each separately, so no `.gitignore` can
-   hide a whole repo.
+   hide a whole repo. Discovery is unlimited by default and traversal errors are fatal. A positive
+   `--depth N` / `SWEEP_DEPTH=N` limit is announced and forces exit 2: controls over discovered repos
+   cannot certify that undiscovered deeper repos are absent (`0` selects unlimited discovery).
 2. **Scans tracked AND untracked-but-not-ignored files.** A repo with no commits at all has zero
    tracked files and is invisible to a `git grep` sweep.
 3. **Runs a positive control per repo.** It lifts real lines out of real files in that repo and
@@ -43,7 +45,8 @@ documents you did not search.
 ## Read the exit code and the BINARY column
 
 - Exit **0** — every per-repo positive control passed, so a zero-hit result can be believed.
-- Exit **2** — at least one repo was not searched, and the zero means nothing.
+- Exit **2** — discovery was limited/failed or a repo failed its control; the zero cannot certify
+  absence across the corpus.
 - The **BINARY** column counts files whose bytes stop grep printing matching lines. Plain prose
   carrying one malformed byte lands here: the file looks fine in an editor, and the sweep cannot
   show you hits inside it. Check those directly with `grep -aI -c PATTERN <file>`.
@@ -56,7 +59,7 @@ should say what the sweep could not reach.
 - Claims rendered into **figures** (PNG/PDF pixels). No text search reaches those.
 - Files gitignored *inside* a repo — excluded by default because that is usually where bulk data
   lives. Pass `--include-ignored`.
-- Files over the size cap (printed; raise with `--max-bytes`).
+- Files over the size cap (printed; raise with `--max-bytes`). Files exactly at the cap are searched.
 - **The bd layer.** Memories and issue text are separate `bd memories` / `bd list` searches. A
   document sweep is not a corpus sweep.
 

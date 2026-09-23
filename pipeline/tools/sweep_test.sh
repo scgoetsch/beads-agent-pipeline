@@ -28,7 +28,13 @@ skipc() { printf '  SKIP  %s\n' "$1"; ((skip++)); }
 ABSENT="zzq$$-$(date +%s%N)-absent-fixture"
 PHRASE="zzq$$-$(date +%s%N)-corpus-canary"
 
-FIX=$(mktemp -d); trap 'rm -rf "$FIX"' EXIT
+FIX=$(mktemp -d); BINDIR=""; BSD=""
+cleanup() {
+  rm -rf "$FIX"
+  [ -z "$BINDIR" ] || rm -rf "$BINDIR"
+  [ -z "$BSD" ] || rm -rf "$BSD"
+}
+trap cleanup EXIT
 mkdir -p "$FIX/tools" "$FIX/nested"
 cp "$SWEEP" "$FIX/tools/sweep.sh"; chmod +x "$FIX/tools/sweep.sh"
 printf 'nested/\n' > "$FIX/.gitignore"          # the nested repo has its own remote: ignored here
@@ -56,6 +62,32 @@ chk "hit in nested repo"  "$(printf '%s' "$out" | /usr/bin/grep -c 'hidden.md')"
 chk "no control failed"   "$(printf '%s' "$out" | /usr/bin/grep -c 'CONTROL FAILED')" 0
 chk "counts both repos"   "$(printf '%s' "$out" | /usr/bin/grep -cE 'in 2 repos')" 1
 
+echo "### discovery has no implicit depth ceiling"
+mkdir -p "$FIX/deep/a/b/c/repo"
+printf 'deep/\n' >> "$FIX/.gitignore"
+git -C "$FIX/deep/a/b/c/repo" init -q
+printf '%s deep-only\n' "$PHRASE" > "$FIX/deep/a/b/c/repo/claim.md"
+out=$("$FIX/tools/sweep.sh" "$PHRASE deep-only" 2>&1); rc=$?
+chk "deep repo found by default" "$(printf '%s' "$out" | grep -c 'claim.md:')" 1
+chk "unlimited discovery exits 0" "$rc" 0
+out=$("$FIX/tools/sweep.sh" --depth 4 "$PHRASE deep-only" 2>&1); rc=$?
+chk "explicit limited discovery cannot certify absence" "$rc" 2
+chk "depth limit is announced" "$(printf '%s' "$out" | grep -c 'discovery depth=4')" 1
+
+# A fresh boundary-only repo avoids unrelated files affecting the skip count.
+CAP="$FIX/cap"; mkdir -p "$CAP/tools"; git -C "$CAP" init -q
+cp -f "$SWEEP" "$CAP/tools/sweep.sh"
+printf 'positive control long enough\n' > "$CAP/control.md"
+printf '%-63s' 'size-canary' > "$CAP/under.md"
+printf '%-64s' 'size-canary' > "$CAP/exact.md"
+printf '%-65s' 'size-canary' > "$CAP/over.md"
+out=$("$CAP/tools/sweep.sh" --include '*.md' --max-bytes 64 size-canary 2>&1); rc=$?
+chk "file below cap is searched" "$(printf '%s' "$out" | grep -c 'under.md:')" 1
+chk "file exactly at cap is searched" "$(printf '%s' "$out" | grep -c 'exact.md:')" 1
+chk "file above cap is not searched" "$(printf '%s' "$out" | grep -c 'over.md:')" 0
+chk "only the above-cap file is counted as skipped" "$(printf '%s' "$out" | grep -c '1 file(s) skipped over')" 1
+chk "boundary scan exits 0" "$rc" 0
+
 echo "### the same hazard, measured on THIS tree"
 # The fixture above proves the MECHANISM on any machine. This measures whether the hazard is
 # actually live in the tree you are installed into -- and it is the check that taught us the
@@ -72,8 +104,7 @@ if command -v rg >/dev/null; then
   while IFS= read -r _repo; do
     corpus=$(( corpus + $(rg --files "$_repo" 2>/dev/null | wc -l) ))
   done < <(printf '.\n'
-           find . -mindepth 2 -maxdepth "${SWEEP_DEPTH:-4}" -name .git -prune \
-                -exec dirname {} \; 2>/dev/null | sort)   # not -printf: GNU-only
+           find . -name .git -prune -exec dirname {} \; 2>/dev/null | sort | grep -v '^\.$')
   # THE DENOMINATOR IS ASSERTED BEFORE THE RATIO IS TRUSTED. A corpus measure that silently
   # returned ~0 would satisfy any ratio trivially -- a guard weaker than the check it gates,
   # one level down. Here it decides whether there is anything to measure at all: a repo with
@@ -116,7 +147,6 @@ mkdir -p "$BINDIR"
 # for a reason that has nothing to do with binary detection.
 CAN_A=SWEEPBIN; CAN_B=ARYCANARY; CANARY="${CAN_A}${CAN_B}"
 printf 'the phrase %s is right here in plain prose \xff\n' "$CANARY" > "$BINDIR/canary.md"
-trap 'rm -rf "$BINDIR"' EXIT
 out=$("$SWEEP" --docs "$CANARY" 2>&1); rc=$?
 chk "exit 0"                  "$rc" 0
 chk "grep -a proves the phrase is really in the file" \
@@ -136,7 +166,6 @@ rm -rf "$BINDIR"
 out_without=$("$SWEEP" --docs "$CANARY" 2>&1)
 bin_without=$(root_bin "$out_without")
 chk "the canary itself is what was counted" "$(( ${bin_with:-0} - ${bin_without:-0} ))" 1
-trap - EXIT
 
 echo "### with no such file, the binary notice is NOT printed"
 chk "no false binary notice" \

@@ -106,7 +106,10 @@ bd_dolt_guard() {
     # The brace group is load-bearing: `exec {fd}>file 2>/dev/null` with no
     # command applies the 2>/dev/null to THIS SHELL, permanently silencing every
     # message below — the exact silent failure this guard exists to prevent.
-    { exec {lockfd}>"$ws/.beads/.dolt-guard.lock"; } 2>/dev/null || return 0
+    if ! { exec {lockfd}>"$ws/.beads/.dolt-guard.lock"; } 2>/dev/null; then
+        __bd_dolt_guard_say "$ws" "FAILED: cannot open $ws/.beads/.dolt-guard.lock — server down on :$port; no start attempted"
+        return 1
+    fi
 
     # Concurrent shells must not each spawn a server: a Claude Code session can
     # open several at once (parallel tool calls). The first one through starts

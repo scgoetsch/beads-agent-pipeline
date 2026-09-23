@@ -163,7 +163,15 @@ emit_session_rules > "$TMPD/s.rules"
 emit_site_checks   > "$TMPD/s.site"
 # bd workflow context + command reference, with the full memory dump removed
 # (delete from "## Persistent Memories" up to but NOT including "## Core Rules")
-bd prime 2>"$ERR" | sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}' > "$TMPD/s.ctx"
+# Capture status BEFORE filtering. A pipeline ending in sed hid bd's failure, and the
+# captured stderr was then discarded. Put the alarm with the never-dropped top sections.
+if bd prime > "$TMPD/prime" 2>"$ERR"; then
+  sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}' "$TMPD/prime" > "$TMPD/s.ctx"
+else
+  { echo '# WARNING: bd prime failed — workflow context unavailable; memories below came from export.'
+    head -c 1000 "$ERR"; echo; } >> "$TMPD/s.unwired"
+  : > "$TMPD/s.ctx"
+fi
 TOTAL=$(grep -c '"_type":"memory"' "$MM")
 # HOT = the keys in memory-hot.txt that EXIST in the store. Counting raw lines instead meant a
 # typo, a duplicate or a key not yet remembered made the index arithmetic below come out wrong,

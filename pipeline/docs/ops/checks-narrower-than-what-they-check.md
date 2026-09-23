@@ -132,6 +132,24 @@ stanza text. Make the suite branch on which required commands the box actually l
 and pin the count. And hide bd from PATH inside the suite, so an equipped machine keeps proving
 the bare-box behaviour instead of relying on one manual run.
 
+### 13. A commit guard checking the working tree instead of the index
+
+The cache-path and agent-doc guards selected staged paths but checked working copies. Staging a
+bad document/link and restoring only the working copy let the bad artifact commit. Conversely,
+an unstaged error could block a clean commit.
+
+**Fix:** inspect index blobs and modes. Keep manual working-tree checks explicit. Acceptance tests
+must make the index and working tree disagree in **both** directions and commit through git.
+
+### 14. Controls over an incomplete discovery set
+
+A positive control per discovered repo says nothing about repos that were never discovered. The
+sweep's implicit depth-4 ceiling skipped deeper ignored repos yet certified absence. Its size
+partition also omitted files exactly at the cap from both scanned and skipped counts.
+
+**Fix:** default to unlimited discovery; name bounded discovery and refuse to certify it. Test
+set boundaries (cap−1, cap, cap+1), not just representative values inside each set.
+
 ---
 
 ## How to add one

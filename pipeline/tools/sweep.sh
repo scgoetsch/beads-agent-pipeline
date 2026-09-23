@@ -53,6 +53,7 @@
 #   tools/sweep.sh --include '*.md' 'phrase'   # repeatable glob filter
 #   tools/sweep.sh --include-ignored 'phrase'   # also search gitignored files
 #   tools/sweep.sh --max-bytes 20000000 'phrase'
+#   tools/sweep.sh --depth 4 'phrase'           # bounded discovery: exit 2, cannot certify absence
 #
 #   Filters NARROW the sweep, so they are printed in the header and repeated in the
 #   verdict line. Never add one without reading it back — a narrowed sweep that looks
@@ -60,7 +61,7 @@
 #
 # EXIT CODES
 #   0  every repo's positive control passed (hit count may be 0 — and can be believed)
-#   2  at least one positive control FAILED — the sweep did not cover the corpus
+#   2  incomplete discovery or failed positive control — cannot certify corpus coverage
 #   3  usage error
 
 set -uo pipefail
@@ -68,7 +69,7 @@ set -uo pipefail
 MODE=-F
 CASE=()
 MAX_BYTES=${SWEEP_MAX_BYTES:-5000000}
-DEPTH=${SWEEP_DEPTH:-4}
+DEPTH=${SWEEP_DEPTH:-0}  # 0 = unlimited; a positive limit is explicitly incomplete
 PATTERN=""
 GLOBS=()
 FILTER_DESC='none (all text files)'
@@ -106,6 +107,8 @@ while (($#)); do
   esac
 done
 [[ -n $PATTERN ]] || usage
+case $MAX_BYTES in ''|*[!0-9]*) echo 'sweep: --max-bytes must be nonnegative' >&2; usage ;; esac
+case $DEPTH in ''|*[!0-9]*) echo 'sweep: --depth must be nonnegative (0 = unlimited)' >&2; usage ;; esac
 
 # Sweep root = toplevel of the repo containing this script.
 ROOT=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null) \
@@ -120,13 +123,20 @@ if ((${#GLOBS[@]})); then
 fi
 
 # --- repo discovery -----------------------------------------------------------
-# Root repo first, then every nested .git (dir or file, for worktrees/submodules).
-# `while read` and `-exec dirname`, not `mapfile` and `-printf`: the first is bash 4, the second
-# GNU find. On macOS (bash 3.2, BSD find) the old form silently discovered no nested repo at all.
+# Discover without an implicit depth cap, and propagate traversal errors. Controls over the
+# repos we happened to discover cannot validate discovery itself. Prune root .git too, rather
+# than walking its object store (the old -mindepth 2 prevented that prune).
+TMP=$(mktemp -d) || exit 2
+trap 'rm -rf "$TMP"' EXIT
+DEPTH_ARGS=()
+[ "$DEPTH" -eq 0 ] || DEPTH_ARGS=(-maxdepth "$DEPTH")
+if ! find . "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" -name .git -prune -exec dirname {} \; > "$TMP/repos"; then
+  echo '!! SWEEP NOT TRUSTWORTHY: repository discovery failed.' >&2; exit 2
+fi
 REPOS=()
 while IFS= read -r r; do REPOS+=("$r"); done < <(
   printf '.\n'
-  find . -mindepth 2 -maxdepth "$DEPTH" -name .git -prune -exec dirname {} \; 2>/dev/null | sort
+  sort -u "$TMP/repos" | grep -v '^\.$'
 )
 
 # --- helpers ------------------------------------------------------------------
@@ -145,7 +155,7 @@ repo_files() {
   { git -C "$repo" ls-files -z 2>/dev/null
     git -C "$repo" ls-files --others ${EXCLUDE_STD:+$EXCLUDE_STD} -z 2>/dev/null
   } | (cd "$repo" && xargs -0 $XARGS_R sh -c \
-        'find "$@" -maxdepth 0 -type f -size -'"${MAX_BYTES}"'c '"$NAME_EXPR"' -print0 2>/dev/null' _)
+        'find "$@" -maxdepth 0 -type f ! -size +'"${MAX_BYTES}"'c '"$NAME_EXPR"' -print0 2>/dev/null' _)
 }
 
 # Count eligible files that the scan will SKIP AS BINARY. scan() passes -I
@@ -246,7 +256,9 @@ printf '=== SWEEP %s %q ===\n' "$MODE" "$PATTERN"
 printf 'root=%s  repos=%d  size-cap=%s bytes\nfilter=%s\nscope=%s\n\n' \
   "$ROOT" "${#REPOS[@]}" "$MAX_BYTES" "$FILTER_DESC" "$IGNORED_DESC"
 
-hits_file=$(mktemp); trap 'rm -f "$hits_file"' EXIT
+if [ "$DEPTH" -eq 0 ]; then echo 'discovery depth=unlimited'
+else echo "discovery depth=$DEPTH — INCOMPLETE scope; deeper repos may not have been discovered"; fi
+hits_file="$TMP/hits"
 total_hits=0; total_files=0; total_skipped=0; total_binary=0; control_failures=0
 declare -a ROWS=()
 
@@ -313,6 +325,10 @@ fi
 [[ $FILTER_DESC == 'none (all text files)' ]] \
   || printf 'NARROWED BY filter=%s — files outside it were NOT searched.\n' "$FILTER_DESC"
 
+if [ "$DEPTH" -gt 0 ]; then
+  echo '!! SWEEP NOT TRUSTWORTHY: bounded discovery cannot certify absence in deeper repos.' >&2
+  exit 2
+fi
 if (( control_failures )); then
   cat >&2 <<EOF
 
