@@ -188,6 +188,32 @@ if (cd "$P" && ./tools/agent_docs_test.sh) >"$P/.suite.log" 2>&1; then ok "--wit
 else bad "--with-peer: agent_docs_test passes"; sed -n '1,20p' "$P/.suite.log" | sed 's/^/        /'; fi
 rm -rf "$P"
 
+printf '\n\033[1m### the Pi adapter is opt-in and does not overwrite user files\033[0m\n'
+[ -e "$T/.pi/extensions/beads-pipeline.ts" ] && bad "default: Pi adapter not installed" \
+  || ok "default: Pi adapter not installed"
+Q=$(mktemp -d); git -C "$Q" init -q
+mkdir -p "$Q/.pi/extensions"; printf 'my own extension\n' > "$Q/.pi/extensions/local.ts"
+printf '{"extensions":["./my.ts"]}\n' > "$Q/.pi/settings.json"
+"$SRC/install.sh" --no-shell --with-pi "$Q" >"$Q/.install.log" 2>&1; pi_rc=$?
+pi_missing=0; { command -v pi >/dev/null 2>&1 && pi --version >/dev/null 2>&1; } || pi_missing=1
+chk "--with-pi: installer exit matches dependencies" "$pi_rc" "$((missing > 0 || pi_missing > 0))"
+[ -f "$Q/.pi/extensions/beads-pipeline.ts" ] && ok "--with-pi: adapter installed" || bad "--with-pi: adapter installed"
+chk "--with-pi: existing unrelated extension preserved" "$(cat "$Q/.pi/extensions/local.ts")" "my own extension"
+chk "--with-pi: user Pi settings untouched" "$(cat "$Q/.pi/settings.json")" '{"extensions":["./my.ts"]}'
+grep -q 'trust this project' "$Q/.install.log" && ok "--with-pi: installer reports trust gate" || bad "--with-pi: installer reports trust gate"
+if (cd "$Q" && ./tools/pi-extension_test.sh) >"$Q/.suite.log" 2>&1; then
+  if grep -q '^SKIP' "$Q/.suite.log"; then echo "  SKIP Pi event suite: $(head -1 "$Q/.suite.log")"
+  else ok "Pi adapter event suite passes in the installed clone"; fi
+else bad "Pi adapter event suite passes in the installed clone"; tail -30 "$Q/.suite.log" | sed 's/^/        /'; fi
+"$SRC/install.sh" --no-shell --with-pi "$Q" >"$Q/.rerun.log" 2>&1
+grep -q 'nothing to do' "$Q/.rerun.log" && ok "--with-pi: second install is a no-op" || bad "--with-pi: second install is a no-op"
+printf 'custom guard\n' > "$Q/.pi/extensions/beads-pipeline.ts"
+"$SRC/install.sh" --no-shell --with-pi "$Q" >"$Q/.custom.log" 2>&1
+chk "--with-pi: modified adapter preserved" "$(cat "$Q/.pi/extensions/beads-pipeline.ts")" "custom guard"
+cmp -s "$SRC/pipeline/.pi/extensions/beads-pipeline.ts" "$Q/.pi/extensions/beads-pipeline.ts.new" \
+  && ok "--with-pi: replacement staged as .new" || bad "--with-pi: replacement staged as .new"
+rm -rf "$Q"
+
 printf '\n\033[1m### the CLAUDE.md symlink, and every way it breaks\033[0m\n'
 # One file, two names. The guard has to tell the four states apart, and the one that was missed
 # is `dangling`: [ -e ] follows the link and is FALSE for a broken one, so the guard used to exit

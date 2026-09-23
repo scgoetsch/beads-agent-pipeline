@@ -27,6 +27,13 @@ or re-run the beads-agent-pipeline installer against the clone, which sets it an
 rest. In Claude Code the session-start hook says so at the top of the payload when it finds the
 hooks unwired; under any other harness, check `git config core.hooksPath` yourself.
 
+**Pi needs separate opt-in plumbing and project trust.** This file can load even when Pi has
+skipped the project-local extension, so seeing these rules does NOT mean command guards run.
+Install the adapter with the installer's `--with-pi` flag, grant Pi project trust, then run
+`tools/pi-extension_test.sh` and the live smoke in **`docs/ops/pi-adapter.md`**. An untrusted
+project extension cannot warn that it was skipped. Git pre-commit hooks work independently when
+`core.hooksPath` is wired.
+
 ## Issue tracking: bd (beads)
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` for the full command
@@ -242,6 +249,7 @@ tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and nam
 tools/bd-stop-hook_test.sh       # the Stop hook's in-progress count is the number of issues, not of ● glyphs
 tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from the store
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
+tools/pi-extension_test.sh       # if installed: Pi event adapter's priming, gate, fail-open and reminder
 tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
 tools/check-agent-docs-linked.sh # CLAUDE.md is still a symlink to AGENTS.md
 tools/check-agent-docs-linked_test.sh  # …and that guard's own suite (all four link states)
@@ -257,12 +265,12 @@ that every command named here actually exists, so a rotted entry fails loudly.
 
 ## What is in this repo
 
-**Session machinery** (`.claude/`) — these run automatically and shape every session, **and they
-require Claude Code**: `.claude/settings.json` wires three hook scripts on four events
-(SessionStart, PreCompact, PreToolUse, Stop), and those fire there and nowhere else. Under any
-other harness they do nothing and nothing reports it, while every git-layer guard, every tool
-and this file keep working — `docs/ops/other-harnesses.md` has the matrix and says how to prime
-a session by hand.
+**Session machinery** (`.claude/`) — Claude Code runs these automatically:
+`.claude/settings.json` wires three hook scripts on four events (SessionStart, PreCompact,
+PreToolUse, Stop). Other harnesses do not run Claude hooks. Pi has an **optional** trusted
+project-local adapter under `.pi/extensions/` that calls the *same scripts* when installed with
+`--with-pi`; without trust it is inactive. See `docs/ops/pi-adapter.md` and
+`docs/ops/other-harnesses.md` for what fires where, including manual priming elsewhere.
 `bd-prime-hook.sh` builds the session-start payload (session rules, an index of the memory store,
 the hot memories in full, then the bd context — trimmed to `BD_PRIME_BUDGET`, default 10,000
 bytes, because Claude Code shows only a 2,000-byte preview above that; what is dropped is named

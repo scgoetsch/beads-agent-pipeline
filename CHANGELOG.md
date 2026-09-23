@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Opt-in `--with-pi` installs a trusted project-local Pi extension. It reuses the Claude hook
+  scripts for startup and compaction priming, model Bash and `!` command guards, Dolt startup,
+  and settled-run reminders; cached priming is injected per run without re-running bd. Broken
+  pretool scripts fail open **with a visible warning**, rather than taking Pi's default
+  throw-to-block path. No user Pi extensions or settings are overwritten.
+- `tools/pi-extension_test.sh` exercises the actual TypeScript handler with event fixtures;
+  `tools/pi-extension_smoke.sh` proves a real trusted Pi CLI invocation blocks bare `pkill` while
+  a harmless stub prevents accidental execution. Untrusted project extensions cannot warn from
+  inside the skipped extension; the AGENTS template and docs state the trust gate explicitly.
+
 Second review, rechecked against a08c20d (WS-ispx). Regression tests were added first and failed
 against the previous implementation; the fixes cover:
 

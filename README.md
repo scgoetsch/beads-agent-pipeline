@@ -30,6 +30,13 @@ project per `.bashrc`, and a no-op on an embedded bd store (see the guard below)
 repairs a checkout whose config drifted; a tool that changed upstream lands as `.new` for you to
 adopt.
 
+**`--with-pi` is opt-in**: it installs a project-local Pi extension that reuses the Claude hook
+scripts for session priming, command guards, compaction refresh and settled reminders. Pi must
+trust the project before the extension loads. No user-level code or Pi settings are installed;
+existing extensions are preserved. See [Pi adapter](pipeline/docs/ops/pi-adapter.md) for event
+coverage, fail-open warnings and the trust limitation. Git pre-commit guards remain the shared
+enforcement layer.
+
 **`--with-peer` is opt-in**, because running several agent sessions against one repo is an
 environment question, not a default. Without it the concurrency doc is not installed and the
 matching section is stripped from `AGENTS.md`, so nothing cites a file that is not there — a
@@ -60,8 +67,9 @@ warns about in-progress issues at session end. Each resolves the repo root from 
 location**, never a literal path, and `tools/hook_portability_test.sh` relocates them to a
 throwaway root to prove it.
 
-**The PreToolUse guard** blocks three things. Two were measured to cause real damage; the third is
-a discipline you may not want, and it is one line to turn off:
+**The pre-execution guard** (Claude Code PreToolUse; optional Pi `tool_call` + `user_bash`)
+blocks three things. Two were measured to cause real damage; the third is a discipline you may
+not want, and it is one line to turn off:
 
 - **Bare `pkill` / `killall`.** `pkill -f PATTERN` matches the full command line — including the
   shell running it — so it kills its own caller. It comes back as exit 143/144, reads like an
@@ -79,8 +87,9 @@ a discipline you may not want, and it is one line to turn off:
   if bd is unavailable. The directory name is the one-line knob `SCRIPT_DIRS_RE` in
   `.claude/bd-prerun-hook.sh`; set it to something that matches nothing to drop the rule.
 
-**The SessionStart hook** replaces bd's raw `bd prime` dump (76 KB on a 40-memory store) with,
-in this order, the rules, a key-only index of the store, the memories listed in
+**The SessionStart hook** (cached at Pi `session_start` when opted in) replaces bd's raw
+`bd prime` dump (76 KB on a 40-memory store) with, in this order, the rules, a key-only index of
+the store, the memories listed in
 `.claude/memory-hot.txt` in full, and the bd context. The hot list ships empty, and empty means
 "index only", not "unconfigured". If the hook has to fall back to the full dump — no `jq`, no
 export — it says so on its first line rather than looking like the tiered output.
@@ -203,21 +212,25 @@ whole payload committing clean under its own hooks); installs with `bd` hidden f
 checks the hooks are wired anyway; re-runs after what `bd init` and `bd hooks install --shared`
 do and requires a no-op; checks it never clobbers your files, names any installed file your
 `.gitignore` would eat, reports the memory-graph ledger's state, and writes nothing under
-`--dry-run` or `--check`. Nothing outside the temp directories is touched. It needs the same
-things the pipeline needs; without `jq` the SessionStart suite tests the fallback instead of the
-tiering and says so.
+`--dry-run` or `--check`. The opt-in Pi install runs an event suite through its TypeScript
+handler when Node ≥22.19 is present (otherwise explicitly SKIP); a real Pi smoke is still
+needed to prove the extension loads and intercepts a model tool call. Nothing outside the temp
+directories is touched. It needs the same things the pipeline needs; without `jq` the
+SessionStart suite tests the fallback instead of the tiering and says so.
 
 ## Requirements
 
 **Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
-self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). This is suite
-coverage, not a fresh signed-in Claude Code run. **macOS and native Windows are untested**;
-on macOS you will want bash from Homebrew. Run `./selftest.sh` first
+self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). The opt-in Pi
+adapter was exercised with a real trusted Pi CLI 0.87.1 (`@earendil-works/pi-coding-agent`) on
+Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS and
+native Windows are untested**; on macOS you will want bash from Homebrew. Run `./selftest.sh` first
 on any other platform and file what fails.
 
 | | | |
 | --- | --- | --- |
-| [Claude Code](https://claude.com/claude-code) | required **for the session hooks only** | `.claude/settings.json` wires three hook scripts on four events (SessionStart, PreCompact, PreToolUse, Stop), and those fire in Claude Code and nowhere else. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `docs/ops/other-harnesses.md` has the matrix. Install below |
+| [Claude Code](https://claude.com/claude-code) | needed **for Claude session hooks only** | `.claude/settings.json` wires three scripts on four Claude events; these do not load under Pi. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `pipeline/docs/ops/other-harnesses.md` has the matrix. |
+| [Pi](https://github.com/badlogic/pi-mono) (Node ≥22.19) | required **only with `--with-pi`** | The optional project extension calls those same scripts through Pi's event API. Project trust is required; `--no-approve` or `--no-extensions` skips the adapter. Do not infer guard coverage from `AGENTS.md` alone. |
 | `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
 | [`bd`](https://github.com/gastownhall/beads) | required | the issue tracker and memory store. bd manages its own Dolt: 1.3's default is an embedded, in-process store, and a server mode exists (`bd dolt start`). No separate `dolt` binary is needed and nothing here calls one |
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
@@ -227,9 +240,9 @@ on any other platform and file what fails.
 | `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) the checks run unbounded, the session payload says so, and a hung check can stall session start |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
-`install.sh --check` reports exactly what is present and what each absence costs. It states the
-harness rather than probing for it, because the hooks are run *by* the harness and a `claude` on
-your PATH does not prove they will fire.
+`install.sh --check` reports what is present. It states the Claude harness rather than probing
+for it: a `claude` on PATH does not prove session hooks fire. With `--with-pi` it checks for the
+Pi executable but only a real trusted Pi session can prove the extension loaded.
 
 **Installing Claude Code**, if you want the session hooks:
 
@@ -248,9 +261,9 @@ hand.
 
 - **Not a bd replacement or fork.** bd is unmodified; this is configuration, hooks and guards
   around it.
-- **Not tied to one agent harness — but be precise about it.** The SESSION hooks are Claude
-  Code's `settings.json` format and do nothing under agy, a Grok REPL or Cursor. Everything at the
-  git layer (`.beads-hooks/pre-commit`: memory graph, agent-cache paths, agent-docs symlink, bd's
+- **Not tied to one agent harness — but be precise about it.** The default session hooks are
+  Claude Code's `settings.json` format. Pi needs the opt-in trusted project extension; agy, a Grok
+  REPL and Cursor run neither. Everything at the git layer (`.beads-hooks/pre-commit`: memory graph, agent-cache paths, agent-docs symlink, bd's
   own hooks), every tool, the shell guard and `AGENTS.md` itself work anywhere. That split is
   deliberate: a session hook binds one harness, `git commit` binds all of them, so anything that
   must not escape the repo is enforced there. Full matrix of what fires where, and how to prime a
@@ -297,8 +310,8 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
 ## What it touches, and how to remove it
 
 Inside the target repo: `.claude/` (three hook scripts, `memory-hot.txt`, `settings.json` merged
-with a backup at `settings.json.bak.<epoch>`, `skills/`, `site-checks/`), `tools/`, `docs/ops/`,
-`.beads-hooks/pre-commit`, `AGENTS.md` (only if absent) and the `CLAUDE.md` symlink, plus
+with a backup at `settings.json.bak.<epoch>`, `skills/`, `site-checks/`), optional `.pi/extensions/`
+(with `--with-pi` only), `tools/`, `docs/ops/`, `.beads-hooks/pre-commit`, `AGENTS.md` (only if absent) and the `CLAUDE.md` symlink, plus
 `core.hooksPath` in git config. Linked worktrees are supported: the installer enables
 `extensions.worktreeConfig` when needed, migrates the main checkout's `core.bare`/`core.worktree`
 values to its `config.worktree`, and sets the target's hooks path with `--worktree`, leaving sibling
@@ -310,6 +323,7 @@ To remove everything:
 git config --unset core.hooksPath          # or point it back where it was
 rm -rf .claude/bd-*-hook.sh .claude/memory-hot.txt .claude/skills .claude/site-checks \
        tools docs/ops .beads-hooks
+rm -f .pi/extensions/beads-pipeline.ts  # only if you opted in; leave other Pi extensions alone
 # the OLDEST backup (epoch suffix, so it sorts first) is your pre-install settings.json, if any
 cp -f "$(ls .claude/settings.json.bak.* | sort | sed -n 1p)" .claude/settings.json \
   && rm -f .claude/settings.json.bak.*

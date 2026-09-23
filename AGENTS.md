@@ -40,7 +40,7 @@ git clone https://github.com/scgoetsch/bd-memgraph ~/bd-memgraph
 ln -sf ~/bd-memgraph/bd-memgraph.py ~/.local/bin/bd-memgraph
 bd-memgraph --help | head -1                     # "usage: bd-memgraph ..."
 
-# Claude Code — the three session hooks fire only inside it. Sign-in is not needed for this runbook.
+# Claude Code — the default three session hooks fire only inside it. Pi support is opt-in.
 curl -fsSL https://claude.ai/install.sh | bash
 claude doctor                                    # must end "No installation issues found."
 ```
@@ -92,7 +92,11 @@ symlink guard passes` and `hook portability suite passes`. Anything marked `!` n
 before you go on.
 
 The installer also adds a block to `~/.bashrc` that sources `tools/dolt-guard.sh` — one project per
-`.bashrc`; a second install replaces it. Pass `--no-shell` if that is not wanted.
+`.bashrc`; a second install replaces it. Pass `--no-shell` if that is not wanted. For a Pi
+project, pass `--with-pi`, then explicitly approve the project in Pi and run the installed
+`tools/pi-extension_test.sh` plus the live smoke in `pipeline/docs/ops/pi-adapter.md`.
+The default install does **not** load the Pi adapter; reading `AGENTS.md` in Pi is no proof that
+the tool-call guard runs. The rest of this runbook measures the default Claude path.
 
 **Gate 3:** exit 0; `git -C ~/proj/fresh config core.hooksPath` resolves to `.beads-hooks`;
 `ls -la ~/proj/fresh/CLAUDE.md` shows `CLAUDE.md -> AGENTS.md`.

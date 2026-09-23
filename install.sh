@@ -6,6 +6,7 @@
 #     ./install.sh --dry-run [TARGET]   # print every action, change nothing
 #     ./install.sh --no-shell [TARGET]  # skip the one thing written outside the repo
 #     ./install.sh --with-peer [TARGET] # also install the concurrent-session layer (see below)
+#     ./install.sh --with-pi [TARGET]   # also install project-local Pi session hooks (requires trust)
 #
 # THE PEER LAYER IS OPT-IN because it is environment-dependent. It is only worth anything if more
 # than one agent session may run against the repo at once; for a single-session user it is dead
@@ -36,13 +37,14 @@ set -uo pipefail
 SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PAYLOAD="$SRC/pipeline"
 
-MODE=install; DO_SHELL=1; WITH_PEER=0; TARGET=""
+MODE=install; DO_SHELL=1; WITH_PEER=0; WITH_PI=0; TARGET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check)    MODE=check ;;
     --dry-run)  MODE=dryrun ;;
     --no-shell) DO_SHELL=0 ;;
     --with-peer) WITH_PEER=1 ;;
+    --with-pi)   WITH_PI=1 ;;
     -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
     -*)         echo "unknown option: $1" >&2; exit 2 ;;
     *)          TARGET=$1 ;;
@@ -87,6 +89,13 @@ need() { # need <cmd> <why> <how>
 need git    "everything here is git-scoped"            "your package manager" || true
 need bd     "the issue tracker and memory store"       "https://github.com/gastownhall/beads" || true
 need python3 "the PreToolUse guard parses hook JSON"   "your package manager" || true
+if [ "$WITH_PI" -eq 1 ]; then
+  need pi "--with-pi only works when Pi runs and trusts the project extension" \
+    "https://github.com/badlogic/pi-mono" || true
+  if command -v pi >/dev/null 2>&1 && ! pi --version >/dev/null 2>&1; then
+    warn "pi CLI found but cannot run (check its Node runtime); extension will not fire"
+  fi
+fi
 # No `need dolt`: bd manages its own Dolt server (`bd dolt start`) and nothing here calls a dolt
 # binary. Requiring one made this exit 1 -- and selftest.sh fail -- on the machine it shipped from.
 
@@ -112,10 +121,16 @@ if command -v claude >/dev/null 2>&1; then
 else
   say "claude CLI — not on PATH (not conclusive; what matters is the harness that runs the hooks)"
 fi
-say "The SESSION HOOKS (.claude/settings.json: three scripts on four events — SessionStart, PreCompact,"
-say "  PreToolUse, Stop) fire in Claude Code and NOWHERE ELSE."
-say "  Under agy, a Grok REPL, Cursor or a plain shell they do nothing and nothing reports it."
-say "  Everything else installed here works anywhere: the git-layer guards in .beads-hooks/,"
+say "The .claude/settings.json SESSION HOOKS fire in Claude Code only."
+if [ "$WITH_PI" -eq 1 ]; then
+  say "Pi adapter requested: .pi/extensions/beads-pipeline.ts loads ONLY when Pi trusts this project."
+  say "  It reuses the Claude hook scripts; --no-approve, --no-extensions, and untrusted projects"
+  say "  disable it. AGENTS.md and git hooks alone do not prove session guards are running."
+else
+  say "Pi session hooks NOT installed (opt in with --with-pi, then grant Pi project trust)."
+fi
+say "  Under agy, a Grok REPL, Cursor or a plain shell there are no session hooks."
+say "  Everything else installed here works anywhere: git guards in .beads-hooks/,"
 say "  every tool in tools/, the shell guard, and AGENTS.md itself."
 say "  Full matrix of what fires where: docs/ops/other-harnesses.md"
 
@@ -168,6 +183,12 @@ install_file() { # install_file <relpath> [mode]
 hdr "session machinery (.claude/)"
 for f in bd-prime-hook.sh bd-prerun-hook.sh bd-stop-hook.sh; do install_file ".claude/$f" 755; done
 install_file ".claude/memory-hot.txt"
+
+if [ "$WITH_PI" -eq 1 ]; then
+  hdr "Pi adapter (.pi/extensions/; requires project trust)"
+  install_file ".pi/extensions/beads-pipeline.ts"
+  say "Pi must trust this project before its extension loads; see docs/ops/pi-adapter.md"
+fi
 
 # settings.json is the one file a user is LIKELY to already have, and clobbering it would take
 # their unrelated hooks with it. Merge when we can, and say so plainly when we cannot.
@@ -478,5 +499,6 @@ Next:
   tools/agent_docs_test.sh     # and the rest of the suite in AGENTS.md
 Then open AGENTS.md and make it yours.
 The concurrent-session layer is $( [ "$WITH_PEER" -eq 1 ] && echo INSTALLED || echo "NOT installed — add it with --with-peer if more than one session will run against this repo" ).
+Pi adapter is $( [ "$WITH_PI" -eq 1 ] && echo "COPIED — verify Pi project trust and run tools/pi-extension_test.sh" || echo "NOT installed — add it with --with-pi, then grant Pi project trust" ).
 NEXT
 exit $(( problems > 0 ))

@@ -1,25 +1,26 @@
-# Running this under agy, Codex, a Grok REPL, or anything that is not Claude Code
+# Running this under Pi, Codex, agy, a Grok REPL, or another harness
 
-**The session hooks are Claude Code's. Everything else here is not.** This page says exactly
-which parts fire where, so you are never guessing about what is protecting you.
+**Claude Code runs the `.claude/settings.json` session hooks; Pi can run the optional adapter.**
+Neither is a substitute for the git-layer guards. This page says which parts fire where.
 
 ## What fires where
 
-| Layer | Mechanism | Claude Code | Codex | agy / antigravity, Grok REPL, Cursor, a plain shell |
+| Layer | Claude Code | Pi (opt-in, trusted project) | Codex | agy / Grok / Cursor / plain shell |
 | --- | --- | --- | --- | --- |
-| Session rules + memories at start | `.claude/settings.json` → `bd-prime-hook.sh` | yes | bd primes it | **no** |
-| `pkill` / memory-admission guard | `.claude/settings.json` → `bd-prerun-hook.sh` (PreToolUse) | yes | no | **no** |
-| Unclosed-issue reminder | `.claude/settings.json` → `bd-stop-hook.sh` | yes | no | **no** |
-| Memory-graph check | `.beads-hooks/pre-commit` | **yes** | **yes** | **yes** |
-| Agent-cache path guard | `.beads-hooks/pre-commit` | **yes** | **yes** | **yes** |
-| Agent-docs symlink guard | `.beads-hooks/pre-commit` | **yes** | **yes** | **yes** |
-| bd's own hooks | `.beads-hooks/*` | **yes** | **yes** | **yes** |
-| `tools/*.sh` | plain shell | **yes** | **yes** | **yes** |
-| `AGENTS.md` as the rules | the file itself | via the `CLAUDE.md` symlink | reads `AGENTS.md` | reads `AGENTS.md` if it looks for that name |
-| Dolt server after a reboot | `~/.bashrc` → `dolt-guard.sh` | **yes** | **yes** | **yes** (any *interactive* bash — Ubuntu's `.bashrc` returns early for non-interactive shells; one project per `.bashrc`; a no-op on an embedded store) |
+| Session start + memories | `.claude/settings.json` | `.pi/extensions/beads-pipeline.ts` calls the same script | bd primes it | **no** |
+| `pkill` / memory-admission guard | Claude PreToolUse | Pi `tool_call` + `user_bash` | no | **no** |
+| Unclosed-issue reminder | Claude Stop | Pi `agent_settled` | no | **no** |
+| Pre-compaction refresh | Claude PreCompact | Pi `session_before_compact` | no | **no** |
+| Git guards (`.beads-hooks/`) | **yes** | **yes** | **yes** | **yes** (if wired in this clone) |
+| `tools/*.sh` | **yes** | **yes** | **yes** | **yes** |
+| `AGENTS.md` | via symlink | reads `AGENTS.md` | reads `AGENTS.md` | if the harness looks for it |
+| Dolt guard after reboot | `~/.bashrc` in interactive bash | Pi adapter explicitly at start | `~/.bashrc` in interactive bash | `~/.bashrc` in interactive bash only |
 
-bd primes itself in Claude Code and Codex when it resolves a beads workspace. Everywhere else,
-priming is something you or your harness does.
+Pi's project extension loads **only after project trust**; `pi --no-approve` skips it. If the
+project is untrusted, its own extension cannot warn that it was skipped. Running the installer
+with `--with-pi` and reading `AGENTS.md` is not proof of live hook coverage: run the event suite
+and the real smoke described in **`docs/ops/pi-adapter.md`**. Under Pi, non-interactive Bash does
+not reliably source `~/.bashrc`. The adapter starts the Dolt guard explicitly.
 
 ## The principle: enforce at the layer everything passes through
 
@@ -34,7 +35,7 @@ leak into committed markdown, reports and generated JSON. They resolve for nobod
 is not specific to one agent, and neither is the guard: it runs on commit, so it covers the agent
 that has no session hooks at all.
 
-## If your harness is not Claude Code
+## If your harness is neither Claude Code nor a trusted Pi with the adapter
 
 You still get every git-layer guard and every tool with no work. To get the rest:
 
@@ -43,8 +44,8 @@ You still get every git-layer guard and every tool with no work. To get the rest
 2. **Prime the session yourself.** `bash .claude/bd-prime-hook.sh` prints exactly what Claude Code
    injects at session start — rules, bd context, hot memories, the index. Pipe it into your
    agent's context, or run `bd prime` for the unfiltered version.
-3. **You do not get the PreToolUse guard.** The `pkill` trap and the memory-admission gate are
-   pre-execution checks and there is nothing to hook. Two consequences worth knowing: a bare
+3. **You do not get the pre-execution guard.** The `pkill` trap and the memory-admission gate are
+   pre-execution checks and your harness has no adapter here. Two consequences worth knowing: a bare
    `pkill -f <pattern>` can kill the agent's own shell (the pattern matches the command line that
    contains it), and `bd remember` without `--key` will happily create an undedupable memory.
    `.claude/bd-prerun-hook.sh` documents both; read it once and keep the rules by hand.
