@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Two silent paths in the SessionStart hook's site checks are named. A check that the 20 s bound
+  killed had usually printed nothing yet, and `timeout`'s exit 124 went to the discarded stderr, so
+  the kill read as a healthy check; the payload now says KILLED, before any partial output, so the
+  size cap cannot drop the note. A script in `site-checks/` without its executable bit was skipped
+  by `[ -x ] || continue` with no line saying so; it is now reported as NOT RUN with the chmod to
+  run. `BD_PRIME_CHECK_TIMEOUT` (default 20) sets the bound. Found by the 2026-09-30 review of a
+  check that runs `cairn` (both reviewers); nine new suite cases.
 - **An index too large for the budget is omitted, not sliced; the trim alarm is for real loss.**
   On a 385-memory store the bounded index listed the alphabetical first 85 keys — about 4 KB that
   told the reader almost nothing and crowded out the HOT tier. It is now replaced by one explicit

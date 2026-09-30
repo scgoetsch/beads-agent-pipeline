@@ -62,7 +62,8 @@ size() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 # Example: a check that reports a dead network mount, so an agent does not read a stale local
 # directory and believe it. Write it so that "everything is fine" produces zero bytes.
 emit_site_checks() {
-  local dir="$WS/.claude/site-checks" f out bound="timeout 20" unbounded_said=0
+  local dir="$WS/.claude/site-checks" f out rc name limit=${BD_PRIME_CHECK_TIMEOUT:-20} bound unbounded_said=0
+  bound="timeout $limit"
   [ -d "$dir" ] || return 0
   # `timeout` is coreutils; stock macOS has none. `out=$(timeout 20 "$f" 2>/dev/null)` with no
   # timeout binary failed with "command not found" -- on the stderr that was discarded -- and
@@ -72,7 +73,16 @@ emit_site_checks() {
   # timeout and requires both the notice and the check's output.
   command -v timeout >/dev/null 2>&1 || bound=""
   for f in "$dir"/*.sh; do
-    [ -x "$f" ] || continue
+    [ -e "$f" ] || continue                       # the glob matched nothing
+    name=$(basename "$f" .sh)
+    if [ ! -x "$f" ]; then
+      # `[ -x ] || continue` used to skip it in silence, and a check that never ran read as a
+      # check that found nothing (a clone with core.fileMode off, a copy that dropped the bit).
+      # Found by the 2026-09-30 cairn review.
+      echo "## ⚠ SITE CHECK — $name: NOT RUN — the file is not executable (chmod +x .claude/site-checks/$name.sh)"
+      echo ""
+      continue
+    fi
     if [ -z "$bound" ] && [ "$unbounded_said" -eq 0 ]; then
       echo "## ⚠ bd-prime-hook: no \`timeout\` on this box — site checks run UNBOUNDED (a hung check stalls session start)"
       echo ""
@@ -80,7 +90,14 @@ emit_site_checks() {
     fi
     # Both streams: a check that dies on stderr ("command not found", a missing interpreter) is
     # a check that did not run, and that has to reach the payload too.
-    out=$($bound "$f" 2>&1) || true
+    out=$($bound "$f" 2>&1) && rc=0 || rc=$?
+    # A check the bound kills has usually printed nothing yet, and `timeout` exits 124 on the
+    # discarded stderr -- so the kill read as health, the open-and-silent shape again (2026-09-30
+    # cairn review). Name it, first, so the cap below cannot drop the note.
+    if [ -n "$bound" ] && [ "$rc" -eq 124 ]; then
+      out="⚠ KILLED after $limit s by bd-prime-hook — the check did not finish; treat it as NOT RUN, not as healthy.${out:+
+$out}"
+    fi
     [ -n "$out" ] || continue
     # A check is bounded in BYTES as well as time. One that dumps a log would push the rules over
     # the host's cap and take the whole payload with it (peer review, 2026-09-22): say what is
@@ -90,7 +107,7 @@ emit_site_checks() {
       out="$(printf '%s' "$out" | head -c "$SITE_CHECK_CAP")
 … [cut by bd-prime-hook at $SITE_CHECK_CAP of $n bytes — a check should say what is wrong, not dump it]"
     fi
-    echo "## ⚠ SITE CHECK — $(basename "$f" .sh)"
+    echo "## ⚠ SITE CHECK — $name"
     echo '```'
     echo "$out"
     echo '```'

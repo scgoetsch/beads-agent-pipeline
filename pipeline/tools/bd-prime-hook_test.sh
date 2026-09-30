@@ -167,6 +167,30 @@ out=$(run_hook)
 chk "a 12 KB check is cut and the cut is marked"      "$(grep -c 'cut by bd-prime-hook at 1500 of' <<<"$out")" 1
 chk "...its first bytes are kept"                      "$(grep -c 'DUMP-START sentinel' <<<"$out")" 1
 chk "...and the payload still fits the budget"         "$(( $(printf '%s' "$out" | wc -c | tr -d ' ') <= 10000 ))" 1
+rm -f "$T/ws/.claude/site-checks/dump.sh"
+# A check the bound kills has usually printed nothing, and `timeout` exits 124 -- both discarded,
+# so the kill read as health. A check without +x was skipped by `[ -x ] || continue` the same
+# way. Both are named now (cairn review, 2026-09-30). BD_PRIME_CHECK_TIMEOUT=1 keeps this fast.
+printf '#!/usr/bin/env bash\nsleep 30\n'                                > "$T/ws/.claude/site-checks/hang.sh"
+printf '#!/usr/bin/env bash\necho "PARTIAL sentinel"; sleep 30\n'      > "$T/ws/.claude/site-checks/slow.sh"
+printf '#!/usr/bin/env bash\necho "NEVER sentinel"\n'                  > "$T/ws/.claude/site-checks/noexec.sh"
+chmod +x "$T/ws/.claude/site-checks/hang.sh" "$T/ws/.claude/site-checks/slow.sh"
+chmod -x "$T/ws/.claude/site-checks/noexec.sh"
+out=$(cd "$T/ws" && BD_PRIME_CHECK_TIMEOUT=1 PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh 2>/dev/null)
+chk "a check killed at the bound is named"             "$(grep -c 'SITE CHECK — hang' <<<"$out")" 1
+chk "...and says it was killed, not healthy"           "$(grep -c 'KILLED after 1 s' <<<"$out")" 2
+chk "...its partial output is kept"                    "$(grep -c 'PARTIAL sentinel' <<<"$out")" 1
+chk "a check without +x is named as NOT RUN"           "$(grep -c 'SITE CHECK — noexec: NOT RUN' <<<"$out")" 1
+chk "...and it did not run"                            "$(grep -c 'NEVER sentinel' <<<"$out")" 0
+chk "...the fix is spelled out"                        "$(grep -c 'chmod +x .claude/site-checks/noexec.sh' <<<"$out")" 1
+chk "a healthy check is still silent beside them"      "$(grep -c 'SITE CHECK — quiet' <<<"$out")" 0
+rm -f "$T/ws/.claude/site-checks/hang.sh" "$T/ws/.claude/site-checks/slow.sh"
+out=$(cd "$T/ws" && PATH="$T/bin:$T/notimeout" bash .claude/bd-prime-hook.sh 2>/dev/null)
+chk "no timeout: a check without +x is still named"    "$(grep -c 'SITE CHECK — noexec: NOT RUN' <<<"$out")" 1
+rm -rf "$T/ws/.claude/site-checks"
+mkdir -p "$T/ws/.claude/site-checks"
+out=$(run_hook)
+chk "an empty site-checks/ dir raises no alarm"        "$(grep -c 'SITE CHECK' <<<"$out")" 0
 rm -rf "$T/ws/.claude/site-checks"
 
 echo "### this suite's no-jq branch: run it again with jq hidden, and require it to pass"
