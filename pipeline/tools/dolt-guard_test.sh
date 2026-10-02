@@ -61,7 +61,7 @@ run_guard() {  # run_guard WS PORT BD -> prints stderr to $TMP/err, returns rc
       # TRIES=12 keeps the suite fast; the real default is 40 (10s).
       BD_DOLT_GUARD_WS="$1" BD_DOLT_GUARD_PORT="$2" BD_DOLT_GUARD_BD="$3" \
       BD_DOLT_GUARD_TRIES=12 \
-        bd_dolt_guard ) 2>"$TMP/err"
+        bd_dolt_guard ) 2>"${GUARD_ERR:-$TMP/err}"
 }
 
 echo "dolt-guard acceptance suite"
@@ -181,13 +181,26 @@ s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port7)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
 exit 0")
 racers=()
-for _ in 1 2 3 4; do run_guard "$ws7" "$port7" "$stub_race" & racers+=("$!"); done
+for i in 1 2 3 4; do GUARD_ERR="$TMP/err-7-$i" run_guard "$ws7" "$port7" "$stub_race" & racers+=("$!"); done
 # Wait only on the racers: a bare `wait` also waits on the still-sleeping
 # listeners this suite started, which hangs it for their full 600s.
-wait "${racers[@]}"
+race_rcs=""; race_t0=$SECONDS
+for p in "${racers[@]}"; do wait "$p"; race_rcs="$race_rcs$?"; done
+race_secs=$((SECONDS - race_t0))
 LISTENERS+=("$(pgrep -f "127.0.0.1',$port7" | head -1)")
 check "bd dolt start ran exactly once across 4 shells" "$(wc -l <"$TMP/calls-7" 2>/dev/null | tr -d ' ')" "1"
 check "port ends up listening" "$([ -n "$(ss -ltnH "sport = :$port7")" ] && echo up || echo down)" "up"
+# The stub's listener, like the real `dolt sql-server`, is a child of
+# `bd dolt start` and outlives it. If it inherits the guard's lock fd the lock
+# stays held for the server's whole life, and every shell that was waiting
+# burns the full `flock -w 30` and then reports a FAILED that is not true.
+check "every racer returns 0 (the losers find the port up)" "$race_rcs" "0000"
+check "no racer reports FAILED" "$(cat "$TMP"/err-7-* 2>/dev/null | grep -c FAILED)" "0"
+[ "$race_secs" -lt 15 ] \
+    && ok "the losers are released when the start finishes, not at the 30s timeout (${race_secs}s)" \
+    || bad "the losers are released when the start finishes, not at the 30s timeout" "racers took ${race_secs}s"
+check "the started server does not hold the guard's lock" \
+    "$(flock -n "$ws7/.beads/.dolt-guard.lock" true && echo free || echo held)" "free"
 echo
 
 # ---------------------------------------------------------------- 9

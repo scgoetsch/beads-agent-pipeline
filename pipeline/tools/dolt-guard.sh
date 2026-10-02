@@ -125,9 +125,13 @@ bd_dolt_guard() {
         return 1
     fi
 
+    # `{lockfd}>&-` closes the lock for the child only. Without it the daemonised
+    # server inherits the fd, and since flock belongs to the open file description
+    # the lock stays held for the server's whole life: every shell waiting above
+    # burns the full 30s and then reports a FAILED that is not true.
     if __bd_dolt_guard_listening "$port"; then
         :  # another shell won the race while we waited — nothing to do
-    elif ( cd "$ws" && "$bd_bin" dolt start ) >/dev/null 2>&1 && __bd_dolt_guard_await "$port"; then
+    elif ( cd "$ws" && "$bd_bin" dolt start ) {lockfd}>&- >/dev/null 2>&1 && __bd_dolt_guard_await "$port"; then
         __bd_dolt_guard_say "$ws" "started dolt server on :$port"
     else
         __bd_dolt_guard_say "$ws" "FAILED to start dolt server on :$port — bd writes will NOT land; run: (cd $ws && bd dolt start)"

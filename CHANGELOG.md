@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`dolt-guard.sh` no longer leaks its lock into the server it starts.** The guard ran
+  `bd dolt start` with its `flock` descriptor still open, so the daemonised `dolt sql-server`
+  inherited it and held the lock for its whole life. A shell already waiting on the lock (two
+  shells opening together at boot, or parallel tool calls) burned the full 30 s and then logged
+  `FAILED: timed out waiting for another shell to start dolt` while the server was up — a false
+  alarm from the guard whose job is to make that line trustworthy. The descriptor is now closed
+  for the child only. Seen on 2026-10-02 after a WSL restart. Four new checks in the race case of
+  `tools/dolt-guard_test.sh` (every racer returns 0, none says FAILED, the losers are released
+  promptly, the lock is free afterwards); all four fail on the old guard, and the suite drops
+  from about 33 s to 5 s because it had been sitting through the same timeout.
 - Two silent paths in the SessionStart hook's site checks are named. A check that the 20 s bound
   killed had usually printed nothing yet, and `timeout`'s exit 124 went to the discarded stderr, so
   the kill read as a healthy check; the payload now says KILLED, before any partial output, so the
