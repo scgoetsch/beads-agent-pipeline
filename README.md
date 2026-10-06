@@ -266,32 +266,25 @@ workflow names, verified against that release's `checksums.txt`, into a director
 the no-bd probe can hide it; the official installer refuses Git Bash and floats to the current
 release. Each job writes its box line, the RESULT line and every FAIL to the run summary and keeps
 the log as an artifact; after a failure it also keeps the installer's own output and every suite's
-full log, since the self-test shows only a failing suite's last 35 lines. Measured on 2026-10-06
-with bd 1.3.1: Ubuntu 24.04 passes all 127 checks with bd and without; macOS 26 fails 20 and
-Windows Server 2025 fails 29, so those two jobs are `continue-on-error` until they are green, and
-the badge above follows Ubuntu. What fails there, by cause: BSD `wc -l` pads its count, so every `$(… | wc -l)`
-comparison in the suites and in `selftest.sh` itself reads the padding (macOS); `mktemp -d`
-returns `/var/…` on macOS and `/tmp/…` on Git Bash while the hooks resolve the physical path
-(`/private/var/…`, `/c/Users/…/Temp/…`), so the portability suite's relocated-clone checks
-compare spellings (both); the memory-curation gate needs GNU `date -d` and says so (macOS); the
-sweep suite's binary-file case fails under BSD and MSYS grep (both); and on Windows alone MSYS
-`ln -s` copies the file so every CLAUDE.md symlink check fails, native Python cannot open MSYS
-paths, and the stop-hook and prime-hook suites' bare PATH loses a directory the hooks need (exit
-127). The installer's own exit 1 on both boxes is the same causes seen once more: its verify step
-runs the portability suite (and on Windows the agent-docs guard), which fail as above, and that
-exit cascades into six self-test assertions about installer exit codes. The bd-prime-hook suite
-has further cases on both boxes, and the Pi event suite fails on macOS under Node 24, for reasons
-not yet read; the `suite-logs` artifact a failed job keeps has each suite in full.
+full log, since the self-test shows only a failing suite's last 35 lines. All four jobs are gates.
+The first measurement (2026-10-06, bd 1.3.1) was Ubuntu 127/127, macOS 107 passed / 20 failed and
+Windows 98 / 29; five batches later every job passes all 135 checks, and the CHANGELOG lists each
+cause as it was measured — BSD `wc` padding, two spellings of one directory, GNU-only `date`
+flags, the CR LF a native Windows Python and jq append, a Git Bash `ln -s` that copies, symlinked
+binaries that lose their DLLs, and what each box's grep calls binary. Three suites SKIP a case by
+name where the box cannot build it (a real `timeout`, a `chmod -x` that takes effect, a tab in a
+filename), and `audit_wikilinks_test.sh` SKIPs whole under a native Windows Python, which cannot
+run its shell stub for bd.
 
 ## Requirements
 
 **Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
 self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). The opt-in Pi
 adapter was exercised with a real trusted Pi CLI 0.87.1 (`@earendil-works/pi-coding-agent`) on
-Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS and
-native Windows run in the Actions matrix and do not pass yet** (the causes are under *Verify it*);
-on macOS you will want bash from Homebrew. Run `./selftest.sh` first on any other platform and file
-what fails.
+Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS 26 and
+native Windows (Server 2025, Git Bash) pass the same self-test in the Actions matrix** (see
+*Verify it*); on macOS you will want bash from Homebrew. Run `./selftest.sh` first on any other
+platform and file what fails.
 
 | | | |
 | --- | --- | --- |
@@ -364,10 +357,11 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
   `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
 - **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
   install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **The self-test passes on Linux only: WSL2, the Docker self-test on a bare Ubuntu 24.04, and
-  the Actions job on ubuntu-latest. macOS and native Windows run in the same matrix and fail**
-  (20 and 29 checks on 2026-10-06; the causes are listed under *Verify it*), so their jobs are
-  allowed to fail until green. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
+- **Platform coverage is what the Actions matrix runs: Ubuntu 24.04 (with bd and without),
+  macOS 26 and Windows Server 2025 under Git Bash, plus WSL2 and the Docker self-test on a bare
+  Ubuntu.** Not covered: a Windows box that cannot create symlinks (the runner can; the installer's
+  pointer-file fallback is exercised on Linux instead), PowerShell or cmd as the shell, and zsh.
+  `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
   uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's
   `/bin/bash` 3.2; the installer writes only `~/.bashrc`.
 - **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`
