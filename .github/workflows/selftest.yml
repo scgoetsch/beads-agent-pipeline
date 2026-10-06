@@ -1,0 +1,187 @@
+# The self-test, on the three hosted runner platforms.
+#
+# ./selftest.sh installs the pipeline into throwaway repos and runs every shipped guard's suite
+# there. test/selftest-in-container.sh does that on a clean Ubuntu in Docker; this workflow does
+# it on ubuntu-latest, macos-latest (Homebrew bash: the stock /bin/bash is 3.2, and
+# tools/dolt-guard.sh needs bash ≥ 4.1) and windows-latest (Git Bash, which is what `shell: bash`
+# resolves to there), plus an Ubuntu run with no bd at all for the installer's required-command
+# branch. Each job prints one `box:` line, the RESULT line and every FAIL into the run summary and
+# keeps the full log as an artifact.
+#
+# bd comes from the release archive named by BD_VERSION, verified against that release's
+# checksums.txt, into a directory of its own ($HOME/bd-bin): the self-test's no-bd probe hides
+# every PATH directory carrying a bd executable and needs git and python3 to survive that. The
+# official installer is not used — it refuses Git Bash and floats to the current release, so a
+# bd release could break this workflow with no change here. Bump BD_VERSION on purpose, or pass
+# bd_version to a manual run.
+#
+# Windows is allowed to fail (continue-on-error) while its known failures are worked: the first
+# native run (2026-10-06, Git Bash 5.2, Python 3.14) failed six suites — MSYS `ln -s` copies the
+# file so the CLAUDE.md symlink checks fail, native Python cannot open MSYS paths, the locale pin
+# finds no C.UTF-8, and two suites lose PATH entries or count glyph rows under MSYS grep. Flip
+# allow-failure to false once the Windows job is green; a green workflow with Windows red is the
+# honest state until then, and the summary says which suites.
+name: self-test
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      bd_version:
+        description: bd release to install (default is BD_VERSION in the workflow)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BD_VERSION: ${{ inputs.bd_version || '1.3.1' }}
+
+jobs:
+  selftest:
+    name: ${{ matrix.key }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.allow-failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: ubuntu
+            os: ubuntu-latest
+            bd: true
+            allow-failure: false
+          - key: ubuntu-no-bd
+            os: ubuntu-latest
+            bd: false
+            allow-failure: false
+          - key: macos
+            os: macos-latest
+            bd: true
+            allow-failure: false
+          - key: windows
+            os: windows-latest
+            bd: true
+            allow-failure: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: "macOS: bash ≥ 4 and ripgrep from Homebrew"
+        if: runner.os == 'macOS'
+        run: |
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install bash ripgrep
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: "Linux: ripgrep (optional; sweep_test's bare-grep hazard demonstration)"
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+
+      - name: "Windows: ripgrep, and a python3 name if the image offers only python"
+        if: runner.os == 'Windows'
+        run: |
+          choco install ripgrep -y --no-progress >/dev/null
+          if ! command -v python3 >/dev/null 2>&1; then
+            mkdir -p "$HOME/shims"
+            printf '#!/usr/bin/env bash\nexec python "$@"\n' > "$HOME/shims/python3"
+            chmod +x "$HOME/shims/python3"
+            echo "$(cygpath -w "$HOME/shims")" >> "$GITHUB_PATH"
+            echo "python3 shim -> $(command -v python)"
+          fi
+
+      - name: "bd from the release archive, checksum-verified, in its own PATH directory"
+        if: matrix.bd
+        run: |
+          V=$BD_VERSION
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)         asset=beads_${V}_linux_amd64.tar.gz ;;
+            Linux-aarch64)        asset=beads_${V}_linux_arm64.tar.gz ;;
+            Darwin-arm64)         asset=beads_${V}_darwin_arm64.tar.gz ;;
+            Darwin-x86_64)        asset=beads_${V}_darwin_amd64.tar.gz ;;
+            MINGW*|MSYS*|CYGWIN*) asset=beads_${V}_windows_amd64.zip ;;
+            *) echo "no bd release asset for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          base=https://github.com/gastownhall/beads/releases/download/v$V
+          dl=$HOME/bd-download; bin=$HOME/bd-bin
+          mkdir -p "$dl" "$bin" && cd "$dl"
+          curl -fsSL --retry 3 -o checksums.txt "$base/checksums.txt"
+          curl -fsSL --retry 3 -o "$asset" "$base/$asset"
+          want=$(awk -v a="$asset" '$2 == a { print $1 }' checksums.txt)
+          [ -n "$want" ] || { echo "checksums.txt has no line for $asset" >&2; exit 1; }
+          if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$asset" | awk '{print $1}')
+          else got=$(shasum -a 256 "$asset" | awk '{print $1}'); fi
+          [ "$got" = "$want" ] || { echo "sha256 MISMATCH for $asset: got $got, release says $want" >&2; exit 1; }
+          echo "sha256 OK  $asset"
+          mkdir -p extracted
+          case $asset in
+            *.zip)    py=$(command -v python3 || command -v python)
+                      "$py" -I -m zipfile -e "$asset" extracted && mv -f extracted/bd.exe "$bin/" ;;
+            *.tar.gz) tar -xzf "$asset" -C extracted && mv -f extracted/bd "$bin/" && chmod +x "$bin/bd" ;;
+          esac
+          case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) echo "$(cygpath -w "$bin")" >> "$GITHUB_PATH" ;;
+            *)                    echo "$bin" >> "$GITHUB_PATH" ;;
+          esac
+          "$bin/bd" --version
+
+      - name: "bd-memgraph (optional; with it present the pre-commit memory-graph stanza runs)"
+        if: matrix.bd && runner.os != 'Windows'
+        run: |
+          git clone -q --depth 1 https://github.com/scgoetsch/bd-memgraph "$HOME/bd-memgraph"
+          mkdir -p "$HOME/memgraph-bin"
+          ln -sf "$HOME/bd-memgraph/bd-memgraph.py" "$HOME/memgraph-bin/bd-memgraph"
+          echo "$HOME/memgraph-bin" >> "$GITHUB_PATH"
+          "$HOME/memgraph-bin/bd-memgraph" --help >/dev/null
+
+      - name: git identity for the throwaway repos
+        run: |
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+
+      - name: box
+        run: |
+          has() { command -v "$1" >/dev/null 2>&1 && echo yes || echo no; }
+          { printf 'box: %s %s  bash %s  git %s  python3 %s  bd %s  bd-memgraph %s\n' \
+              "$(uname -s)" "$(uname -r)" "$BASH_VERSION" "$(git --version | awk '{print $3}')" \
+              "$(python3 --version 2>&1 | awk '{print $2}')" \
+              "$(bd --version 2>/dev/null | head -1 || echo absent)" "$(has bd-memgraph)"
+            printf 'optional: jq %s  rg %s  ss %s  flock %s  setsid %s  timeout %s  iconv %s  node %s  utf8 locale: %s\n' \
+              "$(has jq)" "$(has rg)" "$(has ss)" "$(has flock)" "$(has setsid)" "$(has timeout)" "$(has iconv)" \
+              "$(node --version 2>/dev/null || echo no)" \
+              "$(locale -a 2>/dev/null | grep -i -E '^c\.utf-?8$|^en_US\.utf-?8$' | tr '\n' ' ' || echo none)"
+            printf 'resolved: bash=%s python3=%s bd=%s  CR bytes in selftest.sh: %s\n' \
+              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v bd || echo none)" \
+              "$(grep -c $'\r' selftest.sh || true)"
+          } | tee box.txt
+
+      - name: ./selftest.sh
+        run: ./selftest.sh 2>&1 | tee selftest.log
+
+      - name: summary
+        if: always()
+        run: |
+          strip() { perl -pe 's/\e\[[0-9;]*m//g'; }
+          { echo "### ${{ matrix.key }} (${{ matrix.os }})"
+            echo
+            echo '```'
+            cat box.txt 2>/dev/null || true
+            grep -E 'RESULT:' selftest.log 2>/dev/null | strip | tail -1 \
+              || echo "no RESULT line: the self-test did not run to its end"
+            grep -E 'FAIL|^  SKIP' selftest.log 2>/dev/null | strip | head -40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-${{ matrix.key }}
+          path: selftest.log
+          if-no-files-found: ignore
