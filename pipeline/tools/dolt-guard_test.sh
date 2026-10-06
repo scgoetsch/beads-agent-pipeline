@@ -41,7 +41,12 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
 
 start_listener() {  # start_listener PORT -> binds it for the life of the suite
     local port="$1"
-    setsid python3 -c "
+    # setsid detaches the listener from the suite's process group; stock macOS and Git Bash have
+    # none, and `setsid python3` there was "command not found" -- the suite then died at "could
+    # not bind test port" (Actions macos and windows jobs, 2026-10-06). Without it the listener
+    # is an ordinary background child; cleanup kills it by pid either way.
+    local detach=""; command -v setsid >/dev/null 2>&1 && detach=setsid
+    $detach python3 -c "
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port)); s.listen(1); time.sleep(600)" </dev/null >/dev/null 2>&1 &
@@ -63,6 +68,12 @@ make_bd() {  # make_bd NAME BODY -> path to a stub bd
     { echo '#!/usr/bin/env bash'; echo "$2"; } >"$p"; chmod +x "$p"; echo "$p"
 }
 
+# A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
+# `ln -s` copies the binary without the DLLs beside it and the copy dies with 127; an exec
+# wrapper works everywhere (Actions windows job, 2026-10-06).
+shim() { local b; b=$(command -v "$2" 2>/dev/null) || return 1
+         printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$1/$2" && chmod +x "$1/$2"; }
+
 run_guard() {  # run_guard WS PORT BD -> prints stderr to $TMP/err, returns rc
     ( BD_DOLT_GUARD_NORUN=1 . "$GUARD"
       # TRIES=12 keeps the suite fast; the real default is 40 (10s).
@@ -82,7 +93,7 @@ stub_never=$(make_bd never "touch '$TMP/CALLED-1'; exit 0")
 run_guard "$ws_missing" 29991 "$stub_never"; rc=$?
 check "returns 0 when the workspace does not exist" "$rc" "0"
 check "does not invoke bd" "$([ -e "$TMP/CALLED-1" ] && echo called || echo no)" "no"
-check "stays silent" "$(wc -c <"$TMP/err")" "0"
+check "stays silent" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
 echo
 
 # ---------------------------------------------------------------- 1b
@@ -92,7 +103,7 @@ stub_never1b=$(make_bd never1b "touch '$TMP/CALLED-1b'; exit 0")
 run_guard "$ws1b" "$port1b" "$stub_never1b"; rc=$?
 check "returns 0 with no server listening" "$rc" "0"
 check "does not invoke bd" "$([ -e "$TMP/CALLED-1b" ] && echo called || echo no)" "no"
-check "stays silent (it used to say bd writes will NOT land)" "$(wc -c <"$TMP/err")" "0"
+check "stays silent (it used to say bd writes will NOT land)" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
 echo
 
 # ---------------------------------------------------------------- 2
@@ -103,7 +114,7 @@ stub_never2=$(make_bd never2 "touch '$TMP/CALLED-2'; exit 0")
 run_guard "$ws2" "$port2" "$stub_never2"; rc=$?
 check "returns 0" "$rc" "0"
 check "never shells out to bd" "$([ -e "$TMP/CALLED-2" ] && echo called || echo no)" "no"
-check "stays silent" "$(wc -c <"$TMP/err")" "0"
+check "stays silent" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
 echo
 
 # ---------------------------------------------------------------- 3
@@ -219,7 +230,7 @@ echo "no listener prober on PATH (no ss, lsof, netstat): Linux reads /proc/net/t
 # empty port must not (a start attempted). Without /proc/net/tcp it must still say it cannot probe.
 NOPROBE="$TMP/noprobe"; mkdir -p "$NOPROBE"
 for t in bash sh date sleep cat grep mkdir touch dirname awk; do
-    b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOPROBE/$t"
+    shim "$NOPROBE" "$t" || true
 done
 ws9=$(make_ws ws9); port9=$(free_port)
 start_listener "$port9" || { echo "could not bind test port"; exit 1; }
@@ -228,7 +239,7 @@ PATH="$NOPROBE" run_guard "$ws9" "$port9" "$stub_never9"; rc=$?
 check "returns 0" "$rc" "0"
 [ ! -e "$TMP/CALLED-9" ] && ok "bd dolt start NOT called with a listener up" || bad "bd dolt start NOT called" "it was"
 if [ -r /proc/net/tcp ]; then
-    check "Linux: the kernel table answered, so nothing was said" "$(wc -c <"$TMP/err")" "0"
+    check "Linux: the kernel table answered, so nothing was said" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
     ws9b=$(make_ws ws9b); port9b=$(free_port)
     stub_start9b=$(make_bd start9b "touch '$TMP/CALLED-9b'; exit 1")
     PATH="$NOPROBE" run_guard "$ws9b" "$port9b" "$stub_start9b"; rc=$?

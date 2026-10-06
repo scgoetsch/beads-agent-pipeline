@@ -61,7 +61,7 @@ echo "### --apply writes exactly the planned edits"
 stub_bd AB; rm -f "$T/remembered"
 run --apply >/dev/null; rc=$?
 chk "apply exits 0"                            "$rc" 0
-chk "one memory rewritten"                     "$(wc -l < "$T/remembered")" 1
+chk "one memory rewritten"                     "$(wc -l < "$T/remembered" | tr -d ' ')" 1
 chk "the rewrite keeps the issue link and prunes the dead one" \
     "$(grep -c '\[\[AB-1a2b\]\].*gone-key (memory pruned)' "$T/remembered")" 1
 

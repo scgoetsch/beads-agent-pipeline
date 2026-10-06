@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **The suites and the self-test hold on macOS and Git Bash where they held only on Linux**,
+  measured by the Actions matrix on 2026-10-06 and fixed at the cause. BSD `wc` pads its count,
+  so every `wc -l` / `wc -c` comparison in `selftest.sh`, `dolt-guard_test.sh`,
+  `audit_wikilinks_test.sh` and `bd-prime-hook_test.sh` strips it. `hook_portability_test.sh`
+  compares the relocated clone's path in canonical form (`pwd -P`, and `cygpath -m` under MSYS):
+  `mktemp` says `/var/…` on macOS and `/tmp/…` on Git Bash while the hooks resolve
+  `/private/var/…` and `/c/Users/…/Temp/…`; it also feeds `settings.json` to Python on stdin
+  rather than as a path inside `-c`, which a native Windows Python cannot open. The
+  memory-curation gate computes the day gap in shell arithmetic (civil date to day number,
+  checked against GNU date) instead of `date -d`, which BSD date lacks, so the gate runs on
+  macOS. `dolt-guard_test.sh` starts its listener without `setsid` where the box has none (stock
+  macOS, Git Bash) instead of dying at "could not bind test port". The four suites that built a
+  private PATH out of symlinks to tools write exec wrappers instead: MSYS `ln -s` copies a binary
+  away from its DLLs and the copy exits 127. `bd-prime-hook_test.sh` SKIPs, by name, the cases
+  that need a real `timeout` or a `chmod -x` that takes effect; `check-no-agent-cache-paths_test.sh`
+  SKIPs its tab-in-a-filename case where the filesystem refuses the name; `bd-prerun-hook_test.sh`
+  prints the hook's stderr under a failing case. `sweep.sh` now decides what grep will not search
+  by asking the scanner itself — the same binary, flags and locale, a pattern every line matches,
+  printed lines counted against the file's — instead of running iconv over the bytes: GNU grep on
+  glibc and ugrep suppress a line carrying a malformed byte under a UTF-8 locale (and exit 0
+  regardless), BSD grep and GNU grep on the MSYS runtime print it, so the iconv predicate
+  overclaimed "NOT SEARCHED" on every box of the second kind. `sweep_test.sh` measures that
+  before its binary-file case and SKIPs it, loudly and counted, where the box's grep has no such
+  hazard — as it already said it did where no UTF-8 locale exists, except that SKIP then went on
+  and ran the case anyway.
 - **The self-test runs in GitHub Actions on ubuntu, macos and windows.**
   `.github/workflows/selftest.yml` runs `./selftest.sh` on every push: `ubuntu-latest` with bd and
   without, `macos-latest` with bash from Homebrew (the stock `/bin/bash` is 3.2) and

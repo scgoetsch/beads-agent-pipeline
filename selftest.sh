@@ -105,19 +105,20 @@ git -C "$G" config user.email t@example.com; git -C "$G" config user.name t
 printf 'see ![f](%s)\n' "$BADP" > "$G/report.md"
 git -C "$G" add report.md
 git -C "$G" commit -qm "should be blocked" >/dev/null 2>&1
-chk "commit carrying a cache path is rejected" "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "0"
+# BSD wc pads its count ("       0"), so every count below is stripped before the comparison.
+chk "commit carrying a cache path is rejected" "$(git -C "$G" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "0"
 # A guard that blocks everything is not a guard. The clean path must still work.
 printf 'see ![f](results/p.png)\n' > "$G/report.md"
 git -C "$G" add report.md
 git -C "$G" commit -qm "clean" >/dev/null 2>&1
-chk "a clean commit still succeeds"          "$(git -C "$G" log --oneline 2>/dev/null | wc -l)" "1"
+chk "a clean commit still succeeds"          "$(git -C "$G" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "1"
 # And the payload itself -- AGENTS.md, the docs, the tools, this guard's own suite -- must commit
 # clean under the guards it installs. The first version of the template spelled out a cache path
 # as its "wrong" example, and the suite held the literals it tests with, so the first commit that
 # touched either was blocked by the pipeline itself.
 git -C "$G" add -A
 git -C "$G" commit -qm "the whole installed payload" >"$G/.payload.log" 2>&1
-n=$(git -C "$G" log --oneline 2>/dev/null | wc -l)
+n=$(git -C "$G" log --oneline 2>/dev/null | wc -l | tr -d ' ')
 chk "the whole installed payload commits clean under its own guards" "$n" "2"
 [ "$n" = "2" ] || sed -n '1,8p' "$G/.payload.log" | sed 's/^/        /'
 # Partial staging must not let a clean working copy launder a bad index.
@@ -162,11 +163,11 @@ if PATH="$bare_path" command -v git >/dev/null 2>&1 && PATH="$bare_path" command
   printf 'see ![f](%s)\n' "$BADP" > "$H/report.md"
   git -C "$H" add report.md
   PATH="$bare_path" git -C "$H" commit -qm "should be blocked" >/dev/null 2>&1
-  chk "no-bd: commit carrying a cache path is rejected" "$(git -C "$H" log --oneline 2>/dev/null | wc -l)" "0"
+  chk "no-bd: commit carrying a cache path is rejected" "$(git -C "$H" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "0"
   printf 'see ![f](results/p.png)\n' > "$H/report.md"
   git -C "$H" add report.md
   PATH="$bare_path" git -C "$H" commit -qm "clean" >/dev/null 2>&1
-  chk "no-bd: a clean commit still succeeds"     "$(git -C "$H" log --oneline 2>/dev/null | wc -l)" "1"
+  chk "no-bd: a clean commit still succeeds"     "$(git -C "$H" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "1"
 else
   bad "no-bd probe could not run: hiding bd from PATH also hides git or python3 — move bd to its own directory"
 fi
@@ -398,9 +399,9 @@ rm -rf "$W"
 printf '\n\033[1m### --dry-run and --check touch nothing\033[0m\n'
 D=$(mktemp -d); git -C "$D" init -q
 "$SRC/install.sh" --dry-run "$D" >/dev/null 2>&1
-chk "dry-run wrote no files" "$(ls -A "$D" | grep -v '^\.git$' | wc -l)" "0"
+chk "dry-run wrote no files" "$(ls -A "$D" | grep -v '^\.git$' | wc -l | tr -d ' ')" "0"
 "$SRC/install.sh" --check "$D" >/dev/null 2>&1
-chk "check wrote no files" "$(ls -A "$D" | grep -v '^\.git$' | wc -l)" "0"
+chk "check wrote no files" "$(ls -A "$D" | grep -v '^\.git$' | wc -l | tr -d ' ')" "0"
 rm -rf "$D"
 
 printf '\n\033[1mRESULT: %d passed, %d failed\033[0m\n\n' "$pass" "$fail"

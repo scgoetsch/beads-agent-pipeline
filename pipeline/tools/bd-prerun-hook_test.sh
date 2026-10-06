@@ -17,9 +17,11 @@ set -uo pipefail
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.claude/bd-prerun-hook.sh"
 PASS=0; FAIL=0
+ERRF=$(mktemp)   # the hook's stderr for the last run, shown when a case fails
 
 ok()  { PASS=$((PASS+1)); printf '  \033[32m/\033[0m %s\n' "$1"; }
-bad() { FAIL=$((FAIL+1)); printf '  \033[31mX\033[0m %s\n' "$1"; printf '      %s\n' "${2:-}"; }
+bad() { FAIL=$((FAIL+1)); printf '  \033[31mX\033[0m %s\n' "$1"; printf '      %s\n' "${2:-}"
+        [ -s "$ERRF" ] && sed 's/^/      hook stderr: /' "$ERRF" | tail -3; }
 
 # run_hook <command-string> -> RC
 run_hook() {  # HOOK_SID=<id> adds the session_id Claude Code sends with every hook call
@@ -29,7 +31,7 @@ import sys, json, os
 d = {"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}
 if os.environ.get("HOOK_SID"): d["session_id"] = os.environ["HOOK_SID"]
 print(json.dumps(d))
-' | bash "$HOOK" >/dev/null 2>&1
+' | bash "$HOOK" >/dev/null 2>"$ERRF"
     RC=$?
 }
 
@@ -143,7 +145,7 @@ export BD_SCRIPT_DIRS_RE=scripts   # this clone's .claude/bd-prerun.conf may tur
 # that says "● blocked". The old fixture was "● proj-1 P2 ..." — a row the hook matched for the
 # wrong reason, which is how `grep -c "●"` survived here (2026-09-22).
 # This gate had no coverage at all while three documents said this suite covered it.
-STUB=$(mktemp -d); trap 'rm -rf "$STUB"' EXIT
+STUB=$(mktemp -d); trap 'rm -rf "$STUB" "$ERRF"' EXIT
 cat > "$STUB/bd" <<'BDSTUB'
 #!/usr/bin/env bash
 case "$*" in

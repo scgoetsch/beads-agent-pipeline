@@ -163,11 +163,24 @@ printf 'the phrase %s is right here in plain prose \xff\n' "$CANARY" > "$BINDIR/
 # assertion below inverts for a reason that has nothing to do with the detector (found by the
 # container self-test, 2026-10-06). Pin a UTF-8 locale for this case; glibc ships C.UTF-8.
 UTF8=$(locale -a 2>/dev/null | grep -iE '^C\.utf-?8$' | head -1)
-[ -n "$UTF8" ] || skipc "no C.UTF-8 locale on this box — the binary-file case needs a UTF-8 locale"
-out=$(LC_ALL=${UTF8:-C} "$SWEEP" --docs "$CANARY" 2>&1); rc=$?
+# ...and only a scanner that SUPPRESSES such a line has the hazard to demonstrate. GNU grep on
+# glibc and ugrep do; BSD grep (macOS) and GNU grep on the MSYS runtime print the line, and there
+# the sweep rightly says nothing (Actions macos and windows jobs, 2026-10-06). Ask the grep
+# sweep.sh resolves, with the scan's own flags, and count PRINTED lines: grep exits 0 either way.
+GREP_BIN=$(type -P grep)
+hazard=""
+[ -n "$UTF8" ] && hazard=$(printf 'probe \xff\n' | LC_ALL=$UTF8 "$GREP_BIN" -nHI --binary-files=without-match -e probe 2>/dev/null | wc -l | tr -d ' ')
+if [ -z "$UTF8" ]; then
+  skipc "no C.UTF-8 locale on this box — the binary-file case needs a UTF-8 locale (5 checks not run)"
+  rm -rf "$BINDIR"
+elif [ "$hazard" != 0 ]; then
+  skipc "$("$GREP_BIN" --version 2>/dev/null | head -1) searches a line with a malformed byte as text under $UTF8 — no binary-skip hazard on this box (5 checks not run)"
+  rm -rf "$BINDIR"
+else
+out=$(LC_ALL=$UTF8 "$SWEEP" --docs "$CANARY" 2>&1); rc=$?
 chk "exit 0"                  "$rc" 0
 chk "grep -a proves the phrase is really in the file" \
-    "$(/usr/bin/grep -ac "$CANARY" "$BINDIR/canary.md")" 1
+    "$(/usr/bin/grep -ac "$CANARY" "$BINDIR/canary.md" | tr -d ' ')" 1
 chk "sweep finds 0 hits"      "$(printf '%s' "$out" | /usr/bin/grep -c '^0 hit(s)')" 1
 chk "but SAYS it skipped a binary file" \
     "$(printf '%s' "$out" | /usr/bin/grep -c 'NOT SEARCHED because grep classifies them as binary')" 1
@@ -180,9 +193,10 @@ chk "but SAYS it skipped a binary file" \
 root_bin() { printf '%s' "$1" | awk '$1=="<root>" {print $4; exit}'; }
 bin_with=$(root_bin "$out")
 rm -rf "$BINDIR"
-out_without=$(LC_ALL=${UTF8:-C} "$SWEEP" --docs "$CANARY" 2>&1)
+out_without=$(LC_ALL=$UTF8 "$SWEEP" --docs "$CANARY" 2>&1)
 bin_without=$(root_bin "$out_without")
 chk "the canary itself is what was counted" "$(( ${bin_with:-0} - ${bin_without:-0} ))" 1
+fi
 
 echo "### with no such file, the binary notice is NOT printed"
 chk "no false binary notice" \

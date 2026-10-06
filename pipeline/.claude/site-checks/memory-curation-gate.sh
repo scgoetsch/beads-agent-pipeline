@@ -60,11 +60,28 @@ else
 fi
 
 today=${BD_CURATION_TODAY:-$(date +%Y-%m-%d)}
-lastep=$(date -d "$last" +%s 2>/dev/null) && nowep=$(date -d "$today" +%s 2>/dev/null) || {
-  echo "memory curation gate: this date(1) cannot parse '$last' / '$today' (GNU date -d needed) — the gate did NOT run."
+# Days between two YYYY-MM-DD dates in shell arithmetic. `date -d` is GNU; BSD date (macOS)
+# spells it `-j -f`, and the gate used to say "GNU date -d needed" and not run there (Actions
+# macos job, 2026-10-06). Civil date to day number, valid for any proleptic Gregorian date.
+civil_days() {
+  local y=${1%%-*} m=${1#*-} d=${1##*-}; m=${m%-*}
+  case "$y$m$d" in ''|*[!0-9]*) return 1 ;; esac
+  [ ${#y} -eq 4 ] && [ ${#m} -eq 2 ] && [ ${#d} -eq 2 ] || return 1
+  y=$((10#$y)); m=$((10#$m)); d=$((10#$d))
+  [ "$m" -ge 1 ] && [ "$m" -le 12 ] && [ "$d" -ge 1 ] && [ "$d" -le 31 ] || return 1
+  [ "$m" -le 2 ] && y=$((y - 1))
+  local era yoe doy doe
+  era=$(( (y >= 0 ? y : y - 399) / 400 ))
+  yoe=$(( y - era * 400 ))
+  doy=$(( (153 * ((m + 9) % 12) + 2) / 5 + d - 1 ))
+  doe=$(( yoe * 365 + yoe / 4 - yoe / 100 + doy ))
+  echo $(( era * 146097 + doe - 719468 ))
+}
+lastd=$(civil_days "$last") && nowd=$(civil_days "$today") || {
+  echo "memory curation gate: cannot read '$last' / '$today' as YYYY-MM-DD — the gate did NOT run."
   exit 0
 }
-days=$(( (nowep - lastep) / 86400 ))
+days=$(( nowd - lastd ))
 if [ "$days" -lt 0 ]; then
   echo "memory curation gate: stamp date $last is after today ($today) — the gate did NOT run. Fix the stamp."
   exit 0

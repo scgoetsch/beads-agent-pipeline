@@ -75,7 +75,12 @@ echo "### no export: counts through bd; without bd it says so"
 # A private PATH: symlinks to every tool the gate needs, plus a stub bd whose listing has 115
 # keys in bd's two-space-indented shape under a header line that must not be counted.
 mkdir -p "$T/bin"
-for tool in bash sh grep head tr wc date cat sed dirname seq; do p=$(command -v "$tool") && ln -sf "$p" "$T/bin/$tool"; done
+# A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
+# `ln -s` copies the binary without the DLLs beside it and the copy dies with 127; an exec
+# wrapper works everywhere (Actions windows job, 2026-10-06).
+shim() { local b; b=$(command -v "$2" 2>/dev/null) || return 1
+         printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$1/$2" && chmod +x "$1/$2"; }
+for tool in bash sh grep head tr wc date cat sed dirname seq; do shim "$T/bin" "$tool" || true; done
 printf '#!/usr/bin/env bash\n[ "$1" = memories ] || exit 1\necho "Memories matching \\"\\":"\nfor i in $(seq 1 115); do printf "  key-%%03d\\n    body\\n" "$i"; done\n' > "$T/bin/bd"; chmod +x "$T/bin/bd"
 rm -f "$ws/.beads/memories.jsonl"; stamp 2026-10-01 100
 out=$(PATH="$T/bin" "$G" 2>&1); rc=$?

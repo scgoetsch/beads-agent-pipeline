@@ -121,9 +121,14 @@ chk "code ratchet still inspects a missing working file" "$(run_guard)" 1
 git -C "$T" rm -q --cached deleted.py
 # Git quotes unusual names unless paths are read with -z.
 ODD=$'name with a tab\t.md'
-printf '![p](%s)\n' "$BAD_DOC" > "$T/$ODD"; git -C "$T" add "$ODD"
-chk "quoted filename cannot hide a violation" "$(run_guard)" 1
-git -C "$T" rm -q --cached "$ODD"; rm -f "$T/$ODD"
+if printf '![p](%s)\n' "$BAD_DOC" > "$T/$ODD" 2>/dev/null; then
+  git -C "$T" add "$ODD"
+  chk "quoted filename cannot hide a violation" "$(run_guard)" 1
+  git -C "$T" rm -q --cached "$ODD"; rm -f "$T/$ODD"
+else
+  # NTFS refuses a control character in a name, so Git Bash cannot build this case at all.
+  printf '  SKIP  quoted filename cannot hide a violation — this filesystem refuses a tab in a filename\n'
+fi
 
 echo "### this suite, and the guard, can themselves be committed under the guard"
 # A guard whose own test file cannot pass it is installed once with --no-verify and then

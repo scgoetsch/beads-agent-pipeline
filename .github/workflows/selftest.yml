@@ -166,8 +166,9 @@ jobs:
               "$(has jq)" "$(has rg)" "$(has ss)" "$(has flock)" "$(has setsid)" "$(has timeout)" "$(has iconv)" \
               "$(node --version 2>/dev/null || echo no)" \
               "$(locale -a 2>/dev/null | grep -i -E '^c\.utf-?8$|^en_US\.utf-?8$' | tr '\n' ' ' || echo none)"
-            printf 'resolved: bash=%s python3=%s bd=%s\n' \
-              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v bd || echo none)"
+            printf 'resolved: bash=%s python3=%s bd=%s timeout=%s  python3 stdout newline:%s\n' \
+              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v bd || echo none)" \
+              "$(command -v timeout || echo none)" "$(python3 -c 'print(1)' | od -An -c | tr -s ' ')"
             # Line endings as git sees them (i/ index, w/ working tree) and as bytes: the first
             # line of selftest.sh must end in \n alone, whatever core.autocrlf the box ships.
             printf 'eol: %s  core.autocrlf=%s  first line bytes: %s\n' \
@@ -184,7 +185,7 @@ jobs:
         run: |
           out=$PWD/suite-logs; mkdir -p "$out"
           t=$(mktemp -d); git -C "$t" init -q
-          ./install.sh --no-shell "$t" > "$out/install.log" 2>&1 || echo "install.sh exit $? — its ! lines:"
+          ./install.sh --no-shell --with-pi "$t" > "$out/install.log" 2>&1 || echo "install.sh exit $? — its ! lines:"
           grep -E '^ *!' "$out/install.log" || true
           for s in "$t"/tools/*_test.sh; do
             n=$(basename "$s" .sh)

@@ -25,10 +25,16 @@ sec()  { printf '\n\033[1m### %s\033[0m\n' "$1"; }
 
 TMP=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMP"' EXIT
+# One spelling for one directory. mktemp names /var/... on macOS and /tmp/... on Git Bash while
+# the hooks resolve the physical path (/private/var/..., /c/Users/.../Temp/...), so the checks
+# below compare canonical forms (Actions macos and windows jobs, 2026-10-06).
+canon() { local p; p=$(cd -- "$1" 2>/dev/null && pwd -P) || p=$1
+          if command -v cygpath >/dev/null 2>&1; then cygpath -m "$p"; else printf '%s\n' "$p"; fi; }
 
 # ---- a throwaway "clone" at a path that is NOT this repo --------------------
 CLONE="$TMP/some other place/clone"     # the space is deliberate: paths get quoted wrong
 mkdir -p "$CLONE/.claude" "$CLONE/.beads" "$CLONE/tools"
+CLONE_CANON=$(canon "$CLONE")
 cp "$ROOT/.claude/bd-prime-hook.sh" "$ROOT/.claude/bd-prerun-hook.sh" \
    "$ROOT/.claude/bd-stop-hook.sh" "$CLONE/.claude/"
 cp "$ROOT/tools/dolt-guard.sh" "$CLONE/tools/"
@@ -54,11 +60,11 @@ run_hook() {  # run_hook <script> [stdin]
 sec "the hooks follow their own file to a relocated clone"
 
 rc=$(run_hook bd-stop-hook.sh)
-chk "bd-stop-hook runs bd from the relocated clone" "$(head -1 "$BD_CWD_LOG")" "$CLONE"
+chk "bd-stop-hook runs bd from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
 chk "bd-stop-hook exits 0" "$rc" "0"
 
 rc=$(run_hook bd-prime-hook.sh)
-chk "bd-prime-hook runs bd from the relocated clone" "$(head -1 "$BD_CWD_LOG")" "$CLONE"
+chk "bd-prime-hook runs bd from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
 chk "bd-prime-hook still emits the session rules" \
     "$(grep -c 'MANDATORY SESSION RULES' "$TMP/out")" "1"
 
@@ -66,7 +72,7 @@ JSON='{"tool_name":"Bash","tool_input":{"command":"python3 scripts/run_thing.py"
 # The scripts gate is the prerun hook's only bd call; pin it on, since a clone's
 # .claude/bd-prerun.conf may turn it off.
 rc=$(BD_SCRIPT_DIRS_RE=scripts run_hook bd-prerun-hook.sh "$JSON")
-chk "bd-prerun-hook runs bd from the relocated clone" "$(head -1 "$BD_CWD_LOG")" "$CLONE"
+chk "bd-prerun-hook runs bd from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
 
 sec "the guards still fire after relocation (not just the path resolution)"
 
@@ -93,7 +99,7 @@ chk "  ...and says the session is NOT primed" \
 sec "dolt-guard defaults to its own repo, not a hardcoded path"
 
 got=$(BD_DOLT_GUARD_NORUN=1 bash -c '. "$1/tools/dolt-guard.sh"; printf %s "$__BD_DOLT_GUARD_ROOT"' _ "$CLONE")
-chk "sourced from the relocated clone, root is that clone" "$got" "$CLONE"
+chk "sourced from the relocated clone, root is that clone" "$(canon "$got")" "$CLONE_CANON"
 
 sec "no executable line names a hardcoded workspace root"
 
@@ -102,8 +108,10 @@ code_hits=$(cat "$ROOT"/.claude/*.sh | sed 's/#.*//' | grep -cE '(/home/|/Users/
 chk "no hook script has the literal root outside a comment" "$code_hits" "0"
 json_hits=$(grep -cE '(/home/|/Users/)[A-Za-z0-9_.-]+/' "$ROOT/.claude/settings.json" || true)
 chk "settings.json has no literal root" "$json_hits" "0"
+# The file goes in on stdin: a path inside the -c string reaches a native Windows Python as an
+# MSYS path it cannot open (Actions windows job, 2026-10-06); an argument would be converted.
 chk "settings.json is valid JSON" \
-    "$(python3 -c "import json;json.load(open('$ROOT/.claude/settings.json'));print('ok')" 2>/dev/null)" "ok"
+    "$(python3 -c "import json,sys;json.load(sys.stdin);print('ok')" < "$ROOT/.claude/settings.json" 2>/dev/null | tr -d '\r')" "ok"
 hooked=$(python3 - "$ROOT/.claude/settings.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
