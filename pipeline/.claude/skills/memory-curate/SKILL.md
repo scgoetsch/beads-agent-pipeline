@@ -78,6 +78,17 @@ needed). On any `bd remember`:
 `score = is_convention_guard + reference_frequency + recency + type_weight − is_transient − length_penalty`
 HOT = convention/gotcha guards + high-reference. Everything else is situational → retrieval-gated.
 
-## Wrapping
-- `/loop /memory-curate audit` (or `/loop 1w …`) for a periodic health check.
-- Run `prune` / `consolidate` / `tier` interactively when audit flags enough drift.
+## Stamp — after ANY mode, audit included
+The session-start gate (`.claude/site-checks/memory-curation-gate.sh`) reads
+`.claude/memory-curation.txt` — one line, `YYYY-MM-DD<TAB>memory-count` — and prints a
+"Memory curation due" notice once the store is 30 days or 10 memories past it (env
+`BD_CURATION_MAX_DAYS` / `BD_CURATION_MAX_NEW`). The installer writes the stamp once; every run
+of this skill ends by rewriting it and committing it with the curation:
+
+```bash
+printf '%s\t%s\n' "$(date +%F)" "$(bd memories | grep -cE '^  [a-z0-9]')" > .claude/memory-curation.txt
+```
+
+An audit that finds nothing to do still stamps — otherwise the gate nags every session. The
+gate replaces the old advice to wrap `audit` in `/loop`; run `prune` / `consolidate` / `tier`
+interactively when the audit flags enough drift.

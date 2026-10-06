@@ -139,6 +139,13 @@ and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumption
 `/loop` and `/schedule` are harness features, not requirements; `triage` mentions a maker/checker
 verifier that is yours to define), all written down in `.claude/skills/README.md`.
 
+**A curation gate** — `.claude/site-checks/memory-curation-gate.sh`, the one site check that
+ships. bd has no consolidation cadence of its own, so this prints one line at session start once
+the store is 30 days or 10 memories past the last curation (`BD_CURATION_MAX_DAYS` /
+`BD_CURATION_MAX_NEW`), naming the numbers and the skill to run. The installer writes the stamp it
+reads, `.claude/memory-curation.txt`, once; `memory-curate` rewrites it after every run. A stamp or
+count it cannot read is reported, never skipped.
+
 **An `AGENTS.md` template** that is symlinked from `CLAUDE.md` — one file, two names, so they
 cannot drift. The workspace this came from had them as two real files that diverged by ~180 lines
 before anyone noticed, and the part missing from the copy one tool read was the protocol for

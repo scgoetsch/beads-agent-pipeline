@@ -50,9 +50,17 @@ for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-pre
          .claude/bd-stop-hook.sh .beads-hooks/pre-commit tools/sweep.sh tools/dolt-guard.sh \
          docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
          .claude/skills/README.md tools/check-no-agent-cache-paths.sh \
-         tools/check-agent-docs-linked_test.sh; do
+         tools/check-agent-docs-linked_test.sh .claude/site-checks/memory-curation-gate.sh \
+         tools/memory-curation-gate_test.sh; do
   [ -e "$T/$f" ] && ok "$f" || bad "$f missing"
 done
+# The curation stamp is written by the installer, not shipped: today's date, a count, one line.
+if [ -f "$T/.claude/memory-curation.txt" ] \
+   && grep -qE "^$(date +%Y-%m-%d)	[0-9]+$" "$T/.claude/memory-curation.txt"; then
+  ok ".claude/memory-curation.txt stamped by the installer (today, a count)"
+else bad ".claude/memory-curation.txt stamped by the installer"; fi
+[ -x "$T/.claude/site-checks/memory-curation-gate.sh" ] && ok "site check is executable" \
+  || bad "site check is executable"
 [ -L "$T/CLAUDE.md" ] && [ "$(readlink "$T/CLAUDE.md")" = AGENTS.md ] \
   && ok "CLAUDE.md is a symlink to AGENTS.md" || bad "CLAUDE.md symlink"
 [ -x "$T/tools/sweep.sh" ] && ok "tools are executable" || bad "tools are executable"
@@ -78,7 +86,7 @@ for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/s
          tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/bd-stop-hook_test.sh \
          tools/dolt-guard_test.sh tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
-         tools/audit_wikilinks_test.sh; do
+         tools/audit_wikilinks_test.sh tools/memory-curation-gate_test.sh; do
   suite_tmp=$(mktemp -d)
   if (cd "$T" && TMPDIR="$suite_tmp" ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; tail -35 "$T/.suite.log" | sed 's/^/        /'; fi

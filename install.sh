@@ -256,6 +256,27 @@ while IFS= read -r rel; do
   case $rel in *.sh) install_file "$rel" 755 ;; *) install_file "$rel" ;; esac
 done < <(cd "$PAYLOAD" && find .claude/site-checks -type f)
 
+# The curation gate's stamp is written ONCE and never shipped as payload: it records when THIS
+# repo's store was last curated, so it must diverge per repo and must not come back as a .new.
+# Count from `bd memories` when bd is usable here; a store that does not exist yet is 0, which
+# is correct -- the first ten memories then ask for the first audit.
+hdr "memory curation stamp (.claude/memory-curation.txt)"
+CURATION_STAMP="$TARGET/.claude/memory-curation.txt"
+if [ -e "$CURATION_STAMP" ]; then
+  say ".claude/memory-curation.txt — kept ($(head -1 "$CURATION_STAMP" | cut -f1,2 | tr '\t' ' '))"
+else
+  stamp_count=0
+  if command -v bd >/dev/null 2>&1; then
+    stamp_count=$(cd "$TARGET" && bd memories 2>/dev/null | grep -cE '^  [a-z0-9]'); stamp_count=${stamp_count:-0}
+  fi
+  if [ "$MODE" = dryrun ]; then
+    run "write .claude/memory-curation.txt: $(date +%Y-%m-%d) <TAB> $stamp_count"
+  else
+    printf '%s\t%s\n' "$(date +%Y-%m-%d)" "$stamp_count" > "$CURATION_STAMP"
+    did ".claude/memory-curation.txt written: $(date +%Y-%m-%d), $stamp_count memories (the gate counts from here)"
+  fi
+fi
+
 hdr "tools (tools/)"
 while IFS= read -r rel; do install_file "$rel" 755; done < <(cd "$PAYLOAD" && find tools -type f | sort)
 

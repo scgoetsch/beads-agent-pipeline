@@ -13,6 +13,12 @@ Each check is bounded by `timeout 20` where the box has `timeout` (stock macOS d
 then run unbounded and the session payload says so). Its exit status is ignored, and **both streams
 count as output**: a check that dies with "command not found" on stderr is reported, not skipped.
 
+## What ships here
+
+`memory-curation-gate.sh` — the one check in the payload. It is silent until the bd memory store
+is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt` (see the
+`memory-curate` skill), and it is loud, not silent, when it cannot read its inputs.
+
 ## What belongs here
 
 Environment facts an agent would otherwise act on wrongly, and cannot discover on its own:

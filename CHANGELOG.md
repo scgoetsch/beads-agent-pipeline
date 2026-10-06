@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A memory curation gate ships as the first site check.** bd has no consolidation cadence: a
+  store curated once on 2026-09-18 grew for weeks with nothing prompting the next audit, which
+  the comparison with an agent CLI whose consolidation runs automatically made plain
+  (2026-10-06). `.claude/site-checks/memory-curation-gate.sh` prints one line at session start
+  once the store is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt`
+  (`BD_CURATION_MAX_DAYS` / `BD_CURATION_MAX_NEW`); it counts from a tracked
+  `.beads/memories.jsonl` when one exists, else from `bd memories`, and says so when it cannot
+  count. The installer writes the stamp once (today, current count) and never overwrites it; the
+  `memory-curate` skill ends every mode, audit included, by rewriting it, replacing its old
+  advice to wrap `audit` in `/loop`. `tools/memory-curation-gate_test.sh`: 35 checks, including
+  the no-export branch through a stub `bd` and every loud path. The self-test asserts the stamp.
 - **`dolt-guard.sh` no longer leaks its lock into the server it starts.** The guard ran
   `bd dolt start` with its `flock` descriptor still open, so the daemonised `dolt sql-server`
   inherited it and held the lock for its whole life. A shell already waiting on the lock (two
