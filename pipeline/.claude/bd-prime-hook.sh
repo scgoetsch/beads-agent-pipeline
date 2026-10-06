@@ -123,7 +123,12 @@ $out}"
 same_dir() {  # same_dir A B -> 0 when both name one directory
   [ "$1" -ef "$2" ] && return 0
   command -v cygpath >/dev/null 2>&1 || return 1
-  [ "$(cygpath -m "$1" 2>/dev/null)" = "$(cygpath -m "$2" 2>/dev/null)" ]
+  # -l: the long name. %TEMP% on a hosted runner is the 8.3 form (RUNNER~1), so the two spellings
+  # of one directory differed there even in mixed form; Windows paths are case-insensitive too.
+  local a b
+  a=$(cygpath -ml "$1" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  b=$(cygpath -ml "$2" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  [ -n "$a" ] && [ "$a" = "$b" ]
 }
 emit_hooks_unwired() {
   local hp want got

@@ -15,7 +15,9 @@
   later; the suite had leaked its scratch directory there. `agent_docs_test.sh` walks the tree in
   Python instead of shelling out to `find`, which a native Windows Python resolved to System32's.
   The Pi event suite's own prime stub formatted a `wc -l` count, padded on BSD, so its `PRIMED 1`
-  assertion failed on macOS; stripped.
+  assertion failed on macOS; stripped. The directory comparison asks cygpath for the long name:
+  a hosted runner's %TEMP% is the 8.3 form (RUNNER~1), so one directory still had two spellings
+  in mixed form, and Windows paths compare case-insensitively.
 - **The hooks read Python back without the CR a native Windows Python appends**, plus the
   next causes the matrix measured after the previous batch. A native Windows Python ends every
   stdout line with CR LF even into a pipe (the workflow's box line now shows it), so the prerun

@@ -72,7 +72,7 @@ jobs:
           - key: macos
             os: macos-latest
             bd: true
-            allow-failure: true
+            allow-failure: false
           - key: windows
             os: windows-latest
             bd: true
