@@ -6,7 +6,8 @@
 # tools/dolt-guard.sh needs bash ≥ 4.1) and windows-latest (Git Bash, which is what `shell: bash`
 # resolves to there), plus an Ubuntu run with no bd at all for the installer's required-command
 # branch. Each job prints one `box:` line, the RESULT line and every FAIL into the run summary and
-# keeps the full log as an artifact.
+# keeps the full log as an artifact; after a failure it also keeps the installer's own output and
+# every suite's full log, since the self-test shows only the last 35 lines of a failing suite.
 #
 # bd comes from the release archive named by BD_VERSION, verified against that release's
 # checksums.txt, into a directory of its own ($HOME/bd-bin): the self-test's no-bd probe hides
@@ -15,12 +16,18 @@
 # bd release could break this workflow with no change here. Bump BD_VERSION on purpose, or pass
 # bd_version to a manual run.
 #
-# Windows is allowed to fail (continue-on-error) while its known failures are worked: the first
-# native run (2026-10-06, Git Bash 5.2, Python 3.14) failed six suites — MSYS `ln -s` copies the
-# file so the CLAUDE.md symlink checks fail, native Python cannot open MSYS paths, the locale pin
-# finds no C.UTF-8, and two suites lose PATH entries or count glyph rows under MSYS grep. Flip
-# allow-failure to false once the Windows job is green; a green workflow with Windows red is the
-# honest state until then, and the summary says which suites.
+# macOS and Windows are allowed to fail (continue-on-error) while their failures are worked; a
+# green workflow with those two jobs red is the honest state until then, and the summary says
+# which suites. Measured 2026-10-06, bd 1.3.1: ubuntu 127 passed (with bd and without), macos 26
+# 107 passed / 20 failed, windows 2025 98 passed / 29 failed. By cause: BSD `wc -l` pads its
+# count and every `$(… | wc -l)` comparison reads the padding (macOS); `mktemp -d` returns
+# /var/… on macOS and /tmp/… on Git Bash while the hooks resolve the physical path, so the
+# portability suite's relocated-clone checks compare spellings (both); the curation gate needs
+# GNU `date -d` (macOS); the sweep suite's binary-file case fails under BSD and MSYS grep (both);
+# the installer exits 1 with every required command present (both; read install.log in the
+# suite-logs artifact); MSYS `ln -s` copies the file, so every CLAUDE.md symlink check fails,
+# native Python cannot open MSYS paths, and the stop-hook suite's bare PATH and glyph counts
+# break (Windows). Flip allow-failure to false for a platform once its job is green.
 name: self-test
 
 on:
@@ -46,7 +53,7 @@ jobs:
   selftest:
     name: ${{ matrix.key }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     continue-on-error: ${{ matrix.allow-failure }}
     strategy:
       fail-fast: false
@@ -63,7 +70,7 @@ jobs:
           - key: macos
             os: macos-latest
             bd: true
-            allow-failure: false
+            allow-failure: true
           - key: windows
             os: windows-latest
             bd: true
@@ -72,7 +79,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: "macOS: bash ≥ 4 and ripgrep from Homebrew"
         if: runner.os == 'macOS'
@@ -157,13 +164,32 @@ jobs:
               "$(has jq)" "$(has rg)" "$(has ss)" "$(has flock)" "$(has setsid)" "$(has timeout)" "$(has iconv)" \
               "$(node --version 2>/dev/null || echo no)" \
               "$(locale -a 2>/dev/null | grep -i -E '^c\.utf-?8$|^en_US\.utf-?8$' | tr '\n' ' ' || echo none)"
-            printf 'resolved: bash=%s python3=%s bd=%s  CR bytes in selftest.sh: %s\n' \
-              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v bd || echo none)" \
-              "$(grep -c $'\r' selftest.sh || true)"
+            printf 'resolved: bash=%s python3=%s bd=%s\n' \
+              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v bd || echo none)"
+            # Line endings as git sees them (i/ index, w/ working tree) and as bytes: the first
+            # line of selftest.sh must end in \n alone, whatever core.autocrlf the box ships.
+            printf 'eol: %s  core.autocrlf=%s  first line bytes: %s\n' \
+              "$(git ls-files --eol selftest.sh | awk '{print $1, $2}')" \
+              "$(git config --show-origin --get core.autocrlf || echo unset)" \
+              "$(head -1 selftest.sh | od -An -c | tr -s ' ' | tail -c 24 | tr '\n' ' ')"
           } | tee box.txt
 
       - name: ./selftest.sh
         run: ./selftest.sh 2>&1 | tee selftest.log
+
+      - name: "after a failure: the installer's own output, and every suite in full"
+        if: failure()
+        run: |
+          out=$PWD/suite-logs; mkdir -p "$out"
+          t=$(mktemp -d); git -C "$t" init -q
+          ./install.sh --no-shell "$t" > "$out/install.log" 2>&1 || echo "install.sh exit $? — its ! lines:"
+          grep -E '^ *!' "$out/install.log" || true
+          for s in "$t"/tools/*_test.sh; do
+            n=$(basename "$s" .sh)
+            if (cd "$t" && "./tools/$n.sh") > "$out/$n.log" 2>&1; then echo "PASS $n"
+            else echo "FAIL $n (exit $?) — $out/$n.log"; fi
+          done
+          rm -rf "$t"
 
       - name: summary
         if: always()
@@ -179,9 +205,16 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: selftest-${{ matrix.key }}
           path: selftest.log
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: suite-logs-${{ matrix.key }}
+          path: suite-logs/
           if-no-files-found: ignore

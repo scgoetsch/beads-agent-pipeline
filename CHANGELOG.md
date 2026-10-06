@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The self-test runs in GitHub Actions on ubuntu, macos and windows.**
+  `.github/workflows/selftest.yml` runs `./selftest.sh` on every push: `ubuntu-latest` with bd and
+  without, `macos-latest` with bash from Homebrew (the stock `/bin/bash` is 3.2) and
+  `windows-latest` under Git Bash. bd is installed from the release archive the workflow names,
+  verified against the release's `checksums.txt`, into a directory of its own so the no-bd probe
+  can hide it; the official installer refuses Git Bash and floats to the current release. Each
+  job puts its box line, the RESULT line and every FAIL in the run summary, keeps the log, and
+  after a failure keeps the installer's output and every suite's full log. First run, 2026-10-06,
+  bd 1.3.1: Ubuntu 127 passed with bd and without; macOS 26 fails 20 and Windows Server 2025
+  fails 29, so those two jobs are continue-on-error until green. The failures sort into a few
+  causes — BSD `wc -l` pads its output and every `$(… | wc -l)` comparison reads the padding,
+  `mktemp -d` paths are compared against their physical spelling (`/private/var`,
+  `/c/Users/…/Temp`), the curation gate needs GNU `date -d`, the sweep's binary-file case fails
+  under BSD and MSYS grep, the installer exits 1 with every required command present, and on
+  Windows MSYS `ln -s` copies, native Python cannot open MSYS paths and the stop-hook suite's bare
+  PATH and glyph counts break — plus the bd-prime-hook and Pi event suites, not yet read on
+  either box. `.gitattributes` pins LF for every text file: Git for Windows ships
+  `core.autocrlf=true`, and a CRLF bash script dies on its first line.
 - **The self-test runs on a clean box.** `test/selftest-in-container.sh` builds two Ubuntu 24.04
   images from `test/Dockerfile` — `bare` (git, python3, bash and nothing else the pipeline lists)
   and `full` (bd from its official installer at the current release, jq, ripgrep, iproute2,

@@ -1,5 +1,7 @@
 # beads-agent-pipeline
 
+[![self-test](https://github.com/scgoetsch/beads-agent-pipeline/actions/workflows/selftest.yml/badge.svg)](https://github.com/scgoetsch/beads-agent-pipeline/actions/workflows/selftest.yml)
+
 Session machinery for coding agents, built around [beads](https://github.com/gastownhall/beads)
 (`bd`). One command installs it into a git repo: the agent gets its rules, its issue queue and
 its durable memory at session start, and the repo gets guards that fail **loudly** instead of
@@ -257,14 +259,36 @@ found two real defects the host had hidden: the sweep's binary-file case depends
 a container does not have, and the Dolt guard had no listener probe at all on a box without
 `ss`, `lsof` or `netstat`.
 
+**On every push, in GitHub Actions** (`.github/workflows/selftest.yml`): the same `./selftest.sh`
+on `ubuntu-latest` with bd and without it, on `macos-latest` (bash from Homebrew, since the stock
+`/bin/bash` is 3.2) and on `windows-latest` (Git Bash). bd comes from the release archive the
+workflow names, verified against that release's `checksums.txt`, into a directory of its own so
+the no-bd probe can hide it; the official installer refuses Git Bash and floats to the current
+release. Each job writes its box line, the RESULT line and every FAIL to the run summary and keeps
+the log as an artifact; after a failure it also keeps the installer's own output and every suite's
+full log, since the self-test shows only a failing suite's last 35 lines. Measured on 2026-10-06
+with bd 1.3.1: Ubuntu 24.04 passes all 127 checks with bd and without; macOS 26 fails 20 and
+Windows Server 2025 fails 29, so those two jobs are `continue-on-error` until they are green, and
+the badge above follows Ubuntu. What fails there, by cause: BSD `wc -l` pads its count, so every `$(… | wc -l)`
+comparison in the suites and in `selftest.sh` itself reads the padding (macOS); `mktemp -d`
+returns `/var/…` on macOS and `/tmp/…` on Git Bash while the hooks resolve the physical path
+(`/private/var/…`, `/c/Users/…/Temp/…`), so the portability suite's relocated-clone checks
+compare spellings (both); the memory-curation gate needs GNU `date -d` and says so (macOS); the
+sweep suite's binary-file case fails under BSD and MSYS grep (both); the installer exits 1 with
+every required command present (both — the `install.log` kept after a failure says why); and on
+Windows alone MSYS `ln -s` copies the file so every CLAUDE.md symlink check fails, native Python
+cannot open MSYS paths, and the stop-hook suite's bare PATH and glyph counts break. The
+bd-prime-hook suite and the Pi event suite fail on both boxes for reasons not yet read.
+
 ## Requirements
 
 **Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
 self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). The opt-in Pi
 adapter was exercised with a real trusted Pi CLI 0.87.1 (`@earendil-works/pi-coding-agent`) on
 Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS and
-native Windows are untested**; on macOS you will want bash from Homebrew. Run `./selftest.sh` first
-on any other platform and file what fails.
+native Windows run in the Actions matrix and do not pass yet** (the causes are under *Verify it*);
+on macOS you will want bash from Homebrew. Run `./selftest.sh` first on any other platform and file
+what fails.
 
 | | | |
 | --- | --- | --- |
@@ -337,10 +361,10 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
   `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
 - **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
   install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **Platform coverage is Linux, including WSL2 suites and the Docker self-test on a bare
-  Ubuntu 24.04, not native Windows or macOS.**
-  `xargs -r` is probed for and `ss`/`flock` degrade with a message, but those fallbacks have not
-  been run on macOS. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
+- **The self-test passes on Linux only: WSL2, the Docker self-test on a bare Ubuntu 24.04, and
+  the Actions job on ubuntu-latest. macOS and native Windows run in the same matrix and fail**
+  (20 and 29 checks on 2026-10-06; the causes are listed under *Verify it*), so their jobs are
+  allowed to fail until green. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
   uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's
   `/bin/bash` 3.2; the installer writes only `~/.bashrc`.
 - **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`

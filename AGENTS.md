@@ -64,7 +64,10 @@ cd ~/beads-agent-pipeline && ./selftest.sh
 
 `test/selftest-in-container.sh` runs the same self-test on a clean Ubuntu in Docker, with and
 without bd, when the box has Docker; prefer it when the box already carries everything, since a
-box that has every tool cannot show you what a bare one does.
+box that has every tool cannot show you what a bare one does. The same self-test runs in GitHub
+Actions on every push (`.github/workflows/selftest.yml`): Ubuntu with bd and without, macOS and
+Windows, each box's RESULT line in the run summary. Ubuntu is the gate; macOS and Windows are
+allowed to fail until they are green, and the README says what fails there.
 
 The self-test installs into throwaway repos under `mktemp` and touches nothing else. It runs every
 shipped guard, checks idempotence, and proves through `git commit` that the git-layer guard fires.
