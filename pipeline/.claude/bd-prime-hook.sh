@@ -123,7 +123,9 @@ emit_hooks_unwired() {
   hp=$(git -C "$WS" config core.hooksPath 2>/dev/null || true)
   case "$hp" in ""|/*) ;; *) hp="$WS/$hp" ;; esac
   want=$(cd "$WS/.beads-hooks" 2>/dev/null && pwd -P); got=$( [ -n "$hp" ] && cd "$hp" 2>/dev/null && pwd -P)
-  [ -n "$got" ] && [ "$got" = "$want" ] && return 0
+  # -ef, not string equality: one directory has two spellings where git reports C:/... and the
+  # shell /c/... (Git Bash), or /var and /private/var (macOS); the inode is the same either way.
+  [ -n "$got" ] && [ "$got" -ef "$want" ] && return 0
   echo "# 🚨 GIT-LAYER GUARDS ARE NOT WIRED IN THIS CLONE: core.hooksPath is '${hp:-unset}', so nothing in"
   echo "#    .beads-hooks/ runs on commit. Fix now:  git config core.hooksPath .beads-hooks"; echo ""
 }
@@ -150,10 +152,11 @@ emit_session_rules() {
 # pipeline payload yet; a repo without the registry gets nothing here. A registry WITHOUT the
 # tool, or a tool that fails, is said out loud and never blocks the session.
 emit_projects() {
-  local tool="$WS/tools/projects.py" out
+  local tool="$WS/tools/projects.py" out bound=""
   [ -f "$WS/projects.tsv" ] || return 0
   if [ ! -f "$tool" ]; then echo "## ⚠ projects.tsv exists but tools/projects.py is missing — no project brief"; echo ""; return 0; fi
-  if out=$(timeout 30 python3 "$tool" brief 2>&1); then printf '%s\n\n' "$out"
+  command -v timeout >/dev/null 2>&1 && bound="timeout 30"   # stock macOS has none: unbounded, as the site checks are
+  if out=$($bound python3 "$tool" brief 2>&1); then out=${out//$'\r'/}; printf '%s\n\n' "$out"
   else echo "## ⚠ tools/projects.py brief failed — run it by hand:"; printf '%s\n\n' "$out" | head -c 400; fi
 }
 emit_rules() { emit_hooks_unwired; emit_session_rules; emit_site_checks; }

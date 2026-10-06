@@ -32,6 +32,7 @@ print(re.sub(r"[^A-Za-z0-9._-]", "_", str(data.get("session_id") or ""))[:128])
 tool = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
 print(tool.get("command", "") if isinstance(tool.get("command", ""), str) else "")
 ' 2>/dev/null)
+parsed=${parsed//$'\r'/}   # a native Windows Python ends every line with CR LF; an empty id came back as a lone CR
 session_id=${parsed%%$'\n'*}
 command=${parsed#*$'\n'}
 [ "$command" = "$parsed" ] && command=""
@@ -264,6 +265,7 @@ except (ValueError, re.error) as exc:
 print(*(int(x) for x in flags[:4]), ','.join(sorted(flags[4])) or '-')
 PY
 ) || exit 0   # python itself failed: open, as the header says
+policy=${policy//$'\r'/}
 read -r bare is_script remember remember_keyless claims <<< "$policy"
 if [ "$bare" -eq 1 ]; then
     cat >&2 <<KILLGATE
@@ -390,7 +392,7 @@ assert isinstance(d, list)
 for x in d:
     if isinstance(x, dict) and x.get("id"): print("%s\t%s" % (x["id"], x.get("title", "")))
 ' 2>/dev/null); then
-        printf '%s' "$rows"; return 0
+        printf '%s' "${rows//$'\r'/}"; return 0   # CR LF from a native Windows Python
     fi
     text=$(bd list --status=in_progress 2>/dev/null) || return 1
     # rows start with the in_progress glyph after any tree prefix; the legend never does

@@ -8,7 +8,8 @@
 # tries to make it fail; this one did not, so nothing ever tried.
 #
 # Hermetic: builds a throwaway repo under mktemp. It never touches this working tree, so it is
-# safe to run at any time, including with uncommitted work in progress.
+# safe to run at any time, including with uncommitted work in progress. Four link states, the
+# pointer-file state of a filesystem without symlinks, and the bd-managed region check.
 set -uo pipefail
 GUARD=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/check-agent-docs-linked.sh
 [ -x "$GUARD" ] || { echo "missing or non-executable: $GUARD" >&2; exit 2; }
@@ -24,7 +25,17 @@ mkdir -p "$T/tools"
 cp -f "$GUARD" "$T/tools/check-agent-docs-linked.sh"
 printf '# Agent Instructions\n\nSome rules.\n' > "$T/AGENTS.md"
 run() { (cd "$T" && ./tools/check-agent-docs-linked.sh) >/dev/null 2>&1; echo $?; }
+cached() { (cd "$T" && ./tools/check-agent-docs-linked.sh --cached) >/dev/null 2>&1; echo $?; }
 
+# Real symlinks or nothing: MSYS `ln -s` copies by default, which would turn every link case
+# below into a regular-file case. nativestrict makes it a real link or a failure, and a box that
+# cannot link at all (Windows without Developer Mode) runs only the pointer-file section.
+export MSYS=winsymlinks:nativestrict
+NOLINK=""
+{ ln -s AGENTS.md "$T/probe.lnk" 2>/dev/null && [ -L "$T/probe.lnk" ]; } || NOLINK=1
+rm -f "$T/probe.lnk"
+
+if [ -z "$NOLINK" ]; then
 echo "### the four states of CLAUDE.md"
 ln -sf AGENTS.md "$T/CLAUDE.md"
 chk "symlink to AGENTS.md passes"        "$(run)" 0
@@ -92,7 +103,6 @@ region $((tmpl + 40));  chk "a block 40 lines past bd's template is caught"     
 
 echo "### --cached validates the index, including the managed block"
 git -C "$T" init -q
-cached() { (cd "$T" && ./tools/check-agent-docs-linked.sh --cached) >/dev/null 2>&1; echo $?; }
 region "$tmpl"; git -C "$T" add AGENTS.md CLAUDE.md
 chk "valid staged pair passes" "$(cached)" 0
 git -C "$T" -c user.email=test@example.invalid -c user.name=fixture commit -qm baseline
@@ -113,6 +123,33 @@ git -C "$T" add AGENTS.md
 rm -f "$T/CLAUDE.md"; printf 'unstaged divergent copy\n' > "$T/CLAUDE.md"
 chk "unstaged link break does not reject valid index" "$(cached)" 0
 chk "manual mode still sees the working-tree break" "$(run)" 1
+else
+  printf '  SKIP  every symlink case: this filesystem cannot create a symlink (Windows without Developer Mode) — only the pointer-file section runs\n'
+fi
+
+echo "### the pointer-file state: a filesystem without symlinks"
+# git's on-disk form of the link where it cannot make one is a regular file holding "AGENTS.md",
+# and the installer writes that form. It passes only when git agrees it is a symlink: an index
+# entry of mode 120000, or core.symlinks=false for the checkout. The same bytes with neither are
+# a stale copy; anything beyond the name is a copy; a missing target is a dangling link.
+git -C "$T" init -q 2>/dev/null; git -C "$T" rm -q -f --cached CLAUDE.md AGENTS.md 2>/dev/null
+rm -f "$T/CLAUDE.md"; printf '# Agent Instructions\n\nSome rules.\n' > "$T/AGENTS.md"
+printf 'AGENTS.md' > "$T/CLAUDE.md"
+git -C "$T" config core.symlinks true
+chk "pointer file, symlinks available, nothing staged: a copy, caught" "$(run)" 1
+git -C "$T" config core.symlinks false
+chk "pointer file passes when core.symlinks=false"                     "$(run)" 0
+git -C "$T" config --unset core.symlinks
+blob=$(printf 'AGENTS.md' | git -C "$T" hash-object -w --stdin)
+git -C "$T" update-index --add --cacheinfo "120000,$blob,CLAUDE.md"; git -C "$T" add AGENTS.md
+chk "pointer file passes when the index holds it as mode 120000"       "$(run)" 0
+chk "...and --cached sees the valid staged link"                       "$(cached)" 0
+printf 'AGENTS.md\nand a line of my own\n' > "$T/CLAUDE.md"
+chk "a pointer file with extra content is a copy, caught"              "$(run)" 1
+printf 'AGENTS.md' > "$T/CLAUDE.md"; rm -f "$T/AGENTS.md"
+chk "a pointer whose target is missing is caught (dangling)"           "$(run)" 1
+printf '# Agent Instructions\n\nSome rules.\n' > "$T/AGENTS.md"
+git -C "$T" rm -q -f --cached CLAUDE.md AGENTS.md 2>/dev/null; rm -f "$T/CLAUDE.md"
 
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"

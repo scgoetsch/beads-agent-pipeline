@@ -3,12 +3,16 @@
 // This file is project-local and loads ONLY after Pi grants project trust.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+// Physical paths throughout: Node resolves a module's real path, so under a symlinked directory
+// (macOS /var -> /private/var, any linked checkout) this root is the real one while a cwd Pi
+// hands over may be the logical spelling; compare like with like, or the extension declares
+// itself loaded outside its own project and runs nothing (Actions macos job, 2026-10-06).
+const root = realpathSync(resolve(fileURLToPath(new URL("../..", import.meta.url))));
 const PREFIX = "⚠ beads-agent-pipeline (Pi):";
 const LIMIT = 256_000; // Bound captured text even if a script regresses to an unbudgeted dump.
 const TIMEOUT_MS = 30_000;
@@ -30,7 +34,8 @@ function sessionKey(ctx: NoticeContext): string {
 }
 
 function inProject(cwd: string): boolean {
-  const dir = resolve(cwd);
+  let dir = resolve(cwd);
+  try { dir = realpathSync(dir); } catch { /* a cwd that does not exist is not inside */ }
   return dir === root || dir.startsWith(root + sep);
 }
 

@@ -22,7 +22,8 @@ export TMPDIR="$T/scratch"
 pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));
         else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1))
-             [ -s "$T/hook.err" ] && sed 's/^/        hook stderr: /' "$T/hook.err" | tail -4; fi; }
+             [ -s "$T/hook.err" ] && sed 's/^/        hook stderr: /' "$T/hook.err" | tail -4
+             [ -n "${out:-}" ] && printf '%s\n' "$out" | head -25 | sed 's/^/        payload: /'; fi; }
 
 # The stub store: two memories. `prime` prints them the way bd does, between the two headers
 # the hook's filter keys on; `export` writes them as JSONL. The bodies are the sentinels.

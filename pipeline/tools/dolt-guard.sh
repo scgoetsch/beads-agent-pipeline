@@ -68,7 +68,8 @@ __bd_dolt_guard_say() {
     # stderr, never stdout: this runs while Claude Code is capturing shell state
     # into a snapshot file, and stray stdout would corrupt it.
     printf 'dolt-guard: %s\n' "$msg" >&2
-    printf '%s dolt-guard: %s\n' "$(date -Is)" "$msg" >>"$ws/.beads/dolt-guard.log" 2>/dev/null || true
+    # strftime, not `date -Is`: -I is GNU; BSD date (macOS) rejects it and the log line was lost.
+    printf '%s dolt-guard: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$msg" >>"$ws/.beads/dolt-guard.log" 2>/dev/null || true
 }
 
 __bd_dolt_guard_await() {

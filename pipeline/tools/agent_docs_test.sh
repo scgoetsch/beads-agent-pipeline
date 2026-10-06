@@ -57,7 +57,7 @@ export ROOTS_EXTRA
 
 # Extract backticked path-looking tokens from a markdown file and report unresolved ones.
 unresolved() {
-  python3 - "$1" "$ALLOW" "${2:-}" <<'PY'
+  python3 - "$1" "$ALLOW" "${2:-}" <<'PY' | tr -d '\r'   # a native Windows Python ends lines with CR LF
 import re, os, sys, subprocess, glob
 path, allow = sys.argv[1], sys.argv[2]
 base = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else os.getcwd()

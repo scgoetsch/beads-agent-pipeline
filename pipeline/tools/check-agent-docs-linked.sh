@@ -38,7 +38,10 @@ case ${1:-} in
     fi
     case "$mode" in
       "120000 "*" 0"$'\t'CLAUDE.md) ;;
-      *) echo "agent-docs: staged CLAUDE.md is a REGULAR FILE or unmerged, not a symlink." >&2; exit 1 ;;
+      *) echo "agent-docs: staged CLAUDE.md is a REGULAR FILE or unmerged, not a symlink." >&2
+         echo '  On a filesystem without symlinks, stage it as the link git itself uses there (a file holding the text AGENTS.md):' >&2
+         echo '      printf AGENTS.md > CLAUDE.md && git update-index --add --cacheinfo 120000,$(printf AGENTS.md | git hash-object -w --stdin),CLAUDE.md' >&2
+         exit 1 ;;
     esac
     target=$(git show :CLAUDE.md) || exit 1
     if [ "$target" != AGENTS.md ]; then
@@ -52,7 +55,10 @@ case ${1:-} in
     snapshot=$(mktemp -d) || exit 1
     trap 'rm -rf "$snapshot"' EXIT
     git show :AGENTS.md > "$snapshot/AGENTS.md" || exit 1
-    ln -s AGENTS.md "$snapshot/CLAUDE.md" || exit 1
+    # The index has just proved the link; the snapshot holds its pointer form rather than a
+    # symlink, so this mode needs no symlink support (MSYS `ln -s` would have COPIED AGENTS.md).
+    printf 'AGENTS.md' > "$snapshot/CLAUDE.md" || exit 1
+    staged_link=1
     cd "$snapshot" || exit 1 ;;
   '') ;;
   *) echo "usage: $0 [--cached]" >&2; exit 2 ;;
@@ -79,6 +85,24 @@ fi
 # regular CLAUDE.md passed untouched (2026-09-22 review; the suite now has that state).
 [ -e CLAUDE.md ] || exit 0
 
+# THE POINTER-FILE STATE. On a filesystem without symlinks (Git for Windows without Developer
+# Mode, core.symlinks=false), git's own on-disk form of the link is a regular file holding the
+# text "AGENTS.md", and the installer writes exactly that where `ln -s` cannot link. It is the
+# symlink, not a divergent copy, when git agrees: the index carries CLAUDE.md as mode 120000, or
+# this checkout says core.symlinks=false (or --cached proved the index above). The content must
+# be the target's name and nothing else; a stale copy of AGENTS.md is still the drift state below.
+pointer=0
+if [ ! -L CLAUDE.md ] && [ -f CLAUDE.md ] && [ "$(cat CLAUDE.md)" = "AGENTS.md" ]; then
+    case "$(git ls-files --stage -- CLAUDE.md 2>/dev/null)" in "120000 "*) pointer=1 ;; esac
+    [ "$(git config --get core.symlinks 2>/dev/null)" = false ] && pointer=1
+    [ "${staged_link:-0}" -eq 1 ] && pointer=1
+fi
+if [ "$pointer" -eq 1 ] && [ ! -e AGENTS.md ]; then
+    echo "agent-docs: CLAUDE.md is the pointer form of a symlink -> 'AGENTS.md', and the target is missing." >&2
+    echo "  Restore AGENTS.md (the pointer is git's on-disk link on a filesystem without symlinks)." >&2
+    exit 1
+fi
+
 if [ ! -L CLAUDE.md ] && [ ! -e AGENTS.md ]; then
     cat >&2 <<'MSG'
 agent-docs: CLAUDE.md is a REGULAR FILE and there is no AGENTS.md beside it.
@@ -93,7 +117,7 @@ MSG
     exit 1
 fi
 
-if [ ! -L CLAUDE.md ]; then
+if [ ! -L CLAUDE.md ] && [ "$pointer" -eq 0 ]; then
     cat >&2 <<'MSG'
 agent-docs: CLAUDE.md is a REGULAR FILE, not a symlink to AGENTS.md.
 
@@ -114,12 +138,18 @@ agent-docs: CLAUDE.md is a REGULAR FILE, not a symlink to AGENTS.md.
 
       rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md
 
+  On a filesystem without symlinks, use the form git itself keeps there -- the file
+  holds the text AGENTS.md and the index holds a symlink -- which this guard accepts:
+
+      printf AGENTS.md > CLAUDE.md
+      git update-index --add --cacheinfo 120000,$(printf AGENTS.md | git hash-object -w --stdin),CLAUDE.md
+
   Bypass once with: git commit --no-verify
 MSG
     exit 1
 fi
 
-target=$(readlink CLAUDE.md)
+if [ -L CLAUDE.md ]; then target=$(readlink CLAUDE.md); else target=AGENTS.md; fi
 if [ "$target" != "AGENTS.md" ]; then
     echo "agent-docs: CLAUDE.md points at '$target', expected 'AGENTS.md'." >&2
     echo "  Fix with: rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md" >&2

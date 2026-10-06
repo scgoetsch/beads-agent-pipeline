@@ -15,9 +15,15 @@ set -uo pipefail
 GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dolt-guard.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d); LISTENERS=()
+# setsid detaches a listener from the suite's process group; stock macOS and Git Bash have none,
+# and `setsid python3` there was "command not found": every start case died (Actions macos and
+# windows jobs, 2026-10-06). Without it a listener is an ordinary background child. Stubs record
+# their listener's pid in $TMP/listeners (pgrep is absent on MSYS) and cleanup kills them all.
+DETACH=""; command -v setsid >/dev/null 2>&1 && DETACH=setsid
 
 cleanup() {
     local p
+    [ -f "$TMP/listeners" ] && while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$TMP/listeners"
     for p in "${LISTENERS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
     rm -rf "$TMP"
 }
@@ -41,12 +47,7 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
 
 start_listener() {  # start_listener PORT -> binds it for the life of the suite
     local port="$1"
-    # setsid detaches the listener from the suite's process group; stock macOS and Git Bash have
-    # none, and `setsid python3` there was "command not found" -- the suite then died at "could
-    # not bind test port" (Actions macos and windows jobs, 2026-10-06). Without it the listener
-    # is an ordinary background child; cleanup kills it by pid either way.
-    local detach=""; command -v setsid >/dev/null 2>&1 && detach=setsid
-    $detach python3 -c "
+    $DETACH python3 -c "
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port)); s.listen(1); time.sleep(600)" </dev/null >/dev/null 2>&1 &
@@ -122,13 +123,13 @@ echo "server down, bd starts it successfully"
 ws3=$(make_ws ws3); port3=$(free_port)
 stub_good=$(make_bd good "
 echo \"\$@\" >>'$TMP/calls-3'
-setsid python3 -c \"
+$DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port3)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+echo \$! >>'$TMP/listeners'
 exit 0")
 run_guard "$ws3" "$port3" "$stub_good"; rc=$?
-LISTENERS+=("$(pgrep -f "127.0.0.1',$port3" | head -1)")
 check "returns 0" "$rc" "0"
 check "invoked 'bd dolt start'" "$(cat "$TMP/calls-3" 2>/dev/null)" "dolt start"
 check "port is now listening" "$(listening "$port3" && echo up || echo down)" "up"
@@ -193,10 +194,11 @@ ws7=$(make_ws ws7); port7=$(free_port)
 stub_race=$(make_bd race "
 echo x >>'$TMP/calls-7'
 sleep 1
-setsid python3 -c \"
+$DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port7)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+echo \$! >>'$TMP/listeners'
 exit 0")
 racers=()
 for i in 1 2 3 4; do GUARD_ERR="$TMP/err-7-$i" run_guard "$ws7" "$port7" "$stub_race" & racers+=("$!"); done
@@ -205,8 +207,11 @@ for i in 1 2 3 4; do GUARD_ERR="$TMP/err-7-$i" run_guard "$ws7" "$port7" "$stub_
 race_rcs=""; race_t0=$SECONDS
 for p in "${racers[@]}"; do wait "$p"; race_rcs="$race_rcs$?"; done
 race_secs=$((SECONDS - race_t0))
-LISTENERS+=("$(pgrep -f "127.0.0.1',$port7" | head -1)")
+if command -v flock >/dev/null 2>&1; then
 check "bd dolt start ran exactly once across 4 shells" "$(wc -l <"$TMP/calls-7" 2>/dev/null | tr -d ' ')" "1"
+else
+printf '  - SKIP: exactly-once across 4 shells — no flock on this box, so each shell starts unlocked as documented (%s starts)\n' "$(wc -l <"$TMP/calls-7" 2>/dev/null | tr -d ' ')"
+fi
 check "port ends up listening" "$(listening "$port7" && echo up || echo down)" "up"
 # The stub's listener, like the real `dolt sql-server`, is a child of
 # `bd dolt start` and outlives it. If it inherits the guard's lock fd the lock
@@ -217,8 +222,12 @@ check "no racer reports FAILED" "$(cat "$TMP"/err-7-* 2>/dev/null | grep -c FAIL
 [ "$race_secs" -lt 15 ] \
     && ok "the losers are released when the start finishes, not at the 30s timeout (${race_secs}s)" \
     || bad "the losers are released when the start finishes, not at the 30s timeout" "racers took ${race_secs}s"
+if command -v flock >/dev/null 2>&1; then
 check "the started server does not hold the guard's lock" \
     "$(flock -n "$ws7/.beads/.dolt-guard.lock" true && echo free || echo held)" "free"
+else
+printf '  - SKIP: the started server does not hold the guard'"'"'s lock — no flock on this box\n'
+fi
 echo
 
 # ---------------------------------------------------------------- 9
@@ -259,18 +268,18 @@ echo "no flock on PATH: starts the server unlocked and says so, not 'timed out'"
 # A missing flock exited 127, `if ! flock` took the failure branch, and the guard reported a
 # 30-second timeout that never happened -- and gave up on exactly the box it was needed on.
 NOFLOCK="$TMP/noflock"; mkdir -p "$NOFLOCK"
-for t in bash sh date sleep cat grep mkdir touch dirname awk ss python3 setsid; do   # awk: the /proc fallback where ss is absent
-    b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOFLOCK/$t"
+for t in bash sh date sleep cat grep mkdir touch dirname awk ss lsof netstat python3 setsid; do   # awk: the /proc fallback where ss is absent; lsof, netstat: the probers elsewhere
+    shim "$NOFLOCK" "$t" || true
 done
 ws10=$(make_ws ws10); port10=$(free_port)
 stub_start10=$(make_bd start10 "
-setsid python3 -c \"
+$DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port10)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+echo \$! >>'$TMP/listeners'
 exit 0")
 PATH="$NOFLOCK" run_guard "$ws10" "$port10" "$stub_start10"; rc=$?
-LISTENERS+=("$(pgrep -f "127.0.0.1',$port10" | sed -n 1p)")
 check "returns 0" "$rc" "0"
 grep -q 'no flock' "$TMP/err" \
     && ok "says it ran without the lock" \

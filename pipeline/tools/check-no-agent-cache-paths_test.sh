@@ -121,13 +121,14 @@ chk "code ratchet still inspects a missing working file" "$(run_guard)" 1
 git -C "$T" rm -q --cached deleted.py
 # Git quotes unusual names unless paths are read with -z.
 ODD=$'name with a tab\t.md'
-if printf '![p](%s)\n' "$BAD_DOC" > "$T/$ODD" 2>/dev/null; then
-  git -C "$T" add "$ODD"
+if printf '![p](%s)\n' "$BAD_DOC" > "$T/$ODD" 2>/dev/null && git -C "$T" add "$ODD" 2>/dev/null; then
   chk "quoted filename cannot hide a violation" "$(run_guard)" 1
   git -C "$T" rm -q --cached "$ODD"; rm -f "$T/$ODD"
 else
-  # NTFS refuses a control character in a name, so Git Bash cannot build this case at all.
-  printf '  SKIP  quoted filename cannot hide a violation — this filesystem refuses a tab in a filename\n'
+  # NTFS refuses a control character in a name (MSYS may map it and git then cannot stage it),
+  # so Git Bash cannot build this case at all.
+  rm -f "$T/$ODD" 2>/dev/null
+  printf '  SKIP  quoted filename cannot hide a violation — this filesystem, or git here, refuses a tab in a filename\n'
 fi
 
 echo "### this suite, and the guard, can themselves be committed under the guard"

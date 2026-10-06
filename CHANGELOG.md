@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **The hooks read Python back without the CR a native Windows Python appends**, plus the
+  next causes the matrix measured after the previous batch. A native Windows Python ends every
+  stdout line with CR LF even into a pipe (the workflow's box line now shows it), so the prerun
+  hook read an empty session id as a lone CR and treated every call as session-scoped with no
+  claims — every `allows` case blocked — and the stop hook's rows and the prime hook's project
+  brief carried the CR too; all three strip it. The prime hook's `core.hooksPath` check compares
+  directories by inode (`-ef`), not spelling: git reports `C:/…` where the shell says `/c/…`, and
+  macOS has `/var` beside `/private/var`. The project brief runs unbounded where there is no
+  `timeout`, as the site checks already do. `tools/dolt-guard.sh` stamps its log with strftime,
+  not `date -Is`, which BSD date rejects. Its suite starts listeners without `setsid` where there
+  is none, keeps their pids in a file instead of `pgrep` (absent on MSYS), asserts exactly-once
+  starts and the lock only where `flock` exists, and builds its no-flock PATH from wrappers that
+  include `lsof` and `netstat` for the boxes that probe with them. `agent_docs_test.sh` strips the
+  CR from its Python output; `check-no-agent-cache-paths_test.sh` skips its tab-in-a-filename
+  case when git cannot stage the name, not only when the filesystem refuses it. The Pi extension
+  compares real paths: Node resolves a module's real path while the cwd it is handed may be the
+  logical spelling, so on macOS it had declared itself loaded outside its own project and run
+  nothing. `bd-prime-hook_test.sh` prints the payload head under a failing check.
+- **One file, two names, on a filesystem without symlinks.** Git Bash's `ln -s` copies the
+  target by default and reports success, so the first native Windows install produced two
+  independent files with no error. The installer now runs it with `MSYS=winsymlinks:nativestrict`
+  (a real link where Windows allows one, a failure otherwise) and on failure writes git's own
+  on-disk form of the link — `CLAUDE.md` holding the text `AGENTS.md` — staged as a symlink
+  (`update-index --cacheinfo 120000`), so the commit carries a real symlink and a clone with
+  symlinks gets one; a re-run recognises that state as linked. `tools/check-agent-docs-linked.sh`
+  accepts the pointer form when git agrees it is a link (index mode 120000, or
+  `core.symlinks=false`), its `--cached` snapshot no longer needs a symlink of its own, and its
+  messages say how to stage the pointer form. Its suite gains the pointer-file state (six cases)
+  and, on a box that cannot link at all, says so and runs that section alone; the self-test
+  forces the fallback (`BAP_INSTALL_NO_SYMLINKS=1`, `core.symlinks=false`) so a Linux box
+  exercises it too: pointer on disk, 120000 in the index, guard passes, commit passes, the
+  commit's tree carries a symlink, and a fresh clone has the real link. `docs/ops/agent-docs-symlink.md`
+  describes the form.
 - **The suites and the self-test hold on macOS and Git Bash where they held only on Linux**,
   measured by the Actions matrix on 2026-10-06 and fixed at the cause. BSD `wc` pads its count,
   so every `wc -l` / `wc -c` comparison in `selftest.sh`, `dolt-guard_test.sh`,

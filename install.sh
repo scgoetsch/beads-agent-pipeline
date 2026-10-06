@@ -340,8 +340,17 @@ else
   did "AGENTS.md (template — edit it, it is meant to be yours)"
 fi
 
+# One file, two names. Where the filesystem has no symlinks, git's own on-disk form of the link
+# is a regular file holding the target's name, and the index carries the symlink (mode 120000).
+pointer_staged() {  # pointer_staged DIR -> 0 when CLAUDE.md there is that form, staged as a link
+  [ -f "$1/CLAUDE.md" ] && [ ! -L "$1/CLAUDE.md" ] && [ "$(cat "$1/CLAUDE.md")" = "AGENTS.md" ] || return 1
+  case "$(git -C "$1" ls-files --stage -- CLAUDE.md 2>/dev/null)" in "120000 "*) return 0 ;; esac
+  return 1
+}
 if [ -L "$TARGET/CLAUDE.md" ] && [ "$(readlink "$TARGET/CLAUDE.md")" = "AGENTS.md" ]; then
   say "CLAUDE.md -> AGENTS.md (already linked)"
+elif pointer_staged "$TARGET"; then
+  say "CLAUDE.md -> AGENTS.md (already linked: a pointer file staged as a symlink — no symlinks on this filesystem)"
 elif [ -e "$TARGET/CLAUDE.md" ] && [ ! -L "$TARGET/CLAUDE.md" ]; then
   # Never silently discard a regular file: it may hold edits AGENTS.md does not.
   warn "CLAUDE.md is a REGULAR FILE, not a symlink. Not touching it."
@@ -351,15 +360,33 @@ elif [ ! -e "$TARGET/CLAUDE.md" ]; then
   # `ln -s && did` alone would SAY NOTHING when ln fails, which it does on filesystems without
   # symlink support (Windows without Developer Mode, some network and container mounts). The
   # component whose job is to create the link is the worst place to fail quietly.
+  #
+  # MSYS=winsymlinks:nativestrict: Git Bash's `ln -s` COPIES the target by default and reports
+  # success, which turns one file with two names into two files with no error (first native
+  # Windows run, 2026-10-06). With it set, ln makes a real symlink where Windows allows one
+  # (Developer Mode, or an elevated shell) and fails otherwise -- and the failure takes the
+  # fallback: write git's own on-disk form of the link on such a checkout, a file holding the
+  # target's name, and stage it as a symlink (mode 120000) so it COMMITS as one and every clone
+  # with symlinks gets the real link. The guard accepts that state when the index agrees.
+  # BAP_INSTALL_NO_SYMLINKS=1 forces the fallback; the self-test uses it on a box that has
+  # symlinks, so this path is exercised everywhere and not only where it is needed.
   if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m ln -s AGENTS.md CLAUDE.md\n'
-  elif ln -s AGENTS.md "$TARGET/CLAUDE.md" 2>/dev/null; then did "CLAUDE.md -> AGENTS.md"
+  elif [ -z "${BAP_INSTALL_NO_SYMLINKS:-}" ] \
+       && MSYS=winsymlinks:nativestrict ln -s AGENTS.md "$TARGET/CLAUDE.md" 2>/dev/null \
+       && [ -L "$TARGET/CLAUDE.md" ]; then
+    did "CLAUDE.md -> AGENTS.md"
   else
-    warn "could not create the CLAUDE.md symlink — this filesystem may not support symlinks."
-    say "    on Windows, try:  git config --global core.symlinks true  (needs Developer Mode)"
-    say "    otherwise see docs/ops/agent-docs-symlink.md for the fallback"
+    rm -f "$TARGET/CLAUDE.md"      # an ln that copied instead of linking leaves a file behind
+    printf 'AGENTS.md' > "$TARGET/CLAUDE.md"
+    if blob=$(printf 'AGENTS.md' | git -C "$TARGET" hash-object -w --stdin 2>/dev/null) \
+       && git -C "$TARGET" update-index --add --cacheinfo "120000,$blob,CLAUDE.md" 2>/dev/null; then
+      did "CLAUDE.md -> AGENTS.md as a POINTER FILE (no symlinks on this filesystem): the file holds the target's name and the index holds the symlink, mode 120000, so it commits as a link"
+      say "    real links on Windows need:  git config --global core.symlinks true  (Developer Mode or an elevated shell)"
+    else
+      warn "could not create the CLAUDE.md symlink, and could not stage the pointer file as one — see docs/ops/agent-docs-symlink.md"
+    fi
   fi
 fi
-
 # --------------------------------------------------------------- git hooks --
 # Wired whether or not bd is present. Two of the pre-commit's stanzas (agent-cache paths,
 # agent-docs symlink) need no bd and are the whole point on a box without one; the two that do

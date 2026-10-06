@@ -6,6 +6,17 @@
 # directory is touched. Run it before every release.
 set -uo pipefail
 SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+# Git Bash's `ln -s` COPIES by default; this makes it a real symlink or a failure, which is what
+# every link proof below needs. Inert anywhere else.
+export MSYS=winsymlinks:nativestrict
+# The link, in either of its forms: a real symlink, or on a filesystem without symlinks the
+# installer's pointer file (holding "AGENTS.md") staged as a symlink (index mode 120000).
+linked_to_agents() {  # linked_to_agents DIR -> 0 when CLAUDE.md there is the link to AGENTS.md
+  if [ -L "$1/CLAUDE.md" ]; then [ "$(readlink "$1/CLAUDE.md")" = AGENTS.md ]; return; fi
+  [ -f "$1/CLAUDE.md" ] && [ "$(cat "$1/CLAUDE.md")" = AGENTS.md ] || return 1
+  case "$(git -C "$1" ls-files --stage -- CLAUDE.md 2>/dev/null)" in "120000 "*) return 0 ;; esac
+  return 1
+}
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 
 pass=0; fail=0
@@ -61,8 +72,8 @@ if [ -f "$T/.claude/memory-curation.txt" ] \
 else bad ".claude/memory-curation.txt stamped by the installer"; fi
 [ -x "$T/.claude/site-checks/memory-curation-gate.sh" ] && ok "site check is executable" \
   || bad "site check is executable"
-[ -L "$T/CLAUDE.md" ] && [ "$(readlink "$T/CLAUDE.md")" = AGENTS.md ] \
-  && ok "CLAUDE.md is a symlink to AGENTS.md" || bad "CLAUDE.md symlink"
+linked_to_agents "$T" && ok "CLAUDE.md is the link to AGENTS.md (a symlink, or its pointer form where there are none)" \
+  || bad "CLAUDE.md symlink"
 [ -x "$T/tools/sweep.sh" ] && ok "tools are executable" || bad "tools are executable"
 [ -x "$T/.claude/skills/memory-curate/audit_wikilinks.py" ] && ok "skill scripts are executable" \
   || bad "skill scripts are executable"
@@ -229,8 +240,7 @@ printf '\n\033[1m### the CLAUDE.md symlink, and every way it breaks\033[0m\n'
 # 0 on exactly the state it exists to catch.
 S=$(mktemp -d); git -C "$S" init -q
 "$SRC/install.sh" --no-shell "$S" >"$S/.log" 2>&1
-[ -L "$S/CLAUDE.md" ] && ok "install creates CLAUDE.md as a symlink" || bad "install creates CLAUDE.md as a symlink"
-chk "it points at AGENTS.md" "$(readlink "$S/CLAUDE.md")" "AGENTS.md"
+linked_to_agents "$S" && ok "install creates CLAUDE.md as the link to AGENTS.md" || bad "install creates CLAUDE.md as the link to AGENTS.md"
 # The four states (linked / regular file / wrong target / dangling) are asserted by the guard's
 # OWN suite, tools/check-agent-docs-linked_test.sh, which the loop above runs inside this very
 # install. What belongs HERE is only what is specific to installing: that the link gets created,
@@ -241,6 +251,34 @@ rm -f "$S/CLAUDE.md"; printf 'stale copy\n' > "$S/CLAUDE.md"
 chk "installer keeps an existing regular CLAUDE.md" "$(cat "$S/CLAUDE.md")" "stale copy"
 grep -q 'REGULAR FILE' "$S/.log2" && ok "installer says why it refused" || bad "installer says why it refused"
 rm -rf "$S"
+
+printf '\n\033[1m### no symlinks on the target filesystem: a pointer file that commits as a link\033[0m\n'
+# Git for Windows without Developer Mode cannot make a symlink, and MSYS `ln -s` silently copies
+# instead. The installer then writes git's own on-disk form of the link -- a file holding the
+# target's name -- and stages it as mode 120000, so the commit carries a real symlink and a clone
+# with symlinks gets one. Forced here with BAP_INSTALL_NO_SYMLINKS, under core.symlinks=false as
+# git sets it on such a box, so a Linux box exercises the path too.
+N=$(mktemp -d); git -C "$N" init -q
+git -C "$N" config user.email t@example.com; git -C "$N" config user.name t
+git -C "$N" config core.symlinks false
+BAP_INSTALL_NO_SYMLINKS=1 "$SRC/install.sh" --no-shell "$N" >"$N/.log" 2>&1
+[ -L "$N/CLAUDE.md" ] && bad "no-symlink install: CLAUDE.md is a regular pointer file" || ok "no-symlink install: CLAUDE.md is a regular pointer file"
+chk "no-symlink install: it holds exactly the target's name" "$(cat "$N/CLAUDE.md")" "AGENTS.md"
+chk "no-symlink install: the index holds it as a symlink" "$(git -C "$N" ls-files --stage -- CLAUDE.md | cut -c1-6)" "120000"
+grep -q 'POINTER FILE' "$N/.log" && ok "no-symlink install: the installer says what it did" || bad "no-symlink install: the installer says what it did"
+(cd "$N" && ./tools/check-agent-docs-linked.sh) >"$N/.guard.log" 2>&1 && ok "no-symlink install: the guard accepts the pointer state" \
+  || { bad "no-symlink install: the guard accepts the pointer state"; sed -n '1,3p' "$N/.guard.log" | sed 's/^/        /'; }
+git -C "$N" add -A
+git -C "$N" commit -qm "pointer form" >"$N/.commit.log" 2>&1 && ok "no-symlink install: the payload commits under the guards" \
+  || { bad "no-symlink install: the payload commits under the guards"; sed -n '1,6p' "$N/.commit.log" | sed 's/^/        /'; }
+chk "no-symlink install: the commit carries a symlink" "$(git -C "$N" ls-tree HEAD -- CLAUDE.md | cut -c1-6)" "120000"
+git clone -q "$N" "$N.clone" 2>/dev/null
+[ -L "$N.clone/CLAUDE.md" ] && [ "$(readlink "$N.clone/CLAUDE.md")" = AGENTS.md ] \
+  && ok "no-symlink install: a clone on a box with symlinks gets the real link" || bad "no-symlink install: a clone on a box with symlinks gets the real link"
+BAP_INSTALL_NO_SYMLINKS=1 "$SRC/install.sh" --no-shell "$N" >"$N/.log2" 2>&1
+grep -q 'nothing to do' "$N/.log2" && ok "no-symlink install: the re-run is a no-op" \
+  || { bad "no-symlink install: the re-run is a no-op"; grep -E '^\s+[+!]' "$N/.log2" | sed 's/^/        /'; }
+rm -rf "$N" "$N.clone"
 
 printf '\n\033[1m### re-running changes nothing (idempotence)\033[0m\n'
 "$SRC/install.sh" --no-shell "$T" >"$T/.install2.log" 2>&1
