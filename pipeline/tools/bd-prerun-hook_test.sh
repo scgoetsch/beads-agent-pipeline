@@ -136,6 +136,7 @@ allows "the --key=slug form"                                 "bd remember --key=
 allows "bd remember --help is not a write"                   "bd remember --help"
 
 echo "### the untracked-scripts gate: consults bd, needs an in_progress issue, fails open"
+export BD_SCRIPT_DIRS_RE=scripts   # this clone's .claude/bd-prerun.conf may turn the gate off; pin it on
 # A stub bd on PATH answers `bd list --status=in_progress` with whatever BD_STUB_LIST holds and
 # `bd --json list ...` with BD_STUB_JSON. The text fixtures below are bd 1.3's REAL shape: a row is
 # "◐ id ● P2 [type] title" (● is the priority bullet) and a non-empty listing ends with a legend
@@ -203,6 +204,9 @@ PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim in unparsable text (fallback)"   
 for id in mine-3 mine-4 mine-5 mine-6 mine-8; do chk_rec "recorded: $id" "$id"; done
 nochk_rec "not recorded: a --title value"                                       my-fix
 nochk_rec "not recorded: an update that is not a claim"                         mine-7
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim after an admitted bd remember"      "bd remember --key k 'fact' && bd update mine-9 --claim"
+chk_rec "recorded: a claim after an admitted bd remember"                         mine-9
+if [ -e "$CL/s2" ]; then bad "another session's record is untouched" "s2 exists"; else ok "another session's record is untouched"; fi
 export BD_STUB_JSON="[$OTHERS,{\"id\":\"mine-8\",\"title\":\"mine\"}]"
 PATH="$STUB:$PATH" HOOK_SID=s1 allows "a fallback-recorded claim licenses too"   "python3 scripts/run.py"
 unset BD_SESSION_CLAIMS_DIR
@@ -217,6 +221,25 @@ if PATH="$bare_path" command -v python3 >/dev/null 2>&1 && ! PATH="$bare_path" c
 else
   bad "no bd on PATH: the scripts gate fails open" "could not build a PATH without bd but with python3"
 fi
+
+echo "### the knob: an empty SCRIPT_DIRS_RE turns the scripts gate off; the environment beats the conf file"
+export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= allows "empty pattern: a script runs with nothing in progress"   "python3 scripts/run.py"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= HOOK_SID=s7 allows "...also with a session id"                     "./scripts/analyze.py"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= blocks "...the pkill guard still covers a line after the script"  "python3 scripts/run.py; pkill -f rsync"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= blocks "...and a key-less bd remember after it"                   "python3 scripts/run.py && bd remember 'x'"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= allows "...unparsable text with the gate off: the fallback does not gate either" $'cat <<EOF\nit\'s\nEOF\npython3 scripts/run.py'
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE=pipelines blocks "another directory name gates that directory"   "python3 pipelines/run.py"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE=pipelines allows "...and not scripts/"                            "python3 scripts/run.py"
+# The conf file: a copy of the hook in a scratch clone whose .claude/bd-prerun.conf turns the gate off.
+CONF_WS="$STUB/confws"; mkdir -p "$CONF_WS/.claude"; cp "$HOOK" "$CONF_WS/.claude/"
+printf "SCRIPT_DIRS_RE=''\n" > "$CONF_WS/.claude/bd-prerun.conf"
+REAL_HOOK=$HOOK; HOOK="$CONF_WS/.claude/bd-prerun-hook.sh"; unset BD_SCRIPT_DIRS_RE
+PATH="$STUB:$PATH" allows "conf file with an empty pattern: gate off"                       "python3 scripts/run.py"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE=scripts blocks "the environment beats the conf: gate back on" "python3 scripts/run.py"
+PATH="$STUB:$PATH" blocks "conf off: the pkill guard is untouched"                           "pkill -f rsync"
+HOOK=$REAL_HOOK
+unset BD_STUB_LIST BD_STUB_JSON
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -281,7 +281,9 @@ that line, the host cut the payload — run `bash .claude/bd-prime-hook.sh` your
 again before a context compaction; `bd-prerun-hook.sh` is a
 PreToolUse guard that blocks bare `pkill`/`killall`, malformed `bd remember`, and a run of a
 script under the scripts directory with no issue claimed by THIS session in progress (which
-directory is the one-line knob `SCRIPT_DIRS_RE` in the hook); `bd-stop-hook.sh` runs after each
+directory is the knob `SCRIPT_DIRS_RE`, set in a bd-prerun.conf file beside the hook, which the
+hook sources, or as `BD_SCRIPT_DIRS_RE` in the environment; empty turns that gate off);
+`bd-stop-hook.sh` runs after each
 turn and reports only this session's claimed in-progress issues, when that set changes. Both are
 session-scoped because the bd store is shared by every session on the machine and all of them
 claim as the same actor: the prerun hook records each session's `bd update <id> --claim` in

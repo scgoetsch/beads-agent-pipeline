@@ -63,7 +63,9 @@ chk "bd-prime-hook still emits the session rules" \
     "$(grep -c 'MANDATORY SESSION RULES' "$TMP/out")" "1"
 
 JSON='{"tool_name":"Bash","tool_input":{"command":"python3 scripts/run_thing.py"}}'
-rc=$(run_hook bd-prerun-hook.sh "$JSON")
+# The scripts gate is the prerun hook's only bd call; pin it on, since a clone's
+# .claude/bd-prerun.conf may turn it off.
+rc=$(BD_SCRIPT_DIRS_RE=scripts run_hook bd-prerun-hook.sh "$JSON")
 chk "bd-prerun-hook runs bd from the relocated clone" "$(head -1 "$BD_CWD_LOG")" "$CLONE"
 
 sec "the guards still fire after relocation (not just the path resolution)"

@@ -84,8 +84,16 @@ not want, and it is one line to turn off:
   the rule while a rephrase walked straight through.
 - **Running a script under `scripts/` with no bd issue `in_progress`.** Untracked analysis runs
   are how reproducibility gaps start, so the hook asks for a claimed issue first. It fails open
-  if bd is unavailable. The directory name is the one-line knob `SCRIPT_DIRS_RE` in
-  `.claude/bd-prerun-hook.sh`; set it to something that matches nothing to drop the rule.
+  if bd is unavailable. The directory pattern is the knob `SCRIPT_DIRS_RE`: set it in
+  `.claude/bd-prerun.conf` (a one-line, tracked file the hook sources) or in the environment as
+  `BD_SCRIPT_DIRS_RE`; an empty value turns the gate off, and the hook file itself stays identical
+  to the one shipped here.
+
+**An optional project registry.** A repo that keeps one bd store for several projects can add a
+`projects.tsv` (one row per project, active or inactive) and a `tools/projects.py` beside it; the
+SessionStart hook then opens with a per-active-project brief instead of "run `bd ready` NOW", and
+rule 2 asks for a `project:<name>` label on every issue. Neither file ships here yet; without the
+registry nothing changes, and a registry without the tool is reported, not skipped.
 
 **The SessionStart hook** (cached at Pi `session_start` when opted in) replaces bd's raw
 `bd prime` dump (76 KB on a 40-memory store) with, in this order, the rules, a key-only index of

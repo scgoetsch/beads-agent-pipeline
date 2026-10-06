@@ -36,7 +36,7 @@ function inProject(cwd: string): boolean {
 
 function missingWarning(script: string): string {
   const path = resolve(root, ".claude", script);
-  return `${PREFIX} ${script} NOT FOUND at ${path} — bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.`;
+  return `${PREFIX} ${script} NOT FOUND at ${path} — bd session rules and command guards are OFF. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.`;
 }
 
 function notice(ctx: NoticeContext, message: string, level: "info" | "warning" = "warning"): void {
@@ -117,7 +117,7 @@ export default function beadsPipeline(pi: ExtensionAPI) {
       const why = result.fault || `exit ${result.code}; ${result.stderr.trim() || "empty output"}`;
       prime = result.fault?.includes("NOT FOUND")
         ? `${missingWarning("bd-prime-hook.sh")} Session is NOT PRIMED.`
-        : `${PREFIX} bd-prime-hook.sh unavailable (${why}) — session is NOT PRIMED. Re-run the beads-agent-pipeline installer and check .pi/extensions/ and .claude/.`;
+        : `${PREFIX} bd-prime-hook.sh unavailable (${why}) — session is NOT PRIMED. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .pi/extensions/ and .claude/.`;
       notice(ctx, prime);
     } else {
       prime = result.stdout;
@@ -138,7 +138,7 @@ export default function beadsPipeline(pi: ExtensionAPI) {
       if (result.fault || result.code !== 0) {
         const message = result.fault?.includes("NOT FOUND")
           ? missingWarning("bd-prerun-hook.sh")
-          : `${PREFIX} bd-prerun-hook.sh FAILED (${result.fault || `exit ${result.code}`}); guards are OFF. ${result.stderr.trim()} Re-run the beads-agent-pipeline installer and check .claude/settings.json.`;
+          : `${PREFIX} bd-prerun-hook.sh FAILED (${result.fault || `exit ${result.code}`}); guards are OFF. ${result.stderr.trim()} Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.`;
         notice(ctx, `${message} Command ALLOWED.`);
         return;
       }

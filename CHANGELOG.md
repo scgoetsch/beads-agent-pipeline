@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The installed hooks and the shipped ones are one file again.** A workspace that had carried
+  the pipeline for a month had diverged from it by 68, 168 and 20 lines in the three session hooks,
+  and every later fix had to be ported by hand in one direction or the other. Three changes make
+  the copies byte-identical, with policy outside the files:
+  - The scripts gate's directory pattern `SCRIPT_DIRS_RE` is read from `.claude/bd-prerun.conf`
+    (sourced, tracked) or `BD_SCRIPT_DIRS_RE` in the environment, and an EMPTY value turns the gate
+    off, bd call included. Editing the hook to drop the rule was the one way to fork it. Thirteen
+    new cases in `tools/bd-prerun-hook_test.sh` (both knobs, precedence, the other guards
+    unaffected, another directory name); the portability and Pi suites pin the gate on, since a
+    clone's conf may turn it off.
+  - The SessionStart hook knows about an optional project registry: with a `projects.tsv` and a
+    `tools/projects.py` in the repo it prints a per-active-project brief under the rules and words
+    rules 1 and 2 for project-scoped work; without the registry it is unchanged. A registry
+    without the tool, or a tool that fails, is said out loud. Nine new cases in
+    `tools/bd-prime-hook_test.sh`. The two files are not part of the payload yet.
+  - The NOT FOUND messages in `.claude/settings.json` and the Pi adapter now say "restore the
+    tracked script or re-run the installer", which is right in a clone that tracks its hooks and
+    in a fresh install alike; the Pi suite asserts the wording.
 - **A memory curation gate ships as the first site check.** bd has no consolidation cadence: a
   store curated once on 2026-09-18 grew for weeks with nothing prompting the next audit, which
   the comparison with an agent CLI whose consolidation runs automatically made plain

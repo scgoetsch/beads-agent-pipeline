@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# PreToolUse hook — blocks analysis scripts when no beads issue is in_progress.
+# PreToolUse hook — blocks bare pkill/killall and a keyless `bd remember`, gates analysis
+# scripts on an in_progress issue (a knob, see SCRIPT_DIRS_RE below), and records what each
+# session claims (read by bd-stop-hook.sh).
 #
 # Claude Code passes the tool call as JSON on stdin:
 #   { "tool_name": "Bash", "tool_input": { "command": "..." }, ... }
@@ -50,11 +52,20 @@ command=${parsed#*$'\n'}
 # This is an accident guard, NOT a shell sandbox. Tokenize literal commands to handle quoting,
 # wrappers and interpreter options; never evaluate shell input. Dynamic expansion/aliases and
 # arbitrary shell programs remain outside this heuristic's scope.
-SCRIPT_DIRS_RE='scripts'  # regex alternation, e.g. scripts|pipelines|analysis
+# THE SCRIPTS-GATE KNOB. SCRIPT_DIRS_RE is the directory pattern the gate watches: a regex
+# alternation such as scripts|pipelines|analysis. EMPTY turns the gate off -- a repo whose
+# scripts/ directories all belong to retired projects has nothing to gate, and the gate's bd call
+# is then skipped too. Precedence: the environment (BD_SCRIPT_DIRS_RE, set-but-empty counts),
+# then .claude/bd-prerun.conf (a one-line `SCRIPT_DIRS_RE=...`, tracked so every clone agrees),
+# then the default. The knob lives OUTSIDE this file so the hook stays byte-identical with the
+# upstream copy; editing the default here is the one way to make the two diverge.
+SCRIPT_DIRS_RE='scripts'
+[ -f "$WS/.claude/bd-prerun.conf" ] && . "$WS/.claude/bd-prerun.conf"
+[ -n "${BD_SCRIPT_DIRS_RE+x}" ] && SCRIPT_DIRS_RE=$BD_SCRIPT_DIRS_RE
 policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" <<'PY'
 import os, re, shlex, sys
 
-script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*')
+script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*') if sys.argv[2] else None  # None: gate off
 assignment = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
 def unwrap(words):
@@ -176,8 +187,8 @@ def inspect(command, depth=0):
                 if arg.startswith('-') and not arg.startswith('--') and 'c' in arg and i + 1 < len(args):
                     merge(inspect(args[i + 1], depth + 1))
                     break
-        if script_path.search(words[0]): flags[1] = True
-        if re.fullmatch(r'python(?:[0-9]+(?:\.[0-9]+)*)?|Rscript|bash|sh', name):
+        if script_path and script_path.search(words[0]): flags[1] = True
+        if script_path and re.fullmatch(r'python(?:[0-9]+(?:\.[0-9]+)*)?|Rscript|bash|sh', name):
             i = 0
             while i < len(args):
                 arg = args[i]; i += 1
@@ -207,7 +218,7 @@ def line_fallback(command):
     calls = [c for c in calls if not re.match(r'[ \t]+(?:-h|--help)(?:[ \t]|$)', c)]
     keyless = any(not re.search(r'--key(?:[ \t]|=)', c) for c in calls)
     d = sys.argv[2]
-    script = bool(re.search(r'(?:^|[ \t])(?:python3?|Rscript)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.(?:py|R)(?:[ \t]|$)', command, re.M)
+    script = bool(d) and bool(re.search(r'(?:^|[ \t])(?:python3?|Rscript)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.(?:py|R)(?:[ \t]|$)', command, re.M)
                   or re.search(r'(?:^|[ \t])(?:bash|sh)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.sh(?:[ \t]|$)', command, re.M)
                   or re.search(pos + r'(?:\S*/)?(?:' + d + r')/\S+', command, re.M))
     claims = set()

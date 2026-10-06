@@ -129,11 +129,32 @@ emit_hooks_unwired() {
 }
 emit_session_rules() {
   echo "# 🚨 MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨"; echo ""
-  echo "1. Run \`bd ready\` NOW to check for available work before doing anything else."
-  echo "2. Use \`bd create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+  if [ -f "$WS/projects.tsv" ]; then
+    # A project registry scopes the work: the brief below replaces "run bd ready NOW", which
+    # ranked every project's backlog together (on one store, 45 of 68 top items belonged to a
+    # retired project).
+    echo "1. Work comes from the ACTIVE projects listed below; inactive ones stay parked unless the user reopens them."
+    echo "2. Use \`bd create ... -l project:<name>\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+  else
+    echo "1. Run \`bd ready\` NOW to check for available work before doing anything else."
+    echo "2. Use \`bd create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+  fi
   echo "3. Use \`bd update <id> --claim\` before starting any issue."
   echo "4. Use \`bd close <id>\` when work is complete."
   echo "5. Use \`bd remember\` for persistent knowledge — never MEMORY.md files."; echo ""
+  emit_projects
+}
+# OPTIONAL PROJECT REGISTRY. When the repo keeps a projects.tsv (one bd store, several projects,
+# each marked active or inactive) and a tools/projects.py beside it, `projects.py brief` prints a
+# ~1.5 KB brief: per active project, its ready count and top items. Neither file is part of the
+# pipeline payload yet; a repo without the registry gets nothing here. A registry WITHOUT the
+# tool, or a tool that fails, is said out loud and never blocks the session.
+emit_projects() {
+  local tool="$WS/tools/projects.py" out
+  [ -f "$WS/projects.tsv" ] || return 0
+  if [ ! -f "$tool" ]; then echo "## ⚠ projects.tsv exists but tools/projects.py is missing — no project brief"; echo ""; return 0; fi
+  if out=$(timeout 30 python3 "$tool" brief 2>&1); then printf '%s\n\n' "$out"
+  else echo "## ⚠ tools/projects.py brief failed — run it by hand:"; printf '%s\n\n' "$out" | head -c 400; fi
 }
 emit_rules() { emit_hooks_unwired; emit_session_rules; emit_site_checks; }
 # Every fallback SAYS it is one, and why. The full dump is the degraded path -- it was measured

@@ -341,6 +341,27 @@ chk "an omitted index alone is not a TRIMMED alarm" "$(grep -c 'PAYLOAD TRIMMED'
 chk "the total count is still disclosed" "$(grep -c 'index (400 more' <<<"$out")" 1
 chk "the end marker survives" "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
 
+echo "### project brief: present with a registry, silent without, loud when broken"
+out=$(run_hook)
+chk "no projects.tsv: no project section"            "$(grep -c '^## Projects\|projects.py' <<<"$out")" 0
+chk "no projects.tsv: rule 1 says bd ready"          "$(grep -c '^1. Run `bd ready` NOW' <<<"$out")" 1
+printf 'project\tstatus\tpaths\trules\tsummary\n' > "$T/ws/projects.tsv"
+out=$(run_hook)
+chk "registry but no tool: one loud line"             "$(grep -c 'tools/projects.py is missing' <<<"$out")" 1
+chk "registry: rule 1 scopes work to active projects" "$(grep -c '^1. Work comes from the ACTIVE projects' <<<"$out")" 1
+chk "registry: rule 2 asks for the project label"     "$(grep -c 'project:<name>' <<<"$out")" 1
+mkdir -p "$T/ws/tools"
+printf '#!/usr/bin/env python3\nprint("## Projects SENTINEL-BRIEF")\n' > "$T/ws/tools/projects.py"
+out=$(run_hook)
+chk "the brief is emitted"                            "$(grep -c 'SENTINEL-BRIEF' <<<"$out")" 1
+l_r=$(grep -n 'MANDATORY SESSION RULES' <<<"$out" | head -1 | cut -d: -f1); l_b=$(grep -n 'SENTINEL-BRIEF' <<<"$out" | cut -d: -f1)
+chk "...right under the rules, at the head"           "$(( l_r < l_b && l_b < 20 ))" 1
+printf '#!/usr/bin/env python3\nimport sys; print("boom"); sys.exit(3)\n' > "$T/ws/tools/projects.py"
+out=$(run_hook)
+chk "a failing brief is named, not hidden"            "$(grep -c 'projects.py brief failed' <<<"$out"):$(grep -c 'boom' <<<"$out")" "1:1"
+chk "...and the session is still primed"              "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
+rm -rf "$T/ws/projects.tsv" "$T/ws/tools"
+
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
