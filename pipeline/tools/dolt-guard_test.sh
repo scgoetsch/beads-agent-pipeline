@@ -32,6 +32,13 @@ free_port() {
 s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
 }
 
+listening() {  # listening PORT -> 0 when something accepts on 127.0.0.1:PORT. A connect probe,
+    # so the suite itself needs none of ss/lsof/netstat (a bare container has none of them).
+    python3 -c 'import socket, sys
+s = socket.socket(); s.settimeout(0.5)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
+}
+
 start_listener() {  # start_listener PORT -> binds it for the life of the suite
     local port="$1"
     setsid python3 -c "
@@ -41,7 +48,7 @@ s.bind(('127.0.0.1',$port)); s.listen(1); time.sleep(600)" </dev/null >/dev/null
     LISTENERS+=("$!")
     local n=40
     while [ $n -gt 0 ]; do
-        [ -n "$(ss -ltnH "sport = :$port" 2>/dev/null)" ] && return 0
+        listening "$port" && return 0
         sleep 0.1; n=$((n-1))
     done
     return 1
@@ -113,7 +120,7 @@ run_guard "$ws3" "$port3" "$stub_good"; rc=$?
 LISTENERS+=("$(pgrep -f "127.0.0.1',$port3" | head -1)")
 check "returns 0" "$rc" "0"
 check "invoked 'bd dolt start'" "$(cat "$TMP/calls-3" 2>/dev/null)" "dolt start"
-check "port is now listening" "$([ -n "$(ss -ltnH "sport = :$port3")" ] && echo up || echo down)" "up"
+check "port is now listening" "$(listening "$port3" && echo up || echo down)" "up"
 grep -q 'started dolt server' "$TMP/err" \
     && ok "announces the start on stderr" \
     || bad "announces the start on stderr" "stderr: $(cat "$TMP/err")"
@@ -189,7 +196,7 @@ for p in "${racers[@]}"; do wait "$p"; race_rcs="$race_rcs$?"; done
 race_secs=$((SECONDS - race_t0))
 LISTENERS+=("$(pgrep -f "127.0.0.1',$port7" | head -1)")
 check "bd dolt start ran exactly once across 4 shells" "$(wc -l <"$TMP/calls-7" 2>/dev/null | tr -d ' ')" "1"
-check "port ends up listening" "$([ -n "$(ss -ltnH "sport = :$port7")" ] && echo up || echo down)" "up"
+check "port ends up listening" "$(listening "$port7" && echo up || echo down)" "up"
 # The stub's listener, like the real `dolt sql-server`, is a child of
 # `bd dolt start` and outlives it. If it inherits the guard's lock fd the lock
 # stays held for the server's whole life, and every shell that was waiting
@@ -204,22 +211,36 @@ check "the started server does not hold the guard's lock" \
 echo
 
 # ---------------------------------------------------------------- 9
-echo "no listener prober on PATH (no ss, lsof, netstat): says so, touches nothing"
+echo "no listener prober on PATH (no ss, lsof, netstat): Linux reads /proc/net/tcp; elsewhere it says so"
 # The probe used to be `ss` alone. Absent (stock macOS), its empty output read as "not
 # listening" and every new shell tried to start a server. Build a PATH holding the tools the
-# guard needs and none of the three probers.
+# guard needs and none of the three probers. On Linux the guard now answers from the kernel's
+# own table, so prove it READS it: a live listener must be seen (no start, no complaint) and an
+# empty port must not (a start attempted). Without /proc/net/tcp it must still say it cannot probe.
 NOPROBE="$TMP/noprobe"; mkdir -p "$NOPROBE"
-for t in bash sh date sleep cat grep mkdir touch dirname; do
+for t in bash sh date sleep cat grep mkdir touch dirname awk; do
     b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOPROBE/$t"
 done
 ws9=$(make_ws ws9); port9=$(free_port)
+start_listener "$port9" || { echo "could not bind test port"; exit 1; }
 stub_never9=$(make_bd never9 "touch '$TMP/CALLED-9'; exit 0")
 PATH="$NOPROBE" run_guard "$ws9" "$port9" "$stub_never9"; rc=$?
 check "returns 0" "$rc" "0"
-grep -q 'cannot probe' "$TMP/err" \
-    && ok "says it cannot probe (not 'not listening')" \
-    || bad "says it cannot probe" "stderr: $(cat "$TMP/err")"
-[ ! -e "$TMP/CALLED-9" ] && ok "bd dolt start NOT called" || bad "bd dolt start NOT called" "it was"
+[ ! -e "$TMP/CALLED-9" ] && ok "bd dolt start NOT called with a listener up" || bad "bd dolt start NOT called" "it was"
+if [ -r /proc/net/tcp ]; then
+    check "Linux: the kernel table answered, so nothing was said" "$(wc -c <"$TMP/err")" "0"
+    ws9b=$(make_ws ws9b); port9b=$(free_port)
+    stub_start9b=$(make_bd start9b "touch '$TMP/CALLED-9b'; exit 1")
+    PATH="$NOPROBE" run_guard "$ws9b" "$port9b" "$stub_start9b"; rc=$?
+    [ -e "$TMP/CALLED-9b" ] && ok "Linux: an empty port is seen as empty — a start was attempted" \
+        || bad "Linux: an empty port is seen as empty" "bd dolt start was never called: $(cat "$TMP/err")"
+    grep -q 'cannot probe' "$TMP/err" && bad "Linux: no false 'cannot probe'" "stderr: $(cat "$TMP/err")" \
+        || ok "Linux: no false 'cannot probe'"
+else
+    grep -q 'cannot probe' "$TMP/err" \
+        && ok "says it cannot probe (not 'not listening')" \
+        || bad "says it cannot probe" "stderr: $(cat "$TMP/err")"
+fi
 echo
 
 # ---------------------------------------------------------------- 10
@@ -227,7 +248,7 @@ echo "no flock on PATH: starts the server unlocked and says so, not 'timed out'"
 # A missing flock exited 127, `if ! flock` took the failure branch, and the guard reported a
 # 30-second timeout that never happened -- and gave up on exactly the box it was needed on.
 NOFLOCK="$TMP/noflock"; mkdir -p "$NOFLOCK"
-for t in bash sh date sleep cat grep mkdir touch dirname ss python3 setsid; do
+for t in bash sh date sleep cat grep mkdir touch dirname awk ss python3 setsid; do   # awk: the /proc fallback where ss is absent
     b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOFLOCK/$t"
 done
 ws10=$(make_ws ws10); port10=$(free_port)

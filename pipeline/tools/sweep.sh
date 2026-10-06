@@ -40,7 +40,10 @@
 #   * Files gitignored INSIDE a repo — excluded by default because that is where the
 #     multi-TB data lives. Pass --include-ignored to cover them.
 #   * Files over the size cap. The count is printed; raise it with --max-bytes.
-#   * Files grep calls BINARY — including plain prose carrying one malformed byte,
+#   * Files grep calls BINARY — which follows the ACTIVE LOCALE: under C/POSIX (a fresh
+#     container, a cron job) a malformed UTF-8 byte is ordinary text and the file IS searched;
+#     under a UTF-8 locale it is binary and skipped. Run sweeps under a UTF-8 locale so the
+#     BINARY column means what the report says — including plain prose carrying one malformed byte,
 #     which is how one README.md hid the phrase 'three repositories' from a sweep. The count is printed; read those files directly.
 #   * The bd layer (memories, issue descriptions/notes) — those are separate
 #     `bd memories` / `bd list` searches. A document sweep is not a corpus sweep.

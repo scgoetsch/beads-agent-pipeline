@@ -39,12 +39,25 @@ __bd_dolt_guard_listening() {
     # Linux only: fall back to lsof, then netstat (stock macOS has both). Returns 2 when NONE is
     # on PATH, so a box with no prober says so instead of reading "not listening" and trying to
     # start a server from every shell (2026-09-22 review; check 9 in dolt-guard_test.sh).
+    # A minimal Linux (a fresh container: no iproute2, lsof or net-tools) has none of the three
+    # but always has the kernel's own table, /proc/net/tcp: local_address is hex ip:port and
+    # state 0A is LISTEN. Read that before giving up (container self-test, 2026-10-06).
+    local hexport
     if command -v ss >/dev/null 2>&1; then
         [ -n "$(ss -ltnH "sport = :$1" 2>/dev/null)" ]
     elif command -v lsof >/dev/null 2>&1; then
         lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
     elif command -v netstat >/dev/null 2>&1; then
         netstat -an 2>/dev/null | command grep -qE "[.:]$1[[:space:]].*LISTEN"
+    elif [ -r /proc/net/tcp ]; then
+        # awk must READ TO THE END: an early `exit` on the first match sends SIGPIPE to the
+        # writer, and under `set -o pipefail` (any script that sources this guard) a live
+        # listener then reads as "not listening". The trailing `true` keeps a missing tcp6
+        # from failing the pipeline for the same reason. Found by the suite, 2026-10-06.
+        hexport=$(printf ':%04X' "$1")
+        { for f in /proc/net/tcp /proc/net/tcp6; do [ -r "$f" ] && cat "$f"; done; true; } 2>/dev/null \
+          | awk -v p="$hexport" '$4 == "0A" && substr($2, length($2) - length(p) + 1) == p { found = 1 }
+                                 END { exit !found }'
     else
         return 2
     fi
@@ -91,7 +104,7 @@ bd_dolt_guard() {
     __bd_dolt_guard_listening "$port"
     case $? in
         0) return 0 ;;
-        2) __bd_dolt_guard_say "$ws" "cannot probe :$port — none of ss, lsof, netstat on PATH; leaving the server alone"
+        2) __bd_dolt_guard_say "$ws" "cannot probe :$port — none of ss, lsof, netstat on PATH and no /proc/net/tcp; leaving the server alone"
            return 0 ;;
     esac
 

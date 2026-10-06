@@ -241,6 +241,22 @@ needed to prove the extension loads and intercepts a model tool call. Nothing ou
 directories is touched. It needs the same things the pipeline needs; without `jq` the
 SessionStart suite tests the fallback instead of the tiering and says so.
 
+**On a clean box, in Docker:**
+
+```bash
+test/selftest-in-container.sh          # bare (git + python3 only), then full (+ bd, jq, rg, ss, bd-memgraph)
+test/selftest-in-container.sh bare     # one target; --build-only skips the run
+```
+
+`test/Dockerfile` builds two Ubuntu 24.04 images: `bare` has nothing the pipeline lists beyond
+git, python3 and bash, so the installer's "required command absent" exit and every optional
+fallback get exercised; `full` adds bd from its official installer (the current release, not the
+one on your box), jq, ripgrep, iproute2 and bd-memgraph. Each run mounts this checkout read-only,
+copies it inside, and runs `./selftest.sh` there as a non-root user. The first run of this harness
+found two real defects the host had hidden: the sweep's binary-file case depends on a UTF-8 locale
+a container does not have, and the Dolt guard had no listener probe at all on a box without
+`ss`, `lsof` or `netstat`.
+
 ## Requirements
 
 **Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
@@ -259,7 +275,7 @@ on any other platform and file what fails.
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | `rg` | optional | only `sweep_test.sh`'s demonstration of the bare-grep hazard uses it; the sweep itself does not |
-| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; it falls back to `lsof`, then `netstat`, and says so when none of the three is present. Embedded stores never reach it |
+| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; it falls back to `lsof`, then `netstat`, then the kernel's own `/proc/net/tcp` on Linux, and says so when none is present. Embedded stores never reach it |
 | `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) the checks run unbounded, the session payload says so, and a hung check can stall session start |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
@@ -321,7 +337,8 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
   `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
 - **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
   install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **Platform coverage is Linux, including WSL2 suites, not native Windows or macOS.**
+- **Platform coverage is Linux, including WSL2 suites and the Docker self-test on a bare
+  Ubuntu 24.04, not native Windows or macOS.**
   `xargs -r` is probed for and `ss`/`flock` degrade with a message, but those fallbacks have not
   been run on macOS. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
   uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's

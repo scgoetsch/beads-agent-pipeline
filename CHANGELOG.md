@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The self-test runs on a clean box.** `test/selftest-in-container.sh` builds two Ubuntu 24.04
+  images from `test/Dockerfile` — `bare` (git, python3, bash and nothing else the pipeline lists)
+  and `full` (bd from its official installer at the current release, jq, ripgrep, iproute2,
+  bd-memgraph) — and runs `./selftest.sh` inside each as a non-root user with the checkout
+  mounted read-only. The "bare-box branch must still pass" line had only ever been a claim; the
+  first run found two defects the host hid. `tools/sweep_test.sh`'s binary-file case depended
+  on the active locale: under C/POSIX a malformed UTF-8 byte is ordinary text, grep searches the
+  file, and three assertions inverted for a reason unrelated to the detector; the case now pins
+  C.UTF-8 and SKIPs loudly where no UTF-8 locale exists, and `sweep.sh`'s header says the
+  BINARY column follows the locale. `tools/dolt-guard.sh` had no probe at all on a box without
+  `ss`, `lsof` or `netstat` and said so every shell; on Linux it now reads `/proc/net/tcp`. The
+  first version of that probe let awk exit on its first match, which sends SIGPIPE to the writer
+  and under `set -o pipefail` reads a live listener as "not listening"; it now drains its input.
+  Its suite no longer needs `ss` itself (a connect probe), proves the kernel table is read in both
+  directions, and carries awk on the no-flock PATH. Bare: 117 passed; full with bd 1.3.1: 126 passed.
 - **The remaining tools, skills and shared docs are one file with an installed copy too.**
   Same rule as the hooks: policy lives outside the file. `tools/agent_docs_test.sh` sources an
   optional `tools/agent_docs_test.conf` for a repo's own exemptions (`ALLOW_EXTRA`) and path
