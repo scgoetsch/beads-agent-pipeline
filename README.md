@@ -274,11 +274,14 @@ comparison in the suites and in `selftest.sh` itself reads the padding (macOS); 
 returns `/var/…` on macOS and `/tmp/…` on Git Bash while the hooks resolve the physical path
 (`/private/var/…`, `/c/Users/…/Temp/…`), so the portability suite's relocated-clone checks
 compare spellings (both); the memory-curation gate needs GNU `date -d` and says so (macOS); the
-sweep suite's binary-file case fails under BSD and MSYS grep (both); the installer exits 1 with
-every required command present (both — the `install.log` kept after a failure says why); and on
-Windows alone MSYS `ln -s` copies the file so every CLAUDE.md symlink check fails, native Python
-cannot open MSYS paths, and the stop-hook suite's bare PATH and glyph counts break. The
-bd-prime-hook suite and the Pi event suite fail on both boxes for reasons not yet read.
+sweep suite's binary-file case fails under BSD and MSYS grep (both); and on Windows alone MSYS
+`ln -s` copies the file so every CLAUDE.md symlink check fails, native Python cannot open MSYS
+paths, and the stop-hook and prime-hook suites' bare PATH loses a directory the hooks need (exit
+127). The installer's own exit 1 on both boxes is the same causes seen once more: its verify step
+runs the portability suite (and on Windows the agent-docs guard), which fail as above, and that
+exit cascades into six self-test assertions about installer exit codes. The bd-prime-hook suite
+has further cases on both boxes, and the Pi event suite fails on macOS under Node 24, for reasons
+not yet read; the `suite-logs` artifact a failed job keeps has each suite in full.
 
 ## Requirements
 

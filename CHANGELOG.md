@@ -15,11 +15,14 @@
   causes — BSD `wc -l` pads its output and every `$(… | wc -l)` comparison reads the padding,
   `mktemp -d` paths are compared against their physical spelling (`/private/var`,
   `/c/Users/…/Temp`), the curation gate needs GNU `date -d`, the sweep's binary-file case fails
-  under BSD and MSYS grep, the installer exits 1 with every required command present, and on
-  Windows MSYS `ln -s` copies, native Python cannot open MSYS paths and the stop-hook suite's bare
-  PATH and glyph counts break — plus the bd-prime-hook and Pi event suites, not yet read on
-  either box. `.gitattributes` pins LF for every text file: Git for Windows ships
-  `core.autocrlf=true`, and a CRLF bash script dies on its first line.
+  under BSD and MSYS grep, and on Windows MSYS `ln -s` copies, native Python cannot open MSYS
+  paths and the hook suites' bare PATH loses a directory the hooks need. The installer's exit 1
+  on both boxes is those causes once more: its verify step runs the portability suite (and the
+  agent-docs guard), and that exit cascades into six self-test assertions. The bd-prime-hook
+  suite has further cases on both boxes and the Pi event suite fails on macOS under Node 24, not
+  yet read. `.gitattributes` pins LF for every text file: Git for Windows ships
+  `core.autocrlf=true` in its system config (the runner's box line shows it), and a CRLF bash
+  script dies on its first line; the checkout there is `i/lf w/lf`.
 - **The self-test runs on a clean box.** `test/selftest-in-container.sh` builds two Ubuntu 24.04
   images from `test/Dockerfile` — `bare` (git, python3, bash and nothing else the pipeline lists)
   and `full` (bd from its official installer at the current release, jq, ripgrep, iproute2,

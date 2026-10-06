@@ -24,10 +24,12 @@
 # /var/… on macOS and /tmp/… on Git Bash while the hooks resolve the physical path, so the
 # portability suite's relocated-clone checks compare spellings (both); the curation gate needs
 # GNU `date -d` (macOS); the sweep suite's binary-file case fails under BSD and MSYS grep (both);
-# the installer exits 1 with every required command present (both; read install.log in the
-# suite-logs artifact); MSYS `ln -s` copies the file, so every CLAUDE.md symlink check fails,
-# native Python cannot open MSYS paths, and the stop-hook suite's bare PATH and glyph counts
-# break (Windows). Flip allow-failure to false for a platform once its job is green.
+# MSYS `ln -s` copies the file, so every CLAUDE.md symlink check fails, native Python cannot
+# open MSYS paths, and the hook suites' bare PATH loses a directory the hooks need (Windows).
+# The installer's own exit 1 on both is the same causes again: its verify step runs the
+# portability suite and the agent-docs guard (install.log in the suite-logs artifact names
+# them), and that cascades into six assertions about installer exit codes. Flip allow-failure to
+# false for a platform once its job is green.
 name: self-test
 
 on:
