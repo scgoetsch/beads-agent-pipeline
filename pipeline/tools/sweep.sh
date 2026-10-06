@@ -126,11 +126,18 @@ fi
 # Discover without an implicit depth cap, and propagate traversal errors. Controls over the
 # repos we happened to discover cannot validate discovery itself. Prune root .git too, rather
 # than walking its object store (the old -mindepth 2 prevented that prune).
+# Generated environments are not source repos: conda/pixi installs carry malformed .git TEST
+# FIXTURES under .pixi/envs/, and node_modules and .venv trees can hold .git directories of
+# vendored packages. Treating those as repositories turns a clean zero into false control
+# failures. Exclude the three caches explicitly and SAY so in the header, rather than quietly
+# "discovering" them.
 TMP=$(mktemp -d) || exit 2
 trap 'rm -rf "$TMP"' EXIT
 DEPTH_ARGS=()
 [ "$DEPTH" -eq 0 ] || DEPTH_ARGS=(-maxdepth "$DEPTH")
-if ! find . "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" -name .git -prune -exec dirname {} \; > "$TMP/repos"; then
+if ! find . "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" \
+     \( -type d \( -name .pixi -o -name .venv -o -name node_modules \) \) -prune -o \
+     -name .git -prune -exec dirname {} \; > "$TMP/repos"; then
   echo '!! SWEEP NOT TRUSTWORTHY: repository discovery failed.' >&2; exit 2
 fi
 REPOS=()
@@ -170,8 +177,6 @@ repo_files() {
 #
 # A file skipped this way is indistinguishable from a file that was searched and did not match,
 # which is the exact confusion this whole script exists to remove. So count it and print it.
-# Use `-m1 ''` rather than `-qI .`: the latter also rejects a file with no matching line, so an
-# empty or blank-only text file would be miscounted as binary.
 # Would the SEARCH refuse to print matching LINES from this file? Two causes, and grep's own
 # behaviour is the spec: a NUL byte, or a byte sequence that is invalid in the active locale.
 # Such a file yields "binary file matches" instead of the line, so a hit in it is invisible.
@@ -256,7 +261,7 @@ printf '=== SWEEP %s %q ===\n' "$MODE" "$PATTERN"
 printf 'root=%s  repos=%d  size-cap=%s bytes\nfilter=%s\nscope=%s\n\n' \
   "$ROOT" "${#REPOS[@]}" "$MAX_BYTES" "$FILTER_DESC" "$IGNORED_DESC"
 
-if [ "$DEPTH" -eq 0 ]; then echo 'discovery depth=unlimited'
+if [ "$DEPTH" -eq 0 ]; then echo 'discovery depth=unlimited (source repos; .pixi/.venv/node_modules excluded)'
 else echo "discovery depth=$DEPTH — INCOMPLETE scope; deeper repos may not have been discovered"; fi
 hits_file="$TMP/hits"
 total_hits=0; total_files=0; total_skipped=0; total_binary=0; control_failures=0

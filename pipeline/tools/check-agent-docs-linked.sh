@@ -25,7 +25,17 @@ case ${1:-} in
     # Snapshot only the two INDEX entries, never checkout the working tree or follow arbitrary
     # staged symlinks. This also respects GIT_INDEX_FILE (git commit --only's temporary index).
     mode=$(git ls-files --stage -- CLAUDE.md) || exit 1
-    [ -n "$mode" ] || exit 0  # AGENTS-only is the documented no-symlinks fallback
+    if [ -z "$mode" ]; then
+        # AGENTS-only is the documented no-symlinks fallback for a NEW repo. It is not valid
+        # when this repo already committed the link: a staged deletion of CLAUDE.md would
+        # silently unhook Claude Code, which reads only that name.
+        if git cat-file -e HEAD:CLAUDE.md 2>/dev/null; then
+            echo 'agent-docs: staged deletion of the previously tracked CLAUDE.md symlink.' >&2
+            echo '  Restore it: git checkout HEAD -- CLAUDE.md' >&2
+            exit 1
+        fi
+        exit 0
+    fi
     case "$mode" in
       "120000 "*" 0"$'\t'CLAUDE.md) ;;
       *) echo "agent-docs: staged CLAUDE.md is a REGULAR FILE or unmerged, not a symlink." >&2; exit 1 ;;

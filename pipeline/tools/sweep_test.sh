@@ -70,6 +70,13 @@ printf '%s deep-only\n' "$PHRASE" > "$FIX/deep/a/b/c/repo/claim.md"
 out=$("$FIX/tools/sweep.sh" "$PHRASE deep-only" 2>&1); rc=$?
 chk "deep repo found by default" "$(printf '%s' "$out" | grep -c 'claim.md:')" 1
 chk "unlimited discovery exits 0" "$rc" 0
+# A generated environment is not a source repo: pixi/conda installs ship malformed .git test
+# fixtures under .pixi/envs/, which once turned a clean sweep into two false control failures.
+mkdir -p "$FIX/.pixi/envs/pkg/.git" "$FIX/node_modules/dep/.git"; printf '.pixi/\nnode_modules/\n' >> "$FIX/.gitignore"
+out=$("$FIX/tools/sweep.sh" "$PHRASE deep-only" 2>&1); rc=$?
+chk "a .git under .pixi or node_modules is not a repository" "$(printf '%s' "$out" | grep -c 'in 3 repos')" 1
+chk "...and the sweep stays trustworthy" "$rc" 0
+chk "...and the header says what was excluded" "$(printf '%s' "$out" | grep -c 'node_modules excluded')" 1
 out=$("$FIX/tools/sweep.sh" --depth 4 "$PHRASE deep-only" 2>&1); rc=$?
 chk "explicit limited discovery cannot certify absence" "$rc" 2
 chk "depth limit is announced" "$(printf '%s' "$out" | grep -c 'discovery depth=4')" 1
@@ -104,13 +111,17 @@ if command -v rg >/dev/null; then
   while IFS= read -r _repo; do
     corpus=$(( corpus + $(rg --files "$_repo" 2>/dev/null | wc -l) ))
   done < <(printf '.\n'
-           find . -name .git -prune -exec dirname {} \; 2>/dev/null | sort | grep -v '^\.$')
+           find . \( -type d \( -name .pixi -o -name .venv -o -name node_modules \) \) -prune -o \
+                  -name .git -prune -exec dirname {} \; 2>/dev/null | sort | grep -v '^\.$')
   # THE DENOMINATOR IS ASSERTED BEFORE THE RATIO IS TRUSTED. A corpus measure that silently
   # returned ~0 would satisfy any ratio trivially -- a guard weaker than the check it gates,
   # one level down. Here it decides whether there is anything to measure at all: a repo with
   # no gitignored nested repos has no hazard, and that is a SKIP, never a quiet pass.
+  # "<5%" was a count in disguise: a root repo that grew four subtrees moved the share to 13%
+  # while the hazard -- the gitignored nested repos hold MOST of the corpus -- was unchanged.
+  # Assert that, and nothing finer.
   if (( corpus > 1000 )); then
-    chk "rg at root sees <5% of the corpus" "$(( root_visible * 100 < corpus * 5 ))" 1
+    chk "rg at root sees less than half of the corpus" "$(( root_visible * 2 < corpus ))" 1
   else
     skipc "no multi-repo corpus here ($corpus files in reach) — the hazard needs nested repos"
   fi

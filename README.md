@@ -147,6 +147,12 @@ and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumption
 `/loop` and `/schedule` are harness features, not requirements; `triage` mentions a maker/checker
 verifier that is yours to define), all written down in `.claude/skills/README.md`.
 
+**Per-repo policy stays out of the shipped files.** The pre-run hook's scripts gate is tuned or
+switched off in `.claude/bd-prerun.conf`; the agent-docs test's exemptions and path anchors go in
+`tools/agent_docs_test.conf`. Neither file ships, both are sourced when present, and with them a
+repo's installed copies can stay byte-identical with this payload, so a later fix is a copy rather
+than a merge.
+
 **A curation gate** — `.claude/site-checks/memory-curation-gate.sh`, the one site check that
 ships. bd has no consolidation cadence of its own, so this prints one line at session start once
 the store is 30 days or 10 memories past the last curation (`BD_CURATION_MAX_DAYS` /

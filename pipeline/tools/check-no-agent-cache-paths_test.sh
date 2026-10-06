@@ -111,11 +111,11 @@ printf 'clean\n' > "$T/staged.md"
 chk "bad staged blob with clean working copy blocked" "$(run_guard)" 1
 rm -f "$T/staged.md"
 chk "bad staged blob with missing working copy blocked" "$(run_guard)" 1
-git -C "$T" rm -q --cached staged.md
+git -C "$T" rm -q -f --cached staged.md
 printf 'clean\n' > "$T/staged.md"; git -C "$T" add staged.md
 printf '![p](%s)\n' "$BAD_DOC" > "$T/staged.md"
 chk "clean staged blob with bad working copy allowed" "$(run_guard)" 0
-git -C "$T" rm -q --cached staged.md; rm -f "$T/staged.md"
+git -C "$T" rm -q -f --cached staged.md; rm -f "$T/staged.md"
 printf 'out = "%s"\n' "$BAD_TMP" > "$T/deleted.py"; git -C "$T" add deleted.py; rm -f "$T/deleted.py"
 chk "code ratchet still inspects a missing working file" "$(run_guard)" 1
 git -C "$T" rm -q --cached deleted.py

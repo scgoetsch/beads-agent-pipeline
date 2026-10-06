@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **The remaining tools, skills and shared docs are one file with an installed copy too.**
+  Same rule as the hooks: policy lives outside the file. `tools/agent_docs_test.sh` sources an
+  optional `tools/agent_docs_test.conf` for a repo's own exemptions (`ALLOW_EXTRA`) and path
+  anchors (`ROOTS_EXTRA`), so a repo with mounts, data-file conventions or extra top-level
+  directories no longer edits the test. `tools/sweep.sh` prunes `.pixi/`, `.venv/` and
+  `node_modules/` from repository discovery and says so in its header: conda/pixi installs carry
+  malformed `.git` test fixtures that turned a clean zero into false control failures; the suite
+  builds that fixture and requires the exclusion. Its real-tree hazard check asserts that a root
+  `rg` sees LESS THAN HALF of the corpus instead of "<5%", which was a count in disguise and went
+  red the month a root repo grew four subtrees. `tools/check-agent-docs-linked.sh --cached` now
+  refuses a staged DELETION of a previously tracked `CLAUDE.md` symlink, which silently unhooked
+  Claude Code; one new case. `tools/check-no-agent-cache-paths_test.sh` forces its `git rm
+  --cached` so a modified working copy cannot break the fixture. The `triage` skill reads an
+  optional project registry (a projects.tsv with a projects.py tool: active projects grouped,
+  one `project:` label per bead) and falls back to `bd ready` without one; the skills README says
+  the registry tool is not shipped. `docs/ops/other-harnesses.md` gains two sections from a
+  2026-10-05 inventory: Grok runs the Claude hooks but cannot block through them (stdout
+  discarded, `toolInput` not `tool_input`, exit 2 required), and bd is the only memory store
+  for every CLI, with the Grok memory-v2 case and its off switches.
 - **The installed hooks and the shipped ones are one file again.** A workspace that had carried
   the pipeline for a month had diverged from it by 68, 168 and 20 lines in the three session hooks,
   and every later fix had to be ported by hand in one direction or the other. Three changes make

@@ -33,7 +33,7 @@ admission → tier → periodic curate (dedup, compact, consolidate, decay).
 | **Optional** | a semantic engine — `memory-mesh` or `bd find-duplicates`. It is **probed, never required**, and the skill falls back to bd-native comparison when absent. |
 | **Assumes** | the hot/index tiering this pipeline installs (`.claude/memory-hot.txt`). Without it the "tier" mode has nothing to tier. |
 | **Safety** | read-only audit by default; every destructive step is backed up and human-confirmed. |
-| **Harness extras** | `/loop /memory-curate audit` for a periodic health check. Optional. |
+| **Cadence** | the session-start gate `.claude/site-checks/memory-curation-gate.sh` asks for an audit once the store is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt`; every run of the skill ends by rewriting that stamp. No `/loop` needed. |
 
 Run the audit before trusting any of the pruning modes. The interesting output is usually the
 prime-cost breakdown — it tells you which memories are actually expensive.
@@ -46,7 +46,7 @@ context from memories, classify it, and draft a short plan plus a single next ac
 
 | | |
 | --- | --- |
-| **Requires** | `bd`, and `bd ready --json` |
+| **Requires** | `bd`, and `bd ready --json` — or, when the repo keeps a project registry (a projects.tsv with a projects.py beside it under tools/, not shipped here), that tool's `ready` and `audit` modes, which group the queue by ACTIVE project. |
 | **Assumes** | a queue worth triaging. It was written where the queue spanned several projects; with one project it still works, it just has less to disambiguate. |
 | **Safety** | read-only by default. `--claim` and `--comment` are explicit opt-ins. |
 | **Harness extras** | `/loop /triage` or `/schedule` for a recurring morning pass. Optional — and keep it **propose-only when unattended**. |

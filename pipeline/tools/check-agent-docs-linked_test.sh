@@ -95,6 +95,10 @@ git -C "$T" init -q
 cached() { (cd "$T" && ./tools/check-agent-docs-linked.sh --cached) >/dev/null 2>&1; echo $?; }
 region "$tmpl"; git -C "$T" add AGENTS.md CLAUDE.md
 chk "valid staged pair passes" "$(cached)" 0
+git -C "$T" -c user.email=test@example.invalid -c user.name=fixture commit -qm baseline
+git -C "$T" rm -q --cached CLAUDE.md
+chk "cannot silently remove an already-tracked link" "$(cached)" 1
+git -C "$T" add CLAUDE.md
 # The working copy deliberately contradicts every staged state below.
 rm -f "$T/CLAUDE.md"; printf 'regular copy\n' > "$T/CLAUDE.md"; git -C "$T" add CLAUDE.md
 rm -f "$T/CLAUDE.md"; ln -s AGENTS.md "$T/CLAUDE.md"
