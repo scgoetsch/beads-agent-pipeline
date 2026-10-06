@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Last causes from the matrix after the previous batch** (macOS 134/1, Windows 128/7). A
+  native Windows jq ends each line with CR LF too, so the prime hook read a hot key back as
+  `key\r`, matched nothing, and emitted no hot body; every jq output it reads back is stripped,
+  and `memory-hot.txt` is read the same way for a file saved CR LF. `-ef` cannot equate two
+  spellings of one directory across MSYS mounts (`/tmp/…` against `/c/Users/…/Temp/…`, different
+  devices), so the hook's hooksPath check and the installer's `hooks_wired` fall back to
+  `cygpath -m` where it exists — the self-test's absolute-hooksPath case had the installer
+  rewriting a value it should have left alone. The dolt-guard suite's stub listeners run from `/`
+  (exec'd so the recorded pid is theirs) and cleanup retries the removal, since Windows will not
+  delete a directory a live process holds as its cwd and releases a killed one's handles a beat
+  later; the suite had leaked its scratch directory there. `agent_docs_test.sh` walks the tree in
+  Python instead of shelling out to `find`, which a native Windows Python resolved to System32's.
+  The Pi event suite's own prime stub formatted a `wc -l` count, padded on BSD, so its `PRIMED 1`
+  assertion failed on macOS; stripped.
 - **The hooks read Python back without the CR a native Windows Python appends**, plus the
   next causes the matrix measured after the previous batch. A native Windows Python ends every
   stdout line with CR LF even into a pipe (the workflow's box line now shows it), so the prerun
@@ -20,6 +34,9 @@
   compares real paths: Node resolves a module's real path while the cwd it is handed may be the
   logical spelling, so on macOS it had declared itself loaded outside its own project and run
   nothing. `bd-prime-hook_test.sh` prints the payload head under a failing check.
+  `audit_wikilinks_test.sh` SKIPs, saying why, under a native Windows Python: its stub `bd` is a
+  shell script, and CreateProcess runs no shell script and finds only `bd.exe` on PATH — which is
+  what users have, so the script itself works there and only the fixture cannot.
 - **One file, two names, on a filesystem without symlinks.** Git Bash's `ln -s` copies the
   target by default and reports success, so the first native Windows install produced two
   independent files with no error. The installer now runs it with `MSYS=winsymlinks:nativestrict`

@@ -12,6 +12,15 @@ set -uo pipefail
 SCRIPT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.claude/skills/memory-curate/audit_wikilinks.py
 [ -f "$SCRIPT" ] || { echo "missing: $SCRIPT" >&2; exit 2; }
 
+# The stub below is a shell script. A native Windows Python (the hosted-toolcache one under Git
+# Bash, sys.platform == win32) spawns `bd` through CreateProcess, which runs no shell script and
+# finds only bd.exe on PATH -- the real bd.exe is what users have, so the script works there; this
+# suite's fixture cannot. Say so and skip, as the Pi suite does, rather than fail six cases.
+if [ "$(python3 -c 'import sys; print(sys.platform)' 2>/dev/null | tr -d '\r')" = win32 ]; then
+  echo "SKIP audit_wikilinks_test.sh: a native Windows Python cannot run this suite's shell stub for bd (CreateProcess finds only bd.exe) — run it under WSL"
+  exit 0
+fi
+
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));

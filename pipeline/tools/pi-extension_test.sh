@@ -22,7 +22,7 @@ for pair in '.claude/bd-prime-hook.sh:prime' '.claude/bd-prerun-hook.sh:gate' \
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q >> "$BAP_TEST_ROOT/%s.calls"\n' "$name" "$name" > "$T/ws/$f"
 done
 # Customize each executable's behavior after the invocation log above.
-printf 'n=$(wc -l < "$BAP_TEST_ROOT/prime.calls")\nprintf "# PRIMED %%s\\n" "$n"\n' >> "$T/ws/.claude/bd-prime-hook.sh"
+printf 'n=$(wc -l < "$BAP_TEST_ROOT/prime.calls" | tr -d " ")\nprintf "# PRIMED %%s\\n" "$n"\n' >> "$T/ws/.claude/bd-prime-hook.sh"
 printf '%s\n' 'IFS= read -r payload || :' 'printf "%s\n" "$payload" >> "$BAP_TEST_ROOT/gate.inputs"' \
   'case "$payload" in' \
   '  *pkill*) echo "BARE pkill BLOCKED" >&2; exit 2 ;;' \

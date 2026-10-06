@@ -64,6 +64,14 @@ run()  { if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m %s\n' 
 # or the absolute path bd 1.3.0's `bd hooks install --shared` rewrites it to. Both run the same
 # file, so compare the directory it resolves to, not the string. A string compare said "NOT
 # wired" and rewrote the value on every re-run of the first fresh install we did.
+# One directory, two spellings: git reports C:/... where the shell says /c/... and /tmp is a
+# mount alias (Git Bash); macOS has /var beside /private/var. -ef answers by inode; across MSYS
+# mounts the device differs, so there cygpath settles it.
+same_dir() {  # same_dir A B -> 0 when both name one directory
+  [ "$1" -ef "$2" ] && return 0
+  command -v cygpath >/dev/null 2>&1 || return 1
+  [ "$(cygpath -m "$1" 2>/dev/null)" = "$(cygpath -m "$2" 2>/dev/null)" ]
+}
 HOOKS_PATH_VALUE=""
 hooks_wired() {
   local hp want got
@@ -72,7 +80,7 @@ hooks_wired() {
   case "$hp" in /*) ;; *) hp="$TARGET/$hp" ;; esac
   want=$(cd "$TARGET/.beads-hooks" 2>/dev/null && pwd -P) || return 1
   got=$(cd "$hp" 2>/dev/null && pwd -P) || return 1
-  [ "$got" = "$want" ]
+  same_dir "$got" "$want"
 }
 
 # A file with bd's managed region removed. bd rewrites what is between its markers (the

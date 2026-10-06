@@ -117,15 +117,21 @@ $out}"
 # The git-layer guards live in .beads-hooks/, but git only runs them if core.hooksPath says so,
 # and that is local config that no clone inherits. Say it at the TOP of the payload (hosts keep
 # the head, not the tail), in both the tiered and the fallback path.
+# One directory, two spellings: git reports C:/... where the shell says /c/... and /tmp is a
+# mount alias (Git Bash); macOS has /var beside /private/var. -ef answers by inode; across MSYS
+# mounts the device differs, so there cygpath settles it.
+same_dir() {  # same_dir A B -> 0 when both name one directory
+  [ "$1" -ef "$2" ] && return 0
+  command -v cygpath >/dev/null 2>&1 || return 1
+  [ "$(cygpath -m "$1" 2>/dev/null)" = "$(cygpath -m "$2" 2>/dev/null)" ]
+}
 emit_hooks_unwired() {
   local hp want got
   [ -f "$WS/.beads-hooks/pre-commit" ] || return 0
   hp=$(git -C "$WS" config core.hooksPath 2>/dev/null || true)
   case "$hp" in ""|/*) ;; *) hp="$WS/$hp" ;; esac
   want=$(cd "$WS/.beads-hooks" 2>/dev/null && pwd -P); got=$( [ -n "$hp" ] && cd "$hp" 2>/dev/null && pwd -P)
-  # -ef, not string equality: one directory has two spellings where git reports C:/... and the
-  # shell /c/... (Git Bash), or /var and /private/var (macOS); the inode is the same either way.
-  [ -n "$got" ] && [ "$got" -ef "$want" ] && return 0
+  [ -n "$got" ] && same_dir "$got" "$want" && return 0
   echo "# 🚨 GIT-LAYER GUARDS ARE NOT WIRED IN THIS CLONE: core.hooksPath is '${hp:-unset}', so nothing in"
   echo "#    .beads-hooks/ runs on commit. Fix now:  git config core.hooksPath .beads-hooks"; echo ""
 }
@@ -221,9 +227,12 @@ TOTAL=$(grep -c '"_type":"memory"' "$MM")
 # Deduplicated but in FILE ORDER: jq's `unique` sorts, which made the budget below keep hot
 # bodies alphabetically -- on a real store it kept `evaluation-…` and dropped `operational-state`
 # because `e` < `o`, whatever the list said. The order of memory-hot.txt is the priority order.
-HOTLIST=$(jq -R -s 'split("\n") | map(select(length > 0)) | reduce .[] as $k ([]; if index($k) then . else . + [$k] end)' "$HOTFILE")
-HOTN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h))] | length' "$MM")
-UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h) | not)] | .[]' "$MM")
+# tr -d '\r' on every jq output read back here: a native Windows jq ends each line with CR LF,
+# and a hot key read back as "key\r" matched nothing, so no hot body was ever emitted (Actions
+# windows job, 2026-10-06). The hot list is read the same way, for a memory-hot.txt saved CR LF.
+HOTLIST=$(tr -d '\r' < "$HOTFILE" | jq -R -s 'split("\n") | map(select(length > 0)) | reduce .[] as $k ([]; if index($k) then . else . + [$k] end)' | tr -d '\r')
+HOTN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h))] | length' "$MM" | tr -d '\r')
+UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h) | not)] | .[]' "$MM" | tr -d '\r')
 {
   echo ""; echo "## Persistent Memories — HOT tier ($HOTN selected keys of $TOTAL total; bodies included while budget permits)"
   if [ -n "$UNKNOWN" ]; then
@@ -236,9 +245,9 @@ UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .
 # One scratch file per hot body, in memory-hot.txt order, so the budget can keep the first N
 # that fit and name the rest. hot.keys holds the key for each file, line for line.
 : > "$TMPD/hot.keys"; n=0
-jq -r '.[]' <<<"$HOTLIST" | while IFS= read -r k; do [ -z "$k" ] && continue
+jq -r '.[]' <<<"$HOTLIST" | tr -d '\r' | while IFS= read -r k; do [ -z "$k" ] && continue
   f=$(printf '%s/hot.%04d' "$TMPD" "$n"); n=$((n+1))
-  jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM" > "$f"
+  jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM" | tr -d '\r' > "$f"
   if [ -s "$f" ]; then echo "$k" >> "$TMPD/hot.keys"; else rm -f "$f"; n=$((n-1)); fi
 done
 # The index is the one component whose whole job is to say what EXISTS, so an empty or short one
@@ -260,7 +269,7 @@ done
 # only because the byte count fell further than the change could explain.
 jq -r --argjson hot "$HOTLIST" \
    'select(._type=="memory") | .key as $k | select($hot | index($k) | not) | "- \($k)"' \
-   "$MM" > "$INDEX"
+   "$MM" | tr -d '\r' > "$INDEX"
 EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . "$INDEX")
 {
   echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"

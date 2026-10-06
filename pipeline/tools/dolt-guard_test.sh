@@ -22,10 +22,14 @@ TMP=$(mktemp -d); LISTENERS=()
 DETACH=""; command -v setsid >/dev/null 2>&1 && DETACH=setsid
 
 cleanup() {
-    local p
+    local p n
     [ -f "$TMP/listeners" ] && while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$TMP/listeners"
     for p in "${LISTENERS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-    rm -rf "$TMP"
+    # A stub's listener runs from / (exec'd in a subshell, so its pid is the one recorded), not
+    # from the workspace under $TMP: Windows will not remove a directory a live process holds as
+    # its cwd, and a killed one releases its handles a beat later, so the removal is retried too
+    # (the Actions windows job leaked the scratch directory, 2026-10-06).
+    n=0; until rm -rf "$TMP" 2>/dev/null || [ "$n" -ge 10 ]; do sleep 0.2; n=$((n+1)); done
 }
 trap cleanup EXIT
 
@@ -123,10 +127,10 @@ echo "server down, bd starts it successfully"
 ws3=$(make_ws ws3); port3=$(free_port)
 stub_good=$(make_bd good "
 echo \"\$@\" >>'$TMP/calls-3'
-$DETACH python3 -c \"
+(cd / && exec $DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(('127.0.0.1',$port3)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+s.bind(('127.0.0.1',$port3)); s.listen(1); time.sleep(600)\") </dev/null >/dev/null 2>&1 &
 echo \$! >>'$TMP/listeners'
 exit 0")
 run_guard "$ws3" "$port3" "$stub_good"; rc=$?
@@ -194,10 +198,10 @@ ws7=$(make_ws ws7); port7=$(free_port)
 stub_race=$(make_bd race "
 echo x >>'$TMP/calls-7'
 sleep 1
-$DETACH python3 -c \"
+(cd / && exec $DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(('127.0.0.1',$port7)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+s.bind(('127.0.0.1',$port7)); s.listen(1); time.sleep(600)\") </dev/null >/dev/null 2>&1 &
 echo \$! >>'$TMP/listeners'
 exit 0")
 racers=()
@@ -273,10 +277,10 @@ for t in bash sh date sleep cat grep mkdir touch dirname awk ss lsof netstat pyt
 done
 ws10=$(make_ws ws10); port10=$(free_port)
 stub_start10=$(make_bd start10 "
-$DETACH python3 -c \"
+(cd / && exec $DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(('127.0.0.1',$port10)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+s.bind(('127.0.0.1',$port10)); s.listen(1); time.sleep(600)\") </dev/null >/dev/null 2>&1 &
 echo \$! >>'$TMP/listeners'
 exit 0")
 PATH="$NOFLOCK" run_guard "$ws10" "$port10" "$stub_start10"; rc=$?

@@ -58,7 +58,7 @@ export ROOTS_EXTRA
 # Extract backticked path-looking tokens from a markdown file and report unresolved ones.
 unresolved() {
   python3 - "$1" "$ALLOW" "${2:-}" <<'PY' | tr -d '\r'   # a native Windows Python ends lines with CR LF
-import re, os, sys, subprocess, glob
+import re, os, sys, glob
 path, allow = sys.argv[1], sys.argv[2]
 base = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else os.getcwd()
 s = open(path, encoding="utf-8", errors="replace").read()
@@ -110,9 +110,14 @@ for m in re.finditer(r'`([^`\n]+)`', s):
     # Last resort: the stem appears ANYWHERE in a real filename under this repo, e.g. a doc
     # citing `results.q5` for a real results.q5.bed.
     bn = os.path.basename(t.rstrip('/'))
-    hit = subprocess.run(["find", base, "-not", "-path", "*/.git/*",
-                          "-not", "-path", "*/.pixi/*", "-name", "*" + bn + "*"],
-                         capture_output=True, text=True).stdout.strip()
+    # os.walk, not `find`: under a native Windows Python the subprocess resolved to another
+    # find (System32's), and this fallback then failed every token (Actions windows job, 2026-10-06).
+    hit = False
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in ('.git', '.pixi')]
+        if any(bn in n for n in filenames) or any(bn in n for n in dirnames):
+            hit = True
+            break
     if not hit:
         out.append(t)
 print("\n".join(sorted(set(out))))
