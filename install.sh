@@ -82,7 +82,11 @@ hooks_wired() {
   local hp want got
   hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true); HOOKS_PATH_VALUE=$hp
   [ -n "$hp" ] || return 1
-  case "$hp" in /*) ;; *) hp="$TARGET/$hp" ;; esac
+  # Absolute is `/...` or, on Windows, a drive letter: git reports the value as it received it
+  # through MSYS argument conversion (C:/Users/...), which `/*` does not match, so the installer
+  # took a wired absolute hooksPath for a relative one and re-set it on every run (Actions
+  # windows job, 2026-10-06).
+  case "$hp" in /*|[A-Za-z]:[/\\]*) ;; *) hp="$TARGET/$hp" ;; esac
   want=$(cd "$TARGET/.beads-hooks" 2>/dev/null && pwd -P) || return 1
   got=$(cd "$hp" 2>/dev/null && pwd -P) || return 1
   same_dir "$got" "$want"

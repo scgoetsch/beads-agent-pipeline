@@ -134,7 +134,7 @@ emit_hooks_unwired() {
   local hp want got
   [ -f "$WS/.beads-hooks/pre-commit" ] || return 0
   hp=$(git -C "$WS" config core.hooksPath 2>/dev/null || true)
-  case "$hp" in ""|/*) ;; *) hp="$WS/$hp" ;; esac
+  case "$hp" in ""|/*|[A-Za-z]:[/\\]*) ;; *) hp="$WS/$hp" ;; esac   # a drive letter is absolute too (git reports C:/... on Windows)
   want=$(cd "$WS/.beads-hooks" 2>/dev/null && pwd -P); got=$( [ -n "$hp" ] && cd "$hp" 2>/dev/null && pwd -P)
   [ -n "$got" ] && same_dir "$got" "$want" && return 0
   echo "# 🚨 GIT-LAYER GUARDS ARE NOT WIRED IN THIS CLONE: core.hooksPath is '${hp:-unset}', so nothing in"

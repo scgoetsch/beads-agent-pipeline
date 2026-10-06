@@ -17,7 +17,10 @@
   The Pi event suite's own prime stub formatted a `wc -l` count, padded on BSD, so its `PRIMED 1`
   assertion failed on macOS; stripped. The directory comparison asks cygpath for the long name:
   a hosted runner's %TEMP% is the 8.3 form (RUNNER~1), so one directory still had two spellings
-  in mixed form, and Windows paths compare case-insensitively.
+  in mixed form, and Windows paths compare case-insensitively. And a drive letter is absolute:
+  git on Windows reports a hooksPath it was handed as `/tmp/…` in the form MSYS converted the
+  argument to, `C:/Users/…`, which `/*` did not match, so the installer and the prime hook took a
+  wired absolute hooksPath for a relative one; the self-test compares that value canonically.
 - **The hooks read Python back without the CR a native Windows Python appends**, plus the
   next causes the matrix measured after the previous batch. A native Windows Python ends every
   stdout line with CR LF even into a pipe (the workflow's box line now shows it), so the prerun

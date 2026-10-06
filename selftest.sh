@@ -17,6 +17,13 @@ linked_to_agents() {  # linked_to_agents DIR -> 0 when CLAUDE.md there is the li
   case "$(git -C "$1" ls-files --stage -- CLAUDE.md 2>/dev/null)" in "120000 "*) return 0 ;; esac
   return 1
 }
+# One directory, one spelling: git on Windows reports a hooksPath it was handed as /tmp/... in
+# the form MSYS converted it to (C:/Users/RUNNER~1/...), so compare canonical forms.
+canon_dir() {  # canon_dir PATH -> physical path; on MSYS the Windows long name, lower-cased
+  local p; p=$(cd -- "$1" 2>/dev/null && pwd -P) || p=$1
+  if command -v cygpath >/dev/null 2>&1; then cygpath -ml "$p" 2>/dev/null | tr '[:upper:]' '[:lower:]'
+  else printf '%s\n' "$p"; fi
+}
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 
 pass=0; fail=0
@@ -295,7 +302,7 @@ sed 's/BEADS INTEGRATION v1\.1\.2/BEADS INTEGRATION v9.9.9/' "$T/.beads-hooks/pr
 "$SRC/install.sh" --no-shell "$T" >"$T/.install3.log" 2>&1
 grep -q 'nothing to do' "$T/.install3.log" && ok "still a no-op after bd rewrote hooksPath and its own stanza" \
   || { bad "still a no-op after bd rewrote hooksPath and its own stanza"; grep -E '^\s+[+!]' "$T/.install3.log" | sed 's/^/        /'; }
-chk "the absolute hooksPath is left alone" "$(git -C "$T" config core.hooksPath)" "$T/.beads-hooks"
+chk "the absolute hooksPath is left alone" "$(canon_dir "$(git -C "$T" config core.hooksPath)")" "$(canon_dir "$T/.beads-hooks")"
 [ -e "$T/.beads-hooks/pre-commit.new" ] && bad "no pre-commit.new left behind" || ok "no pre-commit.new left behind"
 grep -q 'NONE of them fires' "$T/.install3.log" && bad "verify does not cry wolf on the absolute path" \
   || ok "verify does not cry wolf on the absolute path"
