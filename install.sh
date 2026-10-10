@@ -64,15 +64,32 @@ run()  { if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m %s\n' 
 # or the absolute path bd 1.3.0's `bd hooks install --shared` rewrites it to. Both run the same
 # file, so compare the directory it resolves to, not the string. A string compare said "NOT
 # wired" and rewrote the value on every re-run of the first fresh install we did.
+# One directory, two spellings: git reports C:/... where the shell says /c/... and /tmp is a
+# mount alias (Git Bash); macOS has /var beside /private/var. -ef answers by inode; across MSYS
+# mounts the device differs, so there cygpath settles it.
+same_dir() {  # same_dir A B -> 0 when both name one directory
+  [ "$1" -ef "$2" ] && return 0
+  command -v cygpath >/dev/null 2>&1 || return 1
+  # -l: the long name. %TEMP% on a hosted runner is the 8.3 form (RUNNER~1), so the two spellings
+  # of one directory differed there even in mixed form; Windows paths are case-insensitive too.
+  local a b
+  a=$(cygpath -ml "$1" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  b=$(cygpath -ml "$2" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
 HOOKS_PATH_VALUE=""
 hooks_wired() {
   local hp want got
   hp=$(git -C "$TARGET" config core.hooksPath 2>/dev/null || true); HOOKS_PATH_VALUE=$hp
   [ -n "$hp" ] || return 1
-  case "$hp" in /*) ;; *) hp="$TARGET/$hp" ;; esac
+  # Absolute is `/...` or, on Windows, a drive letter: git reports the value as it received it
+  # through MSYS argument conversion (C:/Users/...), which `/*` does not match, so the installer
+  # took a wired absolute hooksPath for a relative one and re-set it on every run (Actions
+  # windows job, 2026-10-06).
+  case "$hp" in /*|[A-Za-z]:[/\\]*) ;; *) hp="$TARGET/$hp" ;; esac
   want=$(cd "$TARGET/.beads-hooks" 2>/dev/null && pwd -P) || return 1
   got=$(cd "$hp" 2>/dev/null && pwd -P) || return 1
-  [ "$got" = "$want" ]
+  same_dir "$got" "$want"
 }
 
 # A file with bd's managed region removed. bd rewrites what is between its markers (the
@@ -256,6 +273,27 @@ while IFS= read -r rel; do
   case $rel in *.sh) install_file "$rel" 755 ;; *) install_file "$rel" ;; esac
 done < <(cd "$PAYLOAD" && find .claude/site-checks -type f)
 
+# The curation gate's stamp is written ONCE and never shipped as payload: it records when THIS
+# repo's store was last curated, so it must diverge per repo and must not come back as a .new.
+# Count from `bd memories` when bd is usable here; a store that does not exist yet is 0, which
+# is correct -- the first ten memories then ask for the first audit.
+hdr "memory curation stamp (.claude/memory-curation.txt)"
+CURATION_STAMP="$TARGET/.claude/memory-curation.txt"
+if [ -e "$CURATION_STAMP" ]; then
+  say ".claude/memory-curation.txt — kept ($(head -1 "$CURATION_STAMP" | cut -f1,2 | tr '\t' ' '))"
+else
+  stamp_count=0
+  if command -v bd >/dev/null 2>&1; then
+    stamp_count=$(cd "$TARGET" && bd memories 2>/dev/null | grep -cE '^  [a-z0-9]'); stamp_count=${stamp_count:-0}
+  fi
+  if [ "$MODE" = dryrun ]; then
+    run "write .claude/memory-curation.txt: $(date +%Y-%m-%d) <TAB> $stamp_count"
+  else
+    printf '%s\t%s\n' "$(date +%Y-%m-%d)" "$stamp_count" > "$CURATION_STAMP"
+    did ".claude/memory-curation.txt written: $(date +%Y-%m-%d), $stamp_count memories (the gate counts from here)"
+  fi
+fi
+
 hdr "tools (tools/)"
 while IFS= read -r rel; do install_file "$rel" 755; done < <(cd "$PAYLOAD" && find tools -type f | sort)
 
@@ -319,8 +357,17 @@ else
   did "AGENTS.md (template — edit it, it is meant to be yours)"
 fi
 
+# One file, two names. Where the filesystem has no symlinks, git's own on-disk form of the link
+# is a regular file holding the target's name, and the index carries the symlink (mode 120000).
+pointer_staged() {  # pointer_staged DIR -> 0 when CLAUDE.md there is that form, staged as a link
+  [ -f "$1/CLAUDE.md" ] && [ ! -L "$1/CLAUDE.md" ] && [ "$(cat "$1/CLAUDE.md")" = "AGENTS.md" ] || return 1
+  case "$(git -C "$1" ls-files --stage -- CLAUDE.md 2>/dev/null)" in "120000 "*) return 0 ;; esac
+  return 1
+}
 if [ -L "$TARGET/CLAUDE.md" ] && [ "$(readlink "$TARGET/CLAUDE.md")" = "AGENTS.md" ]; then
   say "CLAUDE.md -> AGENTS.md (already linked)"
+elif pointer_staged "$TARGET"; then
+  say "CLAUDE.md -> AGENTS.md (already linked: a pointer file staged as a symlink — no symlinks on this filesystem)"
 elif [ -e "$TARGET/CLAUDE.md" ] && [ ! -L "$TARGET/CLAUDE.md" ]; then
   # Never silently discard a regular file: it may hold edits AGENTS.md does not.
   warn "CLAUDE.md is a REGULAR FILE, not a symlink. Not touching it."
@@ -330,15 +377,33 @@ elif [ ! -e "$TARGET/CLAUDE.md" ]; then
   # `ln -s && did` alone would SAY NOTHING when ln fails, which it does on filesystems without
   # symlink support (Windows without Developer Mode, some network and container mounts). The
   # component whose job is to create the link is the worst place to fail quietly.
+  #
+  # MSYS=winsymlinks:nativestrict: Git Bash's `ln -s` COPIES the target by default and reports
+  # success, which turns one file with two names into two files with no error (first native
+  # Windows run, 2026-10-06). With it set, ln makes a real symlink where Windows allows one
+  # (Developer Mode, or an elevated shell) and fails otherwise -- and the failure takes the
+  # fallback: write git's own on-disk form of the link on such a checkout, a file holding the
+  # target's name, and stage it as a symlink (mode 120000) so it COMMITS as one and every clone
+  # with symlinks gets the real link. The guard accepts that state when the index agrees.
+  # BAP_INSTALL_NO_SYMLINKS=1 forces the fallback; the self-test uses it on a box that has
+  # symlinks, so this path is exercised everywhere and not only where it is needed.
   if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m ln -s AGENTS.md CLAUDE.md\n'
-  elif ln -s AGENTS.md "$TARGET/CLAUDE.md" 2>/dev/null; then did "CLAUDE.md -> AGENTS.md"
+  elif [ -z "${BAP_INSTALL_NO_SYMLINKS:-}" ] \
+       && MSYS=winsymlinks:nativestrict ln -s AGENTS.md "$TARGET/CLAUDE.md" 2>/dev/null \
+       && [ -L "$TARGET/CLAUDE.md" ]; then
+    did "CLAUDE.md -> AGENTS.md"
   else
-    warn "could not create the CLAUDE.md symlink — this filesystem may not support symlinks."
-    say "    on Windows, try:  git config --global core.symlinks true  (needs Developer Mode)"
-    say "    otherwise see docs/ops/agent-docs-symlink.md for the fallback"
+    rm -f "$TARGET/CLAUDE.md"      # an ln that copied instead of linking leaves a file behind
+    printf 'AGENTS.md' > "$TARGET/CLAUDE.md"
+    if blob=$(printf 'AGENTS.md' | git -C "$TARGET" hash-object -w --stdin 2>/dev/null) \
+       && git -C "$TARGET" update-index --add --cacheinfo "120000,$blob,CLAUDE.md" 2>/dev/null; then
+      did "CLAUDE.md -> AGENTS.md as a POINTER FILE (no symlinks on this filesystem): the file holds the target's name and the index holds the symlink, mode 120000, so it commits as a link"
+      say "    real links on Windows need:  git config --global core.symlinks true  (Developer Mode or an elevated shell)"
+    else
+      warn "could not create the CLAUDE.md symlink, and could not stage the pointer file as one — see docs/ops/agent-docs-symlink.md"
+    fi
   fi
 fi
-
 # --------------------------------------------------------------- git hooks --
 # Wired whether or not bd is present. Two of the pre-commit's stanzas (agent-cache paths,
 # agent-docs symlink) need no bd and are the whole point on a box without one; the two that do

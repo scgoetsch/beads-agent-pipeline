@@ -22,6 +22,43 @@ with `--with-pi` and reading `AGENTS.md` is not proof of live hook coverage: run
 and the real smoke described in **`docs/ops/pi-adapter.md`**. Under Pi, non-interactive Bash does
 not reliably source `~/.bashrc`. The adapter starts the Dolt guard explicitly.
 
+## Grok runs the Claude hooks, but they cannot block there
+
+Grok Build scans `.claude/settings.json` by default (`compat.claude.hooks`) and, once the folder
+is trusted, the three scripts do start. They are inert all the same, which is worse than not
+running, because nothing says so:
+
+- SessionStart and PreCompact stdout is discarded, so the prime payload never reaches the model.
+- PreToolUse receives the call under `toolInput`, not `tool_input`, so `bd-prerun-hook.sh` reads
+  an empty command and exits 0. The bare-`pkill` and keyless-`bd remember` guards never see the
+  command. (`Bash` is an alias of Grok's `run_terminal_command`, so the hook does fire.)
+- Stop non-JSON stdout is not returned to the model, so the close reminder is lost.
+- Blocking under Grok needs exit 2, or `{"decision":"deny"}` on PreToolUse and
+  `{"decision":"block"}` on Stop; timeouts and crashes fail open.
+
+So a Grok session has only the git-layer guards, and the "**no**" column above is accurate even
+though the scripts ran. Teaching the pre-run guard to read both keys is the fix; until then,
+treat a Grok session as the plain-shell column.
+
+## Memory stores: bd is the only one
+
+`AGENTS.md` forbids a second memory store, and the rule binds every CLI, not only Claude. The
+reason is the correction sweep: a withdrawn number copied into a store the sweep cannot reach
+survives the document, memory and bead sweeps and reseeds a later session. `tools/sweep.sh`
+reaches the repos; it does not reach `$HOME`.
+
+Seen 2026-10-05: Grok's memory-v2 capture had been switched on by a managed remote setting
+(nothing local enabled it), and was writing an index, topics and pending observations under
+`~/.grok/memory-v2/workspaces/<repo>/`. Three of its claims were stale within an afternoon.
+The store was inventoried, its unique facts moved into bd, and capture disabled with
+`[memory] enabled = false` plus `[memory_v2] enabled = false` and `file_writes_enabled = false`
+in `~/.grok/config.toml`, the local layer Grok's docs say overrides remote enabling. A fresh
+session then advertised 50 slash commands instead of 52, the missing ones being `/memory`,
+`/flush` and `/dream`: not finding the memory setting is the sign that it is off. Codex keeps
+`~/.codex/memories/` (an empty scaffold when checked); agy keeps per-conversation artifacts, not
+a memory store, and the cache-path guard covers those. If a CLI grows a store again, disable it
+or add it to the "surfaces the sweep cannot reach" list in `AGENTS.md`.
+
 ## The principle: enforce at the layer everything passes through
 
 A session hook only binds the harness that implements it. **`git commit` binds all of them** —

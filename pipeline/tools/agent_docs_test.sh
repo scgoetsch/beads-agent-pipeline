@@ -45,11 +45,20 @@ bad() { printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 # every entry is a path this test stops checking, and an exemption you cannot justify in one
 # line is usually a pointer you should have fixed instead.
 ALLOW='^(MEMORY\.md|\.beads(/.*)?)$'
+# Per-repo exemptions and anchors live OUTSIDE this file, in tools/agent_docs_test.conf (sourced
+# when present), so the test itself stays identical to the shipped one:
+#   ALLOW_EXTRA='word/.*|/mnt/data/.*'      regex alternation appended to the allowlist
+#   ROOTS_EXTRA='hpc/ vendor/'               extra top-level dirs that anchor a token as a path
+# Keep both SHORT, for the reason above.
+ALLOW_EXTRA=''; ROOTS_EXTRA=''
+[ -f "$ROOT/tools/agent_docs_test.conf" ] && . "$ROOT/tools/agent_docs_test.conf"
+[ -z "$ALLOW_EXTRA" ] || ALLOW="^(MEMORY\.md|\.beads(/.*)?|$ALLOW_EXTRA)\$"
+export ROOTS_EXTRA
 
 # Extract backticked path-looking tokens from a markdown file and report unresolved ones.
 unresolved() {
-  python3 - "$1" "$ALLOW" "${2:-}" <<'PY'
-import re, os, sys, subprocess, glob
+  python3 - "$1" "$ALLOW" "${2:-}" <<'PY' | tr -d '\r'   # a native Windows Python ends lines with CR LF
+import re, os, sys, glob
 path, allow = sys.argv[1], sys.argv[2]
 base = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else os.getcwd()
 s = open(path, encoding="utf-8", errors="replace").read()
@@ -64,7 +73,8 @@ for m in re.finditer(r'`([^`\n]+)`', s):
     # `/schedule` get treated as paths and the test cries wolf until nobody runs it.
     # Directories that anchor a token as a repo path. Add your own top-level dirs here;
     # anything with a file extension is checked regardless of where it sits.
-    ROOTS = ('tools/', 'docs/', 'scripts/', '.claude/', '.beads/', '.beads-hooks/')
+    ROOTS = ('tools/', 'docs/', 'scripts/', '.claude/', '.beads/', '.beads-hooks/') \
+            + tuple(d for d in os.environ.get('ROOTS_EXTRA', '').split() if d.endswith('/'))
     has_ext = re.search(r'\.[A-Za-z0-9]{1,6}$', t) is not None
     if not (t.startswith(ROOTS) or has_ext):
         continue
@@ -100,9 +110,14 @@ for m in re.finditer(r'`([^`\n]+)`', s):
     # Last resort: the stem appears ANYWHERE in a real filename under this repo, e.g. a doc
     # citing `results.q5` for a real results.q5.bed.
     bn = os.path.basename(t.rstrip('/'))
-    hit = subprocess.run(["find", base, "-not", "-path", "*/.git/*",
-                          "-not", "-path", "*/.pixi/*", "-name", "*" + bn + "*"],
-                         capture_output=True, text=True).stdout.strip()
+    # os.walk, not `find`: under a native Windows Python the subprocess resolved to another
+    # find (System32's), and this fallback then failed every token (Actions windows job, 2026-10-06).
+    hit = False
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in ('.git', '.pixi')]
+        if any(bn in n for n in filenames) or any(bn in n for n in dirnames):
+            hit = True
+            break
     if not hit:
         out.append(t)
 print("\n".join(sorted(set(out))))

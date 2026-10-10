@@ -70,6 +70,13 @@ printf '%s deep-only\n' "$PHRASE" > "$FIX/deep/a/b/c/repo/claim.md"
 out=$("$FIX/tools/sweep.sh" "$PHRASE deep-only" 2>&1); rc=$?
 chk "deep repo found by default" "$(printf '%s' "$out" | grep -c 'claim.md:')" 1
 chk "unlimited discovery exits 0" "$rc" 0
+# A generated environment is not a source repo: pixi/conda installs ship malformed .git test
+# fixtures under .pixi/envs/, which once turned a clean sweep into two false control failures.
+mkdir -p "$FIX/.pixi/envs/pkg/.git" "$FIX/node_modules/dep/.git"; printf '.pixi/\nnode_modules/\n' >> "$FIX/.gitignore"
+out=$("$FIX/tools/sweep.sh" "$PHRASE deep-only" 2>&1); rc=$?
+chk "a .git under .pixi or node_modules is not a repository" "$(printf '%s' "$out" | grep -c 'in 3 repos')" 1
+chk "...and the sweep stays trustworthy" "$rc" 0
+chk "...and the header says what was excluded" "$(printf '%s' "$out" | grep -c 'node_modules excluded')" 1
 out=$("$FIX/tools/sweep.sh" --depth 4 "$PHRASE deep-only" 2>&1); rc=$?
 chk "explicit limited discovery cannot certify absence" "$rc" 2
 chk "depth limit is announced" "$(printf '%s' "$out" | grep -c 'discovery depth=4')" 1
@@ -104,13 +111,17 @@ if command -v rg >/dev/null; then
   while IFS= read -r _repo; do
     corpus=$(( corpus + $(rg --files "$_repo" 2>/dev/null | wc -l) ))
   done < <(printf '.\n'
-           find . -name .git -prune -exec dirname {} \; 2>/dev/null | sort | grep -v '^\.$')
+           find . \( -type d \( -name .pixi -o -name .venv -o -name node_modules \) \) -prune -o \
+                  -name .git -prune -exec dirname {} \; 2>/dev/null | sort | grep -v '^\.$')
   # THE DENOMINATOR IS ASSERTED BEFORE THE RATIO IS TRUSTED. A corpus measure that silently
   # returned ~0 would satisfy any ratio trivially -- a guard weaker than the check it gates,
   # one level down. Here it decides whether there is anything to measure at all: a repo with
   # no gitignored nested repos has no hazard, and that is a SKIP, never a quiet pass.
+  # "<5%" was a count in disguise: a root repo that grew four subtrees moved the share to 13%
+  # while the hazard -- the gitignored nested repos hold MOST of the corpus -- was unchanged.
+  # Assert that, and nothing finer.
   if (( corpus > 1000 )); then
-    chk "rg at root sees <5% of the corpus" "$(( root_visible * 100 < corpus * 5 ))" 1
+    chk "rg at root sees less than half of the corpus" "$(( root_visible * 2 < corpus ))" 1
   else
     skipc "no multi-repo corpus here ($corpus files in reach) — the hazard needs nested repos"
   fi
@@ -147,10 +158,29 @@ mkdir -p "$BINDIR"
 # for a reason that has nothing to do with binary detection.
 CAN_A=SWEEPBIN; CAN_B=ARYCANARY; CANARY="${CAN_A}${CAN_B}"
 printf 'the phrase %s is right here in plain prose \xff\n' "$CANARY" > "$BINDIR/canary.md"
-out=$("$SWEEP" --docs "$CANARY" 2>&1); rc=$?
+# WHICH BYTES ARE BINARY FOLLOWS THE ACTIVE LOCALE. Under C/POSIX -- a fresh container, a cron
+# job -- the bad byte is ordinary text, grep searches the file and finds the phrase, and every
+# assertion below inverts for a reason that has nothing to do with the detector (found by the
+# container self-test, 2026-10-06). Pin a UTF-8 locale for this case; glibc ships C.UTF-8.
+UTF8=$(locale -a 2>/dev/null | grep -iE '^C\.utf-?8$' | head -1)
+# ...and only a scanner that SUPPRESSES such a line has the hazard to demonstrate. GNU grep on
+# glibc and ugrep do; BSD grep (macOS) and GNU grep on the MSYS runtime print the line, and there
+# the sweep rightly says nothing (Actions macos and windows jobs, 2026-10-06). Ask the grep
+# sweep.sh resolves, with the scan's own flags, and count PRINTED lines: grep exits 0 either way.
+GREP_BIN=$(type -P grep)
+hazard=""
+[ -n "$UTF8" ] && hazard=$(printf 'probe \xff\n' | LC_ALL=$UTF8 "$GREP_BIN" -nHI --binary-files=without-match -e probe 2>/dev/null | wc -l | tr -d ' ')
+if [ -z "$UTF8" ]; then
+  skipc "no C.UTF-8 locale on this box — the binary-file case needs a UTF-8 locale (5 checks not run)"
+  rm -rf "$BINDIR"
+elif [ "$hazard" != 0 ]; then
+  skipc "$("$GREP_BIN" --version 2>/dev/null | head -1) searches a line with a malformed byte as text under $UTF8 — no binary-skip hazard on this box (5 checks not run)"
+  rm -rf "$BINDIR"
+else
+out=$(LC_ALL=$UTF8 "$SWEEP" --docs "$CANARY" 2>&1); rc=$?
 chk "exit 0"                  "$rc" 0
 chk "grep -a proves the phrase is really in the file" \
-    "$(/usr/bin/grep -ac "$CANARY" "$BINDIR/canary.md")" 1
+    "$(/usr/bin/grep -ac "$CANARY" "$BINDIR/canary.md" | tr -d ' ')" 1
 chk "sweep finds 0 hits"      "$(printf '%s' "$out" | /usr/bin/grep -c '^0 hit(s)')" 1
 chk "but SAYS it skipped a binary file" \
     "$(printf '%s' "$out" | /usr/bin/grep -c 'NOT SEARCHED because grep classifies them as binary')" 1
@@ -163,9 +193,10 @@ chk "but SAYS it skipped a binary file" \
 root_bin() { printf '%s' "$1" | awk '$1=="<root>" {print $4; exit}'; }
 bin_with=$(root_bin "$out")
 rm -rf "$BINDIR"
-out_without=$("$SWEEP" --docs "$CANARY" 2>&1)
+out_without=$(LC_ALL=$UTF8 "$SWEEP" --docs "$CANARY" 2>&1)
 bin_without=$(root_bin "$out_without")
 chk "the canary itself is what was counted" "$(( ${bin_with:-0} - ${bin_without:-0} ))" 1
+fi
 
 echo "### with no such file, the binary notice is NOT printed"
 chk "no false binary notice" \

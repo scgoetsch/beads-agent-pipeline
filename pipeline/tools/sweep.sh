@@ -40,7 +40,10 @@
 #   * Files gitignored INSIDE a repo — excluded by default because that is where the
 #     multi-TB data lives. Pass --include-ignored to cover them.
 #   * Files over the size cap. The count is printed; raise it with --max-bytes.
-#   * Files grep calls BINARY — including plain prose carrying one malformed byte,
+#   * Files grep calls BINARY — which follows the ACTIVE LOCALE: under C/POSIX (a fresh
+#     container, a cron job) a malformed UTF-8 byte is ordinary text and the file IS searched;
+#     under a UTF-8 locale it is binary and skipped. Run sweeps under a UTF-8 locale so the
+#     BINARY column means what the report says — including plain prose carrying one malformed byte,
 #     which is how one README.md hid the phrase 'three repositories' from a sweep. The count is printed; read those files directly.
 #   * The bd layer (memories, issue descriptions/notes) — those are separate
 #     `bd memories` / `bd list` searches. A document sweep is not a corpus sweep.
@@ -126,11 +129,18 @@ fi
 # Discover without an implicit depth cap, and propagate traversal errors. Controls over the
 # repos we happened to discover cannot validate discovery itself. Prune root .git too, rather
 # than walking its object store (the old -mindepth 2 prevented that prune).
+# Generated environments are not source repos: conda/pixi installs carry malformed .git TEST
+# FIXTURES under .pixi/envs/, and node_modules and .venv trees can hold .git directories of
+# vendored packages. Treating those as repositories turns a clean zero into false control
+# failures. Exclude the three caches explicitly and SAY so in the header, rather than quietly
+# "discovering" them.
 TMP=$(mktemp -d) || exit 2
 trap 'rm -rf "$TMP"' EXIT
 DEPTH_ARGS=()
 [ "$DEPTH" -eq 0 ] || DEPTH_ARGS=(-maxdepth "$DEPTH")
-if ! find . "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" -name .git -prune -exec dirname {} \; > "$TMP/repos"; then
+if ! find . "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" \
+     \( -type d \( -name .pixi -o -name .venv -o -name node_modules \) \) -prune -o \
+     -name .git -prune -exec dirname {} \; > "$TMP/repos"; then
   echo '!! SWEEP NOT TRUSTWORTHY: repository discovery failed.' >&2; exit 2
 fi
 REPOS=()
@@ -170,30 +180,27 @@ repo_files() {
 #
 # A file skipped this way is indistinguishable from a file that was searched and did not match,
 # which is the exact confusion this whole script exists to remove. So count it and print it.
-# Use `-m1 ''` rather than `-qI .`: the latter also rejects a file with no matching line, so an
-# empty or blank-only text file would be miscounted as binary.
 # Would the SEARCH refuse to print matching LINES from this file? Two causes, and grep's own
 # behaviour is the spec: a NUL byte, or a byte sequence that is invalid in the active locale.
 # Such a file yields "binary file matches" instead of the line, so a hit in it is invisible.
 #
-# EVERY OBVIOUS PROBE LIES HERE. `grep -qI .`, `grep -I -m1 ''` and friends all report "text"
-# for a file with one bad byte, because -q/-m1 short-circuit on the first match before grep has
-# read far enough to classify the file. Measured, not assumed. So ask the bytes directly.
+# ASK THE SCANNER, NOT THE BYTES. The same grep binary, flags and locale the search uses, with
+# a pattern every line matches and no -q/-m1 to short-circuit, prints every line of a file it
+# will search and fewer (none, for NUL) of one it will not. Which bytes count as unsearchable
+# is the scanner's call and differs by box: GNU grep on glibc (3.11, 3.12) and ugrep suppress a
+# line carrying a malformed byte under a UTF-8 locale, and exit 0 regardless, so neither the exit
+# status nor -c can tell; BSD grep (macOS) and GNU grep on the MSYS runtime print the line. The
+# earlier predicate ran iconv over the bytes and said "unsearchable" wherever they were
+# malformed, which overclaimed on every box whose grep prints them (Actions macos and windows
+# jobs, 2026-10-06). Measured, not assumed: printed lines, counted.
 is_unsearchable() {
-  local f=$1 n_all n_nonul enc
+  local f=$1 all seen
   [ -s "$f" ] || return 1                       # empty is not binary, it is empty
-  n_all=$(wc -c < "$f" 2>/dev/null) || return 1
-  n_nonul=$(tr -d '\000' < "$f" 2>/dev/null | wc -c) || return 1
-  [ "$n_all" -ne "$n_nonul" ] && return 0       # holds a NUL
-  enc=${LC_ALL:-${LC_CTYPE:-${LANG:-C}}}
-  case $enc in
-    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
-      command -v iconv >/dev/null 2>&1 || return 1
-      iconv -f UTF-8 -t UTF-8 < "$f" >/dev/null 2>&1 || return 0 ;;
-  esac
-  return 1
+  all=$("$GREP_BIN" -a -c -e '' -- "$f" 2>/dev/null) || return 1
+  seen=$("$GREP_BIN" -I --binary-files=without-match -e '' -- "$f" 2>/dev/null | "$GREP_BIN" -a -c -e '')
+  all=${all//[!0-9]/}; seen=${seen//[!0-9]/}
+  [ "${seen:-0}" -lt "${all:-0}" ]
 }
-
 repo_binary() {
   local repo=$1 f n=0
   while IFS= read -r -d '' f; do
@@ -256,7 +263,7 @@ printf '=== SWEEP %s %q ===\n' "$MODE" "$PATTERN"
 printf 'root=%s  repos=%d  size-cap=%s bytes\nfilter=%s\nscope=%s\n\n' \
   "$ROOT" "${#REPOS[@]}" "$MAX_BYTES" "$FILTER_DESC" "$IGNORED_DESC"
 
-if [ "$DEPTH" -eq 0 ]; then echo 'discovery depth=unlimited'
+if [ "$DEPTH" -eq 0 ]; then echo 'discovery depth=unlimited (source repos; .pixi/.venv/node_modules excluded)'
 else echo "discovery depth=$DEPTH — INCOMPLETE scope; deeper repos may not have been discovered"; fi
 hits_file="$TMP/hits"
 total_hits=0; total_files=0; total_skipped=0; total_binary=0; control_failures=0

@@ -32,7 +32,8 @@ asserts this one specifically — it checks the link's *target*, not just that a
    error. A `bd setup claude` run can do it too.
 2. **A checkout without symlink support.** On Windows without Developer Mode (or with
    `core.symlinks=false`), and on some network and container mounts, git materialises the link as
-   a small regular file whose entire content is the text `AGENTS.md`. Nothing warns you.
+   a small regular file whose entire content is the text `AGENTS.md`. Nothing warns you. That
+   form is git's own, and the guard accepts it when git agrees it is a link — see below.
 
 Both land in the same state — two independent documents — which is why the guard tests for *is a
 symlink*, and `cat CLAUDE.md` tells you which case you are in: one line reading `AGENTS.md` means
@@ -59,8 +60,8 @@ broken one, so testing only `[ -e CLAUDE.md ]` would pass the exact state the gu
 catch. That was a real bug, and it survived because this was once the only guard in `tools/`
 without a `_test.sh` beside it.
 
-Its suite is `tools/check-agent-docs-linked_test.sh`: all four link states, both
-nothing-to-enforce cases, and the bd-managed-region check. It builds a throwaway root under
+Its suite is `tools/check-agent-docs-linked_test.sh`: all four link states, the pointer-file
+state, both nothing-to-enforce cases, and the bd-managed-region check. It builds a throwaway root under
 `mktemp`, so it never touches your working tree and is safe to run with work in progress.
 
 ## Recovering
@@ -77,7 +78,17 @@ cannot know whether that file is a stale copy or the only place your edits live.
 
 ## If your filesystem has no symlinks
 
-First try, on Windows:
+The installer handles it. Git Bash's `ln -s` **copies** the target by default and reports
+success, which is the two-files drift with no error; the installer runs it with
+`MSYS=winsymlinks:nativestrict`, so it makes a real symlink where Windows allows one (Developer
+Mode, or an elevated shell) and otherwise takes the fallback: it writes git's own on-disk form of
+the link — `CLAUDE.md` is a regular file whose entire content is `AGENTS.md` — and stages it as a
+symlink (`git update-index --cacheinfo 120000,…`), so the **commit carries a real symlink** and
+every clone on a box with symlinks gets one. The guard accepts that state when git agrees it is a
+link: the index entry is mode 120000, or the checkout says `core.symlinks=false`. The content must
+be the name and nothing else; a copy of `AGENTS.md` under that name is still caught.
+
+To get real links on Windows instead:
 
 ```bash
 git config --global core.symlinks true   # needs Developer Mode or an elevated shell
@@ -86,7 +97,7 @@ git config --global core.symlinks true   # needs Developer Mode or an elevated s
 then re-clone or `git checkout -- CLAUDE.md`. Checking out an existing clone will not convert an
 already-materialised regular file back into a link by itself.
 
-If symlinks are genuinely unavailable, **do not keep two real files** — that is the drift this
-whole mechanism exists to prevent. Keep `AGENTS.md` only, delete `CLAUDE.md`, and point your agent
-at `AGENTS.md`. The guard exits 0 when `CLAUDE.md` is absent, so nothing nags you, and there is
-exactly one document.
+Whatever you do, **do not keep two real files** — that is the drift this whole mechanism exists
+to prevent. If you would rather have one name, keep `AGENTS.md` only, delete `CLAUDE.md`, and
+point your agent at `AGENTS.md`: the guard exits 0 when `CLAUDE.md` is absent, so nothing nags you,
+and there is exactly one document.

@@ -1,6 +1,6 @@
 ---
 name: triage
-description: One triage cycle over the bd work queue (ALL projects) — resume check, surface the top ready item, load its prior context from bd memories, classify it, and draft a short plan-of-attack + single next action, WITHOUT claiming or executing. Read-only by default. Wrap in /loop or /schedule for recurring morning triage.
+description: One triage cycle over the bd work queue (every project, or only the ACTIVE ones when the repo keeps a project registry) — resume check, surface the top ready item, load its prior context from bd memories, classify it, and draft a short plan-of-attack + single next action, WITHOUT claiming or executing. Read-only by default. Wrap in /loop or /schedule for recurring morning triage.
 ---
 
 # /triage — surface + plan the top ready bead
@@ -8,6 +8,11 @@ description: One triage cycle over the bd work queue (ALL projects) — resume c
 Project-agnostic. The bd queue usually spans several projects at once. Triage is the generic
 front end that reads the queue and **proposes**; it does **not** execute. Deep planning,
 execution, the maker/checker verifier, and landing are separate, gated steps.
+
+A repo may keep a **project registry**: a projects.tsv listing each project as active or
+inactive, with a projects.py tool under tools/ that turns it into ready lists and a session
+brief, and one `project:<name>` label on every non-closed bead. With a registry, triage reads
+the ACTIVE projects' queues and skips inactive ones unless the user names one.
 
 Keep token cost low: light memory search, short plan, do **not** open every file. A triage pass
 that reads the whole repo costs more than the work it was triaging.
@@ -20,13 +25,18 @@ that reads the whole repo costs more than the work it was triaging.
    (genuinely mid-flight, not parked). Always report the in_progress count so nothing is
    silently dropped.
 
-2. **Surface.** `bd ready --json`. Pick the top OPEN item by **(priority asc, then created_at
-   asc)**. Name 1-2 close runners-up in one line. If nothing is ready → say so and exit.
+2. **Surface.** Without a registry: `bd ready --json`, top OPEN item by **(priority asc, then
+   created_at asc)**. With one: `projects.py ready` (active projects, grouped). Priorities
+   rank WITHIN a project, not across projects, so pick the project first — the one the user is
+   working on, or ask if it is unclear — then its top OPEN item by the same order;
+   `projects.py audit` flags beads with no project label, which are labelled before
+   triaging. Name 1-2 close runners-up in one line. If nothing is ready → say so and exit.
 
 3. **Contextualize — don't re-derive.** Infer the item's **domain** from its title / desc /
-   labels, then load the conventions that govern THAT domain from CLAUDE.md +
+   labels, then load the conventions that govern THAT domain from AGENTS.md +
    `bd memories <key terms>`. Invariants are looked up **per item, never assumed**. Examples of
    domain → invariant (illustrative — write your own in AGENTS.md):
+   - the project's own rules file, when the registry names one.
    - work on a dataset with a canonical/derived split → the convention that says which one is
      authoritative, so the item does not quietly re-derive it.
    - any committed markdown / report / figure → whatever doc-hygiene rules the repo enforces.
@@ -48,7 +58,8 @@ that reads the whole repo costs more than the work it was triaging.
 ## Modes (args)
 - _default_: read-only — surface + plan + propose. No writes.
 - `--claim`: also claim the selected item.   `--comment`: post the plan as a bd comment.
-- `<issue-id>`: triage that specific id.   `<project term>`: restrict to items matching a project.
+- `<issue-id>`: triage that specific id.   `<project>`: with a registry, `projects.py ready -p <project>`
+  (works for inactive ones too); without one, restrict to items matching the term.
 
 ## Wrapping as an automation
 - Ad-hoc recurring: `/loop /triage` (model-paced) or `/loop 24h /triage`.

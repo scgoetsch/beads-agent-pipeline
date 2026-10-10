@@ -15,11 +15,21 @@ set -uo pipefail
 GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dolt-guard.sh"
 PASS=0; FAIL=0
 TMP=$(mktemp -d); LISTENERS=()
+# setsid detaches a listener from the suite's process group; stock macOS and Git Bash have none,
+# and `setsid python3` there was "command not found": every start case died (Actions macos and
+# windows jobs, 2026-10-06). Without it a listener is an ordinary background child. Stubs record
+# their listener's pid in $TMP/listeners (pgrep is absent on MSYS) and cleanup kills them all.
+DETACH=""; command -v setsid >/dev/null 2>&1 && DETACH=setsid
 
 cleanup() {
-    local p
+    local p n
+    [ -f "$TMP/listeners" ] && while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null; done < "$TMP/listeners"
     for p in "${LISTENERS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-    rm -rf "$TMP"
+    # A stub's listener runs from / (exec'd in a subshell, so its pid is the one recorded), not
+    # from the workspace under $TMP: Windows will not remove a directory a live process holds as
+    # its cwd, and a killed one releases its handles a beat later, so the removal is retried too
+    # (the Actions windows job leaked the scratch directory, 2026-10-06).
+    n=0; until rm -rf "$TMP" 2>/dev/null || [ "$n" -ge 10 ]; do sleep 0.2; n=$((n+1)); done
 }
 trap cleanup EXIT
 
@@ -32,16 +42,23 @@ free_port() {
 s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
 }
 
+listening() {  # listening PORT -> 0 when something accepts on 127.0.0.1:PORT. A connect probe,
+    # so the suite itself needs none of ss/lsof/netstat (a bare container has none of them).
+    python3 -c 'import socket, sys
+s = socket.socket(); s.settimeout(0.5)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
+}
+
 start_listener() {  # start_listener PORT -> binds it for the life of the suite
     local port="$1"
-    setsid python3 -c "
+    $DETACH python3 -c "
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
 s.bind(('127.0.0.1',$port)); s.listen(1); time.sleep(600)" </dev/null >/dev/null 2>&1 &
     LISTENERS+=("$!")
     local n=40
     while [ $n -gt 0 ]; do
-        [ -n "$(ss -ltnH "sport = :$port" 2>/dev/null)" ] && return 0
+        listening "$port" && return 0
         sleep 0.1; n=$((n-1))
     done
     return 1
@@ -56,12 +73,18 @@ make_bd() {  # make_bd NAME BODY -> path to a stub bd
     { echo '#!/usr/bin/env bash'; echo "$2"; } >"$p"; chmod +x "$p"; echo "$p"
 }
 
+# A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
+# `ln -s` copies the binary without the DLLs beside it and the copy dies with 127; an exec
+# wrapper works everywhere (Actions windows job, 2026-10-06).
+shim() { local b; b=$(command -v "$2" 2>/dev/null) || return 1
+         printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$1/$2" && chmod +x "$1/$2"; }
+
 run_guard() {  # run_guard WS PORT BD -> prints stderr to $TMP/err, returns rc
     ( BD_DOLT_GUARD_NORUN=1 . "$GUARD"
       # TRIES=12 keeps the suite fast; the real default is 40 (10s).
       BD_DOLT_GUARD_WS="$1" BD_DOLT_GUARD_PORT="$2" BD_DOLT_GUARD_BD="$3" \
       BD_DOLT_GUARD_TRIES=12 \
-        bd_dolt_guard ) 2>"$TMP/err"
+        bd_dolt_guard ) 2>"${GUARD_ERR:-$TMP/err}"
 }
 
 echo "dolt-guard acceptance suite"
@@ -75,7 +98,7 @@ stub_never=$(make_bd never "touch '$TMP/CALLED-1'; exit 0")
 run_guard "$ws_missing" 29991 "$stub_never"; rc=$?
 check "returns 0 when the workspace does not exist" "$rc" "0"
 check "does not invoke bd" "$([ -e "$TMP/CALLED-1" ] && echo called || echo no)" "no"
-check "stays silent" "$(wc -c <"$TMP/err")" "0"
+check "stays silent" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
 echo
 
 # ---------------------------------------------------------------- 1b
@@ -85,7 +108,7 @@ stub_never1b=$(make_bd never1b "touch '$TMP/CALLED-1b'; exit 0")
 run_guard "$ws1b" "$port1b" "$stub_never1b"; rc=$?
 check "returns 0 with no server listening" "$rc" "0"
 check "does not invoke bd" "$([ -e "$TMP/CALLED-1b" ] && echo called || echo no)" "no"
-check "stays silent (it used to say bd writes will NOT land)" "$(wc -c <"$TMP/err")" "0"
+check "stays silent (it used to say bd writes will NOT land)" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
 echo
 
 # ---------------------------------------------------------------- 2
@@ -96,7 +119,7 @@ stub_never2=$(make_bd never2 "touch '$TMP/CALLED-2'; exit 0")
 run_guard "$ws2" "$port2" "$stub_never2"; rc=$?
 check "returns 0" "$rc" "0"
 check "never shells out to bd" "$([ -e "$TMP/CALLED-2" ] && echo called || echo no)" "no"
-check "stays silent" "$(wc -c <"$TMP/err")" "0"
+check "stays silent" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
 echo
 
 # ---------------------------------------------------------------- 3
@@ -104,16 +127,16 @@ echo "server down, bd starts it successfully"
 ws3=$(make_ws ws3); port3=$(free_port)
 stub_good=$(make_bd good "
 echo \"\$@\" >>'$TMP/calls-3'
-setsid python3 -c \"
+(cd / && exec $DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(('127.0.0.1',$port3)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+s.bind(('127.0.0.1',$port3)); s.listen(1); time.sleep(600)\") </dev/null >/dev/null 2>&1 &
+echo \$! >>'$TMP/listeners'
 exit 0")
 run_guard "$ws3" "$port3" "$stub_good"; rc=$?
-LISTENERS+=("$(pgrep -f "127.0.0.1',$port3" | head -1)")
 check "returns 0" "$rc" "0"
 check "invoked 'bd dolt start'" "$(cat "$TMP/calls-3" 2>/dev/null)" "dolt start"
-check "port is now listening" "$([ -n "$(ss -ltnH "sport = :$port3")" ] && echo up || echo down)" "up"
+check "port is now listening" "$(listening "$port3" && echo up || echo down)" "up"
 grep -q 'started dolt server' "$TMP/err" \
     && ok "announces the start on stderr" \
     || bad "announces the start on stderr" "stderr: $(cat "$TMP/err")"
@@ -175,38 +198,73 @@ ws7=$(make_ws ws7); port7=$(free_port)
 stub_race=$(make_bd race "
 echo x >>'$TMP/calls-7'
 sleep 1
-setsid python3 -c \"
+(cd / && exec $DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(('127.0.0.1',$port7)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+s.bind(('127.0.0.1',$port7)); s.listen(1); time.sleep(600)\") </dev/null >/dev/null 2>&1 &
+echo \$! >>'$TMP/listeners'
 exit 0")
 racers=()
-for _ in 1 2 3 4; do run_guard "$ws7" "$port7" "$stub_race" & racers+=("$!"); done
+for i in 1 2 3 4; do GUARD_ERR="$TMP/err-7-$i" run_guard "$ws7" "$port7" "$stub_race" & racers+=("$!"); done
 # Wait only on the racers: a bare `wait` also waits on the still-sleeping
 # listeners this suite started, which hangs it for their full 600s.
-wait "${racers[@]}"
-LISTENERS+=("$(pgrep -f "127.0.0.1',$port7" | head -1)")
+race_rcs=""; race_t0=$SECONDS
+for p in "${racers[@]}"; do wait "$p"; race_rcs="$race_rcs$?"; done
+race_secs=$((SECONDS - race_t0))
+if command -v flock >/dev/null 2>&1; then
 check "bd dolt start ran exactly once across 4 shells" "$(wc -l <"$TMP/calls-7" 2>/dev/null | tr -d ' ')" "1"
-check "port ends up listening" "$([ -n "$(ss -ltnH "sport = :$port7")" ] && echo up || echo down)" "up"
+else
+printf '  - SKIP: exactly-once across 4 shells — no flock on this box, so each shell starts unlocked as documented (%s starts)\n' "$(wc -l <"$TMP/calls-7" 2>/dev/null | tr -d ' ')"
+fi
+check "port ends up listening" "$(listening "$port7" && echo up || echo down)" "up"
+# The stub's listener, like the real `dolt sql-server`, is a child of
+# `bd dolt start` and outlives it. If it inherits the guard's lock fd the lock
+# stays held for the server's whole life, and every shell that was waiting
+# burns the full `flock -w 30` and then reports a FAILED that is not true.
+check "every racer returns 0 (the losers find the port up)" "$race_rcs" "0000"
+check "no racer reports FAILED" "$(cat "$TMP"/err-7-* 2>/dev/null | grep -c FAILED)" "0"
+[ "$race_secs" -lt 15 ] \
+    && ok "the losers are released when the start finishes, not at the 30s timeout (${race_secs}s)" \
+    || bad "the losers are released when the start finishes, not at the 30s timeout" "racers took ${race_secs}s"
+if command -v flock >/dev/null 2>&1; then
+check "the started server does not hold the guard's lock" \
+    "$(flock -n "$ws7/.beads/.dolt-guard.lock" true && echo free || echo held)" "free"
+else
+printf '  - SKIP: the started server does not hold the guard'"'"'s lock — no flock on this box\n'
+fi
 echo
 
 # ---------------------------------------------------------------- 9
-echo "no listener prober on PATH (no ss, lsof, netstat): says so, touches nothing"
+echo "no listener prober on PATH (no ss, lsof, netstat): Linux reads /proc/net/tcp; elsewhere it says so"
 # The probe used to be `ss` alone. Absent (stock macOS), its empty output read as "not
 # listening" and every new shell tried to start a server. Build a PATH holding the tools the
-# guard needs and none of the three probers.
+# guard needs and none of the three probers. On Linux the guard now answers from the kernel's
+# own table, so prove it READS it: a live listener must be seen (no start, no complaint) and an
+# empty port must not (a start attempted). Without /proc/net/tcp it must still say it cannot probe.
 NOPROBE="$TMP/noprobe"; mkdir -p "$NOPROBE"
-for t in bash sh date sleep cat grep mkdir touch dirname; do
-    b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOPROBE/$t"
+for t in bash sh date sleep cat grep mkdir touch dirname awk; do
+    shim "$NOPROBE" "$t" || true
 done
 ws9=$(make_ws ws9); port9=$(free_port)
+start_listener "$port9" || { echo "could not bind test port"; exit 1; }
 stub_never9=$(make_bd never9 "touch '$TMP/CALLED-9'; exit 0")
 PATH="$NOPROBE" run_guard "$ws9" "$port9" "$stub_never9"; rc=$?
 check "returns 0" "$rc" "0"
-grep -q 'cannot probe' "$TMP/err" \
-    && ok "says it cannot probe (not 'not listening')" \
-    || bad "says it cannot probe" "stderr: $(cat "$TMP/err")"
-[ ! -e "$TMP/CALLED-9" ] && ok "bd dolt start NOT called" || bad "bd dolt start NOT called" "it was"
+[ ! -e "$TMP/CALLED-9" ] && ok "bd dolt start NOT called with a listener up" || bad "bd dolt start NOT called" "it was"
+if [ -r /proc/net/tcp ]; then
+    check "Linux: the kernel table answered, so nothing was said" "$(wc -c <"$TMP/err" | tr -d ' ')" "0"
+    ws9b=$(make_ws ws9b); port9b=$(free_port)
+    stub_start9b=$(make_bd start9b "touch '$TMP/CALLED-9b'; exit 1")
+    PATH="$NOPROBE" run_guard "$ws9b" "$port9b" "$stub_start9b"; rc=$?
+    [ -e "$TMP/CALLED-9b" ] && ok "Linux: an empty port is seen as empty — a start was attempted" \
+        || bad "Linux: an empty port is seen as empty" "bd dolt start was never called: $(cat "$TMP/err")"
+    grep -q 'cannot probe' "$TMP/err" && bad "Linux: no false 'cannot probe'" "stderr: $(cat "$TMP/err")" \
+        || ok "Linux: no false 'cannot probe'"
+else
+    grep -q 'cannot probe' "$TMP/err" \
+        && ok "says it cannot probe (not 'not listening')" \
+        || bad "says it cannot probe" "stderr: $(cat "$TMP/err")"
+fi
 echo
 
 # ---------------------------------------------------------------- 10
@@ -214,18 +272,18 @@ echo "no flock on PATH: starts the server unlocked and says so, not 'timed out'"
 # A missing flock exited 127, `if ! flock` took the failure branch, and the guard reported a
 # 30-second timeout that never happened -- and gave up on exactly the box it was needed on.
 NOFLOCK="$TMP/noflock"; mkdir -p "$NOFLOCK"
-for t in bash sh date sleep cat grep mkdir touch dirname ss python3 setsid; do
-    b=$(command -v "$t" 2>/dev/null) && ln -sf "$b" "$NOFLOCK/$t"
+for t in bash sh date sleep cat grep mkdir touch dirname awk ss lsof netstat python3 setsid; do   # awk: the /proc fallback where ss is absent; lsof, netstat: the probers elsewhere
+    shim "$NOFLOCK" "$t" || true
 done
 ws10=$(make_ws ws10); port10=$(free_port)
 stub_start10=$(make_bd start10 "
-setsid python3 -c \"
+(cd / && exec $DETACH python3 -c \"
 import socket,time
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(('127.0.0.1',$port10)); s.listen(1); time.sleep(600)\" </dev/null >/dev/null 2>&1 &
+s.bind(('127.0.0.1',$port10)); s.listen(1); time.sleep(600)\") </dev/null >/dev/null 2>&1 &
+echo \$! >>'$TMP/listeners'
 exit 0")
 PATH="$NOFLOCK" run_guard "$ws10" "$port10" "$stub_start10"; rc=$?
-LISTENERS+=("$(pgrep -f "127.0.0.1',$port10" | sed -n 1p)")
 check "returns 0" "$rc" "0"
 grep -q 'no flock' "$TMP/err" \
     && ok "says it ran without the lock" \

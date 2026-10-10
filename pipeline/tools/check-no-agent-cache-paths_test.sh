@@ -111,19 +111,25 @@ printf 'clean\n' > "$T/staged.md"
 chk "bad staged blob with clean working copy blocked" "$(run_guard)" 1
 rm -f "$T/staged.md"
 chk "bad staged blob with missing working copy blocked" "$(run_guard)" 1
-git -C "$T" rm -q --cached staged.md
+git -C "$T" rm -q -f --cached staged.md
 printf 'clean\n' > "$T/staged.md"; git -C "$T" add staged.md
 printf '![p](%s)\n' "$BAD_DOC" > "$T/staged.md"
 chk "clean staged blob with bad working copy allowed" "$(run_guard)" 0
-git -C "$T" rm -q --cached staged.md; rm -f "$T/staged.md"
+git -C "$T" rm -q -f --cached staged.md; rm -f "$T/staged.md"
 printf 'out = "%s"\n' "$BAD_TMP" > "$T/deleted.py"; git -C "$T" add deleted.py; rm -f "$T/deleted.py"
 chk "code ratchet still inspects a missing working file" "$(run_guard)" 1
 git -C "$T" rm -q --cached deleted.py
 # Git quotes unusual names unless paths are read with -z.
 ODD=$'name with a tab\t.md'
-printf '![p](%s)\n' "$BAD_DOC" > "$T/$ODD"; git -C "$T" add "$ODD"
-chk "quoted filename cannot hide a violation" "$(run_guard)" 1
-git -C "$T" rm -q --cached "$ODD"; rm -f "$T/$ODD"
+if printf '![p](%s)\n' "$BAD_DOC" > "$T/$ODD" 2>/dev/null && git -C "$T" add "$ODD" 2>/dev/null; then
+  chk "quoted filename cannot hide a violation" "$(run_guard)" 1
+  git -C "$T" rm -q --cached "$ODD"; rm -f "$T/$ODD"
+else
+  # NTFS refuses a control character in a name (MSYS may map it and git then cannot stage it),
+  # so Git Bash cannot build this case at all.
+  rm -f "$T/$ODD" 2>/dev/null
+  printf '  SKIP  quoted filename cannot hide a violation — this filesystem, or git here, refuses a tab in a filename\n'
+fi
 
 echo "### this suite, and the guard, can themselves be committed under the guard"
 # A guard whose own test file cannot pass it is installed once with --no-verify and then

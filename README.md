@@ -1,5 +1,7 @@
 # beads-agent-pipeline
 
+[![self-test](https://github.com/scgoetsch/beads-agent-pipeline/actions/workflows/selftest.yml/badge.svg)](https://github.com/scgoetsch/beads-agent-pipeline/actions/workflows/selftest.yml)
+
 Session machinery for coding agents, built around [beads](https://github.com/gastownhall/beads)
 (`bd`). One command installs it into a git repo: the agent gets its rules, its issue queue and
 its durable memory at session start, and the repo gets guards that fail **loudly** instead of
@@ -84,8 +86,16 @@ not want, and it is one line to turn off:
   the rule while a rephrase walked straight through.
 - **Running a script under `scripts/` with no bd issue `in_progress`.** Untracked analysis runs
   are how reproducibility gaps start, so the hook asks for a claimed issue first. It fails open
-  if bd is unavailable. The directory name is the one-line knob `SCRIPT_DIRS_RE` in
-  `.claude/bd-prerun-hook.sh`; set it to something that matches nothing to drop the rule.
+  if bd is unavailable. The directory pattern is the knob `SCRIPT_DIRS_RE`: set it in
+  `.claude/bd-prerun.conf` (a one-line, tracked file the hook sources) or in the environment as
+  `BD_SCRIPT_DIRS_RE`; an empty value turns the gate off, and the hook file itself stays identical
+  to the one shipped here.
+
+**An optional project registry.** A repo that keeps one bd store for several projects can add a
+`projects.tsv` (one row per project, active or inactive) and a `tools/projects.py` beside it; the
+SessionStart hook then opens with a per-active-project brief instead of "run `bd ready` NOW", and
+rule 2 asks for a `project:<name>` label on every issue. Neither file ships here yet; without the
+registry nothing changes, and a registry without the tool is reported, not skipped.
 
 **The SessionStart hook** (cached at Pi `session_start` when opted in) replaces bd's raw
 `bd prime` dump (76 KB on a 40-memory store) with, in this order, the rules, a key-only index of
@@ -145,6 +155,19 @@ them** — a skill is a prompt, not a hook — so they install by default and co
 and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumptions (bd initialised;
 `/loop` and `/schedule` are harness features, not requirements; `triage` mentions a maker/checker
 verifier that is yours to define), all written down in `.claude/skills/README.md`.
+
+**Per-repo policy stays out of the shipped files.** The pre-run hook's scripts gate is tuned or
+switched off in `.claude/bd-prerun.conf`; the agent-docs test's exemptions and path anchors go in
+`tools/agent_docs_test.conf`. Neither file ships, both are sourced when present, and with them a
+repo's installed copies can stay byte-identical with this payload, so a later fix is a copy rather
+than a merge.
+
+**A curation gate** — `.claude/site-checks/memory-curation-gate.sh`, the one site check that
+ships. bd has no consolidation cadence of its own, so this prints one line at session start once
+the store is 30 days or 10 memories past the last curation (`BD_CURATION_MAX_DAYS` /
+`BD_CURATION_MAX_NEW`), naming the numbers and the skill to run. The installer writes the stamp it
+reads, `.claude/memory-curation.txt`, once; `memory-curate` rewrites it after every run. A stamp or
+count it cannot read is reported, never skipped.
 
 **An `AGENTS.md` template** that is symlinked from `CLAUDE.md` — one file, two names, so they
 cannot drift. The workspace this came from had them as two real files that diverged by ~180 lines
@@ -227,14 +250,48 @@ needed to prove the extension loads and intercepts a model tool call. Nothing ou
 directories is touched. It needs the same things the pipeline needs; without `jq` the
 SessionStart suite tests the fallback instead of the tiering and says so.
 
+**On a clean box, in Docker:**
+
+```bash
+test/selftest-in-container.sh          # bare (git + python3 only), then full (+ bd, jq, rg, ss, bd-memgraph)
+test/selftest-in-container.sh bare     # one target; --build-only skips the run
+```
+
+`test/Dockerfile` builds two Ubuntu 24.04 images: `bare` has nothing the pipeline lists beyond
+git, python3 and bash, so the installer's "required command absent" exit and every optional
+fallback get exercised; `full` adds bd from its official installer (the current release, not the
+one on your box), jq, ripgrep, iproute2 and bd-memgraph. Each run mounts this checkout read-only,
+copies it inside, and runs `./selftest.sh` there as a non-root user. The first run of this harness
+found two real defects the host had hidden: the sweep's binary-file case depends on a UTF-8 locale
+a container does not have, and the Dolt guard had no listener probe at all on a box without
+`ss`, `lsof` or `netstat`.
+
+**On every push, in GitHub Actions** (`.github/workflows/selftest.yml`): the same `./selftest.sh`
+on `ubuntu-latest` with bd and without it, on `macos-latest` (bash from Homebrew, since the stock
+`/bin/bash` is 3.2) and on `windows-latest` (Git Bash). bd comes from the release archive the
+workflow names, verified against that release's `checksums.txt`, into a directory of its own so
+the no-bd probe can hide it; the official installer refuses Git Bash and floats to the current
+release. Each job writes its box line, the RESULT line and every FAIL to the run summary and keeps
+the log as an artifact; after a failure it also keeps the installer's own output and every suite's
+full log, since the self-test shows only a failing suite's last 35 lines. All four jobs are gates.
+The first measurement (2026-10-06, bd 1.3.1) was Ubuntu 127/127, macOS 107 passed / 20 failed and
+Windows 98 / 29; five batches later every job passes all 135 checks, and the CHANGELOG lists each
+cause as it was measured — BSD `wc` padding, two spellings of one directory, GNU-only `date`
+flags, the CR LF a native Windows Python and jq append, a Git Bash `ln -s` that copies, symlinked
+binaries that lose their DLLs, and what each box's grep calls binary. Three suites SKIP a case by
+name where the box cannot build it (a real `timeout`, a `chmod -x` that takes effect, a tab in a
+filename), and `audit_wikilinks_test.sh` SKIPs whole under a native Windows Python, which cannot
+run its shell stub for bd.
+
 ## Requirements
 
 **Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
 self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). The opt-in Pi
 adapter was exercised with a real trusted Pi CLI 0.87.1 (`@earendil-works/pi-coding-agent`) on
-Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS and
-native Windows are untested**; on macOS you will want bash from Homebrew. Run `./selftest.sh` first
-on any other platform and file what fails.
+Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS 26 and
+native Windows (Server 2025, Git Bash) pass the same self-test in the Actions matrix** (see
+*Verify it*); on macOS you will want bash from Homebrew. Run `./selftest.sh` first on any other
+platform and file what fails.
 
 | | | |
 | --- | --- | --- |
@@ -245,7 +302,7 @@ on any other platform and file what fails.
 | `jq` | optional | without it, session start falls back to the full `bd prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | `rg` | optional | only `sweep_test.sh`'s demonstration of the bare-grep hazard uses it; the sweep itself does not |
-| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; it falls back to `lsof`, then `netstat`, and says so when none of the three is present. Embedded stores never reach it |
+| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; it falls back to `lsof`, then `netstat`, then the kernel's own `/proc/net/tcp` on Linux, and says so when none is present. Embedded stores never reach it |
 | `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) the checks run unbounded, the session payload says so, and a hung check can stall session start |
 | [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
@@ -307,9 +364,11 @@ is expected — re-running `bd setup claude` would only re-add a duplicate.
   `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
 - **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
   install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **Platform coverage is Linux, including WSL2 suites, not native Windows or macOS.**
-  `xargs -r` is probed for and `ss`/`flock` degrade with a message, but those fallbacks have not
-  been run on macOS. `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
+- **Platform coverage is what the Actions matrix runs: Ubuntu 24.04 (with bd and without),
+  macOS 26 and Windows Server 2025 under Git Bash, plus WSL2 and the Docker self-test on a bare
+  Ubuntu.** Not covered: a Windows box that cannot create symlinks (the runner can; the installer's
+  pointer-file fallback is exercised on Linux instead), PowerShell or cmd as the shell, and zsh.
+  `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
   uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's
   `/bin/bash` 3.2; the installer writes only `~/.bashrc`.
 - **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`

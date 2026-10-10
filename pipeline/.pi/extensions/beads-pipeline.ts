@@ -3,12 +3,16 @@
 // This file is project-local and loads ONLY after Pi grants project trust.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+// Physical paths throughout: Node resolves a module's real path, so under a symlinked directory
+// (macOS /var -> /private/var, any linked checkout) this root is the real one while a cwd Pi
+// hands over may be the logical spelling; compare like with like, or the extension declares
+// itself loaded outside its own project and runs nothing (Actions macos job, 2026-10-06).
+const root = realpathSync(resolve(fileURLToPath(new URL("../..", import.meta.url))));
 const PREFIX = "⚠ beads-agent-pipeline (Pi):";
 const LIMIT = 256_000; // Bound captured text even if a script regresses to an unbudgeted dump.
 const TIMEOUT_MS = 30_000;
@@ -30,13 +34,14 @@ function sessionKey(ctx: NoticeContext): string {
 }
 
 function inProject(cwd: string): boolean {
-  const dir = resolve(cwd);
+  let dir = resolve(cwd);
+  try { dir = realpathSync(dir); } catch { /* a cwd that does not exist is not inside */ }
   return dir === root || dir.startsWith(root + sep);
 }
 
 function missingWarning(script: string): string {
   const path = resolve(root, ".claude", script);
-  return `${PREFIX} ${script} NOT FOUND at ${path} — bd session rules and command guards are OFF. Re-run the beads-agent-pipeline installer and check .claude/settings.json.`;
+  return `${PREFIX} ${script} NOT FOUND at ${path} — bd session rules and command guards are OFF. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.`;
 }
 
 function notice(ctx: NoticeContext, message: string, level: "info" | "warning" = "warning"): void {
@@ -117,7 +122,7 @@ export default function beadsPipeline(pi: ExtensionAPI) {
       const why = result.fault || `exit ${result.code}; ${result.stderr.trim() || "empty output"}`;
       prime = result.fault?.includes("NOT FOUND")
         ? `${missingWarning("bd-prime-hook.sh")} Session is NOT PRIMED.`
-        : `${PREFIX} bd-prime-hook.sh unavailable (${why}) — session is NOT PRIMED. Re-run the beads-agent-pipeline installer and check .pi/extensions/ and .claude/.`;
+        : `${PREFIX} bd-prime-hook.sh unavailable (${why}) — session is NOT PRIMED. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .pi/extensions/ and .claude/.`;
       notice(ctx, prime);
     } else {
       prime = result.stdout;
@@ -138,7 +143,7 @@ export default function beadsPipeline(pi: ExtensionAPI) {
       if (result.fault || result.code !== 0) {
         const message = result.fault?.includes("NOT FOUND")
           ? missingWarning("bd-prerun-hook.sh")
-          : `${PREFIX} bd-prerun-hook.sh FAILED (${result.fault || `exit ${result.code}`}); guards are OFF. ${result.stderr.trim()} Re-run the beads-agent-pipeline installer and check .claude/settings.json.`;
+          : `${PREFIX} bd-prerun-hook.sh FAILED (${result.fault || `exit ${result.code}`}); guards are OFF. ${result.stderr.trim()} Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.`;
         notice(ctx, `${message} Command ALLOWED.`);
         return;
       }

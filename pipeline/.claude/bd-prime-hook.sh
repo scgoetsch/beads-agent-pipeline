@@ -154,23 +154,58 @@ $out}"
 # The git-layer guards live in .beads-hooks/, but git only runs them if core.hooksPath says so,
 # and that is local config that no clone inherits. Say it at the TOP of the payload (hosts keep
 # the head, not the tail), in both the tiered and the fallback path.
+# One directory, two spellings: git reports C:/... where the shell says /c/... and /tmp is a
+# mount alias (Git Bash); macOS has /var beside /private/var. -ef answers by inode; across MSYS
+# mounts the device differs, so there cygpath settles it.
+same_dir() {  # same_dir A B -> 0 when both name one directory
+  [ "$1" -ef "$2" ] && return 0
+  command -v cygpath >/dev/null 2>&1 || return 1
+  # -l: the long name. %TEMP% on a hosted runner is the 8.3 form (RUNNER~1), so the two spellings
+  # of one directory differed there even in mixed form; Windows paths are case-insensitive too.
+  local a b
+  a=$(cygpath -ml "$1" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  b=$(cygpath -ml "$2" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
 emit_hooks_unwired() {
   local hp want got
   [ -f "$WS/.beads-hooks/pre-commit" ] || return 0
   hp=$(git -C "$WS" config core.hooksPath 2>/dev/null || true)
-  case "$hp" in ""|/*) ;; *) hp="$WS/$hp" ;; esac
+  case "$hp" in ""|/*|[A-Za-z]:[/\\]*) ;; *) hp="$WS/$hp" ;; esac   # a drive letter is absolute too (git reports C:/... on Windows)
   want=$(cd "$WS/.beads-hooks" 2>/dev/null && pwd -P); got=$( [ -n "$hp" ] && cd "$hp" 2>/dev/null && pwd -P)
-  [ -n "$got" ] && [ "$got" = "$want" ] && return 0
+  [ -n "$got" ] && same_dir "$got" "$want" && return 0
   echo "# 🚨 GIT-LAYER GUARDS ARE NOT WIRED IN THIS CLONE: core.hooksPath is '${hp:-unset}', so nothing in"
   echo "#    .beads-hooks/ runs on commit. Fix now:  git config core.hooksPath .beads-hooks"; echo ""
 }
 emit_session_rules() {
   echo "# 🚨 MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨"; echo ""
-  echo "1. Run \`bd ready\` NOW to check for available work before doing anything else."
-  echo "2. Use \`bd create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+  if [ -f "$WS/projects.tsv" ]; then
+    # A project registry scopes the work: the brief below replaces "run bd ready NOW", which
+    # ranked every project's backlog together (on one store, 45 of 68 top items belonged to a
+    # retired project).
+    echo "1. Work comes from the ACTIVE projects listed below; inactive ones stay parked unless the user reopens them."
+    echo "2. Use \`bd create ... -l project:<name>\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+  else
+    echo "1. Run \`bd ready\` NOW to check for available work before doing anything else."
+    echo "2. Use \`bd create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+  fi
   echo "3. Use \`bd update <id> --claim\` before starting any issue."
   echo "4. Use \`bd close <id>\` when work is complete."
   echo "5. Use \`bd remember\` for persistent knowledge — never MEMORY.md files."; echo ""
+  emit_projects
+}
+# OPTIONAL PROJECT REGISTRY. When the repo keeps a projects.tsv (one bd store, several projects,
+# each marked active or inactive) and a tools/projects.py beside it, `projects.py brief` prints a
+# ~1.5 KB brief: per active project, its ready count and top items. Neither file is part of the
+# pipeline payload yet; a repo without the registry gets nothing here. A registry WITHOUT the
+# tool, or a tool that fails, is said out loud and never blocks the session.
+emit_projects() {
+  local tool="$WS/tools/projects.py" out bound=""
+  [ -f "$WS/projects.tsv" ] || return 0
+  if [ ! -f "$tool" ]; then echo "## ⚠ projects.tsv exists but tools/projects.py is missing — no project brief"; echo ""; return 0; fi
+  command -v timeout >/dev/null 2>&1 && bound="timeout 30"   # stock macOS has none: unbounded, as the site checks are
+  if out=$($bound python3 "$tool" brief 2>&1); then out=${out//$'\r'/}; printf '%s\n\n' "$out"
+  else echo "## ⚠ tools/projects.py brief failed — run it by hand:"; printf '%s\n\n' "$out" | head -c 400; fi
 }
 # The session-actor export above names its own failure here, at the top, so a session whose bd
 # writes will carry the bare user.name knows it before its first write. Silent when it worked and
@@ -242,9 +277,12 @@ TOTAL=$(grep -c '"_type":"memory"' "$MM")
 # Deduplicated but in FILE ORDER: jq's `unique` sorts, which made the budget below keep hot
 # bodies alphabetically -- on a real store it kept `evaluation-…` and dropped `operational-state`
 # because `e` < `o`, whatever the list said. The order of memory-hot.txt is the priority order.
-HOTLIST=$(jq -R -s 'split("\n") | map(select(length > 0)) | reduce .[] as $k ([]; if index($k) then . else . + [$k] end)' "$HOTFILE")
-HOTN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h))] | length' "$MM")
-UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h) | not)] | .[]' "$MM")
+# tr -d '\r' on every jq output read back here: a native Windows jq ends each line with CR LF,
+# and a hot key read back as "key\r" matched nothing, so no hot body was ever emitted (Actions
+# windows job, 2026-10-06). The hot list is read the same way, for a memory-hot.txt saved CR LF.
+HOTLIST=$(tr -d '\r' < "$HOTFILE" | jq -R -s 'split("\n") | map(select(length > 0)) | reduce .[] as $k ([]; if index($k) then . else . + [$k] end)' | tr -d '\r')
+HOTN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h))] | length' "$MM" | tr -d '\r')
+UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .key] as $keys | [$hot[] | select(. as $h | $keys | index($h) | not)] | .[]' "$MM" | tr -d '\r')
 {
   echo ""; echo "## Persistent Memories — HOT tier ($HOTN selected keys of $TOTAL total; bodies included while budget permits)"
   if [ -n "$UNKNOWN" ]; then
@@ -257,9 +295,9 @@ UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .
 # One scratch file per hot body, in memory-hot.txt order, so the budget can keep the first N
 # that fit and name the rest. hot.keys holds the key for each file, line for line.
 : > "$TMPD/hot.keys"; n=0
-jq -r '.[]' <<<"$HOTLIST" | while IFS= read -r k; do [ -z "$k" ] && continue
+jq -r '.[]' <<<"$HOTLIST" | tr -d '\r' | while IFS= read -r k; do [ -z "$k" ] && continue
   f=$(printf '%s/hot.%04d' "$TMPD" "$n"); n=$((n+1))
-  jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM" > "$f"
+  jq -r --arg k "$k" 'select(._type=="memory" and .key==$k) | "### \(.key)\n\(.value)\n"' "$MM" | tr -d '\r' > "$f"
   if [ -s "$f" ]; then echo "$k" >> "$TMPD/hot.keys"; else rm -f "$f"; n=$((n-1)); fi
 done
 # The index is the one component whose whole job is to say what EXISTS, so an empty or short one
@@ -281,7 +319,7 @@ done
 # only because the byte count fell further than the change could explain.
 jq -r --argjson hot "$HOTLIST" \
    'select(._type=="memory") | .key as $k | select($hot | index($k) | not) | "- \($k)"' \
-   "$MM" > "$INDEX"
+   "$MM" | tr -d '\r' > "$INDEX"
 EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . "$INDEX")
 {
   echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"

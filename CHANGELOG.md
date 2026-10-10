@@ -15,6 +15,180 @@
   `BD_PRIME_SESSION_ACTOR=0` opts out. Twelve suite cases, run before the jq branch so every box
   runs them. Not covered: `bd note` carries no author at all (a bd limitation), and non-Claude
   harnesses set nothing — a peer wrapper that may write bd should export its own actor.
+- **Last causes from the matrix after the previous batch** (macOS 134/1, Windows 128/7). A
+  native Windows jq ends each line with CR LF too, so the prime hook read a hot key back as
+  `key\r`, matched nothing, and emitted no hot body; every jq output it reads back is stripped,
+  and `memory-hot.txt` is read the same way for a file saved CR LF. `-ef` cannot equate two
+  spellings of one directory across MSYS mounts (`/tmp/…` against `/c/Users/…/Temp/…`, different
+  devices), so the hook's hooksPath check and the installer's `hooks_wired` fall back to
+  `cygpath -m` where it exists — the self-test's absolute-hooksPath case had the installer
+  rewriting a value it should have left alone. The dolt-guard suite's stub listeners run from `/`
+  (exec'd so the recorded pid is theirs) and cleanup retries the removal, since Windows will not
+  delete a directory a live process holds as its cwd and releases a killed one's handles a beat
+  later; the suite had leaked its scratch directory there. `agent_docs_test.sh` walks the tree in
+  Python instead of shelling out to `find`, which a native Windows Python resolved to System32's.
+  The Pi event suite's own prime stub formatted a `wc -l` count, padded on BSD, so its `PRIMED 1`
+  assertion failed on macOS; stripped. The directory comparison asks cygpath for the long name:
+  a hosted runner's %TEMP% is the 8.3 form (RUNNER~1), so one directory still had two spellings
+  in mixed form, and Windows paths compare case-insensitively. And a drive letter is absolute:
+  git on Windows reports a hooksPath it was handed as `/tmp/…` in the form MSYS converted the
+  argument to, `C:/Users/…`, which `/*` did not match, so the installer and the prime hook took a
+  wired absolute hooksPath for a relative one; the self-test compares that value canonically.
+- **The hooks read Python back without the CR a native Windows Python appends**, plus the
+  next causes the matrix measured after the previous batch. A native Windows Python ends every
+  stdout line with CR LF even into a pipe (the workflow's box line now shows it), so the prerun
+  hook read an empty session id as a lone CR and treated every call as session-scoped with no
+  claims — every `allows` case blocked — and the stop hook's rows and the prime hook's project
+  brief carried the CR too; all three strip it. The prime hook's `core.hooksPath` check compares
+  directories by inode (`-ef`), not spelling: git reports `C:/…` where the shell says `/c/…`, and
+  macOS has `/var` beside `/private/var`. The project brief runs unbounded where there is no
+  `timeout`, as the site checks already do. `tools/dolt-guard.sh` stamps its log with strftime,
+  not `date -Is`, which BSD date rejects. Its suite starts listeners without `setsid` where there
+  is none, keeps their pids in a file instead of `pgrep` (absent on MSYS), asserts exactly-once
+  starts and the lock only where `flock` exists, and builds its no-flock PATH from wrappers that
+  include `lsof` and `netstat` for the boxes that probe with them. `agent_docs_test.sh` strips the
+  CR from its Python output; `check-no-agent-cache-paths_test.sh` skips its tab-in-a-filename
+  case when git cannot stage the name, not only when the filesystem refuses it. The Pi extension
+  compares real paths: Node resolves a module's real path while the cwd it is handed may be the
+  logical spelling, so on macOS it had declared itself loaded outside its own project and run
+  nothing. `bd-prime-hook_test.sh` prints the payload head under a failing check.
+  `audit_wikilinks_test.sh` SKIPs, saying why, under a native Windows Python: its stub `bd` is a
+  shell script, and CreateProcess runs no shell script and finds only `bd.exe` on PATH — which is
+  what users have, so the script itself works there and only the fixture cannot.
+- **One file, two names, on a filesystem without symlinks.** Git Bash's `ln -s` copies the
+  target by default and reports success, so the first native Windows install produced two
+  independent files with no error. The installer now runs it with `MSYS=winsymlinks:nativestrict`
+  (a real link where Windows allows one, a failure otherwise) and on failure writes git's own
+  on-disk form of the link — `CLAUDE.md` holding the text `AGENTS.md` — staged as a symlink
+  (`update-index --cacheinfo 120000`), so the commit carries a real symlink and a clone with
+  symlinks gets one; a re-run recognises that state as linked. `tools/check-agent-docs-linked.sh`
+  accepts the pointer form when git agrees it is a link (index mode 120000, or
+  `core.symlinks=false`), its `--cached` snapshot no longer needs a symlink of its own, and its
+  messages say how to stage the pointer form. Its suite gains the pointer-file state (six cases)
+  and, on a box that cannot link at all, says so and runs that section alone; the self-test
+  forces the fallback (`BAP_INSTALL_NO_SYMLINKS=1`, `core.symlinks=false`) so a Linux box
+  exercises it too: pointer on disk, 120000 in the index, guard passes, commit passes, the
+  commit's tree carries a symlink, and a fresh clone has the real link. `docs/ops/agent-docs-symlink.md`
+  describes the form.
+- **The suites and the self-test hold on macOS and Git Bash where they held only on Linux**,
+  measured by the Actions matrix on 2026-10-06 and fixed at the cause. BSD `wc` pads its count,
+  so every `wc -l` / `wc -c` comparison in `selftest.sh`, `dolt-guard_test.sh`,
+  `audit_wikilinks_test.sh` and `bd-prime-hook_test.sh` strips it. `hook_portability_test.sh`
+  compares the relocated clone's path in canonical form (`pwd -P`, and `cygpath -m` under MSYS):
+  `mktemp` says `/var/…` on macOS and `/tmp/…` on Git Bash while the hooks resolve
+  `/private/var/…` and `/c/Users/…/Temp/…`; it also feeds `settings.json` to Python on stdin
+  rather than as a path inside `-c`, which a native Windows Python cannot open. The
+  memory-curation gate computes the day gap in shell arithmetic (civil date to day number,
+  checked against GNU date) instead of `date -d`, which BSD date lacks, so the gate runs on
+  macOS. `dolt-guard_test.sh` starts its listener without `setsid` where the box has none (stock
+  macOS, Git Bash) instead of dying at "could not bind test port". The four suites that built a
+  private PATH out of symlinks to tools write exec wrappers instead: MSYS `ln -s` copies a binary
+  away from its DLLs and the copy exits 127. `bd-prime-hook_test.sh` SKIPs, by name, the cases
+  that need a real `timeout` or a `chmod -x` that takes effect; `check-no-agent-cache-paths_test.sh`
+  SKIPs its tab-in-a-filename case where the filesystem refuses the name; `bd-prerun-hook_test.sh`
+  prints the hook's stderr under a failing case. `sweep.sh` now decides what grep will not search
+  by asking the scanner itself — the same binary, flags and locale, a pattern every line matches,
+  printed lines counted against the file's — instead of running iconv over the bytes: GNU grep on
+  glibc and ugrep suppress a line carrying a malformed byte under a UTF-8 locale (and exit 0
+  regardless), BSD grep and GNU grep on the MSYS runtime print it, so the iconv predicate
+  overclaimed "NOT SEARCHED" on every box of the second kind. `sweep_test.sh` measures that
+  before its binary-file case and SKIPs it, loudly and counted, where the box's grep has no such
+  hazard — as it already said it did where no UTF-8 locale exists, except that SKIP then went on
+  and ran the case anyway.
+- **The self-test runs in GitHub Actions on ubuntu, macos and windows.**
+  `.github/workflows/selftest.yml` runs `./selftest.sh` on every push: `ubuntu-latest` with bd and
+  without, `macos-latest` with bash from Homebrew (the stock `/bin/bash` is 3.2) and
+  `windows-latest` under Git Bash. bd is installed from the release archive the workflow names,
+  verified against the release's `checksums.txt`, into a directory of its own so the no-bd probe
+  can hide it; the official installer refuses Git Bash and floats to the current release. Each
+  job puts its box line, the RESULT line and every FAIL in the run summary, keeps the log, and
+  after a failure keeps the installer's output and every suite's full log. First run, 2026-10-06,
+  bd 1.3.1: Ubuntu 127 passed with bd and without; macOS 26 fails 20 and Windows Server 2025
+  fails 29, so those two jobs are continue-on-error until green. The failures sort into a few
+  causes — BSD `wc -l` pads its output and every `$(… | wc -l)` comparison reads the padding,
+  `mktemp -d` paths are compared against their physical spelling (`/private/var`,
+  `/c/Users/…/Temp`), the curation gate needs GNU `date -d`, the sweep's binary-file case fails
+  under BSD and MSYS grep, and on Windows MSYS `ln -s` copies, native Python cannot open MSYS
+  paths and the hook suites' bare PATH loses a directory the hooks need. The installer's exit 1
+  on both boxes is those causes once more: its verify step runs the portability suite (and the
+  agent-docs guard), and that exit cascades into six self-test assertions. The bd-prime-hook
+  suite has further cases on both boxes and the Pi event suite fails on macOS under Node 24, not
+  yet read. `.gitattributes` pins LF for every text file: Git for Windows ships
+  `core.autocrlf=true` in its system config (the runner's box line shows it), and a CRLF bash
+  script dies on its first line; the checkout there is `i/lf w/lf`.
+- **The self-test runs on a clean box.** `test/selftest-in-container.sh` builds two Ubuntu 24.04
+  images from `test/Dockerfile` — `bare` (git, python3, bash and nothing else the pipeline lists)
+  and `full` (bd from its official installer at the current release, jq, ripgrep, iproute2,
+  bd-memgraph) — and runs `./selftest.sh` inside each as a non-root user with the checkout
+  mounted read-only. The "bare-box branch must still pass" line had only ever been a claim; the
+  first run found two defects the host hid. `tools/sweep_test.sh`'s binary-file case depended
+  on the active locale: under C/POSIX a malformed UTF-8 byte is ordinary text, grep searches the
+  file, and three assertions inverted for a reason unrelated to the detector; the case now pins
+  C.UTF-8 and SKIPs loudly where no UTF-8 locale exists, and `sweep.sh`'s header says the
+  BINARY column follows the locale. `tools/dolt-guard.sh` had no probe at all on a box without
+  `ss`, `lsof` or `netstat` and said so every shell; on Linux it now reads `/proc/net/tcp`. The
+  first version of that probe let awk exit on its first match, which sends SIGPIPE to the writer
+  and under `set -o pipefail` reads a live listener as "not listening"; it now drains its input.
+  Its suite no longer needs `ss` itself (a connect probe), proves the kernel table is read in both
+  directions, and carries awk on the no-flock PATH. Bare: 117 passed; full with bd 1.3.1: 126 passed.
+- **The remaining tools, skills and shared docs are one file with an installed copy too.**
+  Same rule as the hooks: policy lives outside the file. `tools/agent_docs_test.sh` sources an
+  optional `tools/agent_docs_test.conf` for a repo's own exemptions (`ALLOW_EXTRA`) and path
+  anchors (`ROOTS_EXTRA`), so a repo with mounts, data-file conventions or extra top-level
+  directories no longer edits the test. `tools/sweep.sh` prunes `.pixi/`, `.venv/` and
+  `node_modules/` from repository discovery and says so in its header: conda/pixi installs carry
+  malformed `.git` test fixtures that turned a clean zero into false control failures; the suite
+  builds that fixture and requires the exclusion. Its real-tree hazard check asserts that a root
+  `rg` sees LESS THAN HALF of the corpus instead of "<5%", which was a count in disguise and went
+  red the month a root repo grew four subtrees. `tools/check-agent-docs-linked.sh --cached` now
+  refuses a staged DELETION of a previously tracked `CLAUDE.md` symlink, which silently unhooked
+  Claude Code; one new case. `tools/check-no-agent-cache-paths_test.sh` forces its `git rm
+  --cached` so a modified working copy cannot break the fixture. The `triage` skill reads an
+  optional project registry (a projects.tsv with a projects.py tool: active projects grouped,
+  one `project:` label per bead) and falls back to `bd ready` without one; the skills README says
+  the registry tool is not shipped. `docs/ops/other-harnesses.md` gains two sections from a
+  2026-10-05 inventory: Grok runs the Claude hooks but cannot block through them (stdout
+  discarded, `toolInput` not `tool_input`, exit 2 required), and bd is the only memory store
+  for every CLI, with the Grok memory-v2 case and its off switches.
+- **The installed hooks and the shipped ones are one file again.** A workspace that had carried
+  the pipeline for a month had diverged from it by 68, 168 and 20 lines in the three session hooks,
+  and every later fix had to be ported by hand in one direction or the other. Three changes make
+  the copies byte-identical, with policy outside the files:
+  - The scripts gate's directory pattern `SCRIPT_DIRS_RE` is read from `.claude/bd-prerun.conf`
+    (sourced, tracked) or `BD_SCRIPT_DIRS_RE` in the environment, and an EMPTY value turns the gate
+    off, bd call included. Editing the hook to drop the rule was the one way to fork it. Thirteen
+    new cases in `tools/bd-prerun-hook_test.sh` (both knobs, precedence, the other guards
+    unaffected, another directory name); the portability and Pi suites pin the gate on, since a
+    clone's conf may turn it off.
+  - The SessionStart hook knows about an optional project registry: with a `projects.tsv` and a
+    `tools/projects.py` in the repo it prints a per-active-project brief under the rules and words
+    rules 1 and 2 for project-scoped work; without the registry it is unchanged. A registry
+    without the tool, or a tool that fails, is said out loud. Nine new cases in
+    `tools/bd-prime-hook_test.sh`. The two files are not part of the payload yet.
+  - The NOT FOUND messages in `.claude/settings.json` and the Pi adapter now say "restore the
+    tracked script or re-run the installer", which is right in a clone that tracks its hooks and
+    in a fresh install alike; the Pi suite asserts the wording.
+- **A memory curation gate ships as the first site check.** bd has no consolidation cadence: a
+  store curated once on 2026-09-18 grew for weeks with nothing prompting the next audit, which
+  the comparison with an agent CLI whose consolidation runs automatically made plain
+  (2026-10-06). `.claude/site-checks/memory-curation-gate.sh` prints one line at session start
+  once the store is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt`
+  (`BD_CURATION_MAX_DAYS` / `BD_CURATION_MAX_NEW`); it counts from a tracked
+  `.beads/memories.jsonl` when one exists, else from `bd memories`, and says so when it cannot
+  count. The installer writes the stamp once (today, current count) and never overwrites it; the
+  `memory-curate` skill ends every mode, audit included, by rewriting it, replacing its old
+  advice to wrap `audit` in `/loop`. `tools/memory-curation-gate_test.sh`: 35 checks, including
+  the no-export branch through a stub `bd` and every loud path. The self-test asserts the stamp.
+- **`dolt-guard.sh` no longer leaks its lock into the server it starts.** The guard ran
+  `bd dolt start` with its `flock` descriptor still open, so the daemonised `dolt sql-server`
+  inherited it and held the lock for its whole life. A shell already waiting on the lock (two
+  shells opening together at boot, or parallel tool calls) burned the full 30 s and then logged
+  `FAILED: timed out waiting for another shell to start dolt` while the server was up — a false
+  alarm from the guard whose job is to make that line trustworthy. The descriptor is now closed
+  for the child only. Seen on 2026-10-02 after a WSL restart. Four new checks in the race case of
+  `tools/dolt-guard_test.sh` (every racer returns 0, none says FAILED, the losers are released
+  promptly, the lock is free afterwards); all four fail on the old guard, and the suite drops
+  from about 33 s to 5 s because it had been sitting through the same timeout.
 - Two silent paths in the SessionStart hook's site checks are named. A check that the 20 s bound
   killed had usually printed nothing yet, and `timeout`'s exit 124 went to the discarded stderr, so
   the kill read as a healthy check; the payload now says KILLED, before any partial output, so the

@@ -30,6 +30,11 @@ STUB
 chmod +x "$T/bin/bd"
 cp -f "$HOOK" "$T/ws/.claude/bd-stop-hook.sh"
 run_hook() { (cd "$T/ws" && PATH="$T/bin:${HOOK_PATH:-$PATH}" bash .claude/bd-stop-hook.sh) 2>/dev/null; }
+# A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
+# `ln -s` copies the binary without the DLLs beside it and the copy dies with 127; an exec
+# wrapper works everywhere (Actions windows job, 2026-10-06).
+shim() { local b; b=$(command -v "$2" 2>/dev/null) || return 1
+         printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$1/$2" && chmod +x "$1/$2"; }
 
 ROW1='◐ proj-1 ● P2 [bug] one thing in flight'
 ROW2='◐ proj-2 ● P1 [task] another'
@@ -56,9 +61,7 @@ chk "a legend with no rows -> no reminder"  "$(run_hook | grep -c 'SESSION CLOSE
 
 echo "### without jq on PATH the same numbers come out"
 mkdir -p "$T/nojq"
-for tool in bash sh grep cat sed dirname mktemp rm; do
-  b=$(command -v "$tool" 2>/dev/null) && ln -sf "$b" "$T/nojq/$tool"
-done
+for tool in bash sh grep cat sed dirname mktemp rm; do shim "$T/nojq" "$tool" || true; done
 export BD_STUB_LIST="$ROW1$LEGEND" BD_STUB_JSON='[{"id":"proj-1","status":"in_progress"}]'
 chk "no jq: one row -> 1"                   "$(HOOK_PATH="$T/nojq" run_hook | grep -c 'You have 1 in-progress')" 1
 export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"

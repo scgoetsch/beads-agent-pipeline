@@ -55,7 +55,7 @@ assert isinstance(d, list)
 for x in d:
     if isinstance(x, dict) and x.get("id"): print("%s\t%s" % (x["id"], x.get("title", "")))
 ' 2>/dev/null); then
-        printf '%s' "$rows"; return 0
+        printf '%s' "${rows//$'\r'/}"; return 0   # CR LF from a native Windows Python
     fi
     text=$(bd list --status=in_progress 2>/dev/null) || return 1
     # rows start with the in_progress glyph after any tree prefix; the legend never does

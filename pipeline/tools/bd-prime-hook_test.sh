@@ -21,7 +21,9 @@ mkdir -p "$T/scratch"
 export TMPDIR="$T/scratch"
 pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));
-        else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
+        else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1))
+             [ -s "$T/hook.err" ] && sed 's/^/        hook stderr: /' "$T/hook.err" | tail -4
+             [ -n "${out:-}" ] && printf '%s\n' "$out" | head -25 | sed 's/^/        payload: /'; fi; }
 
 # The stub store: two memories. `prime` prints them the way bd does, between the two headers
 # the hook's filter keys on; `export` writes them as JSONL. The bodies are the sentinels.
@@ -39,7 +41,13 @@ esac
 STUB
 chmod +x "$T/bin/bd"
 cp -f "$HOOK" "$T/ws/.claude/bd-prime-hook.sh"
-run_hook() { (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null; }
+run_hook() { (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>"$T/hook.err"; }
+skipc() { printf '  SKIP  %s\n' "$1"; }
+# A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
+# `ln -s` copies the binary without the DLLs beside it and the copy dies with 127; an exec
+# wrapper works everywhere (Actions windows job, 2026-10-06).
+shim() { local b; b=$(command -v "$2" 2>/dev/null) || return 1
+         printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$1/$2" && chmod +x "$1/$2"; }
 
 echo "### session identity: BEADS_ACTOR per session via CLAUDE_ENV_FILE (independent of jq)"
 git init -q "$T/ws" 2>/dev/null && git -C "$T/ws" config user.name "Test User"
@@ -111,13 +119,13 @@ chk "index still lists beta only"            "$(grep -cE '^- beta-key$' <<<"$out
 
 echo "### scratch files are per process — nothing fixed under /tmp"
 run_hook >/dev/null
-chk "no fixed-name scratch file created" "$(ls -d "$TMPDIR/bd-prime-mm.jsonl" "$TMPDIR/bd-prime-index" "$TMPDIR/bd-prime-err" 2>/dev/null | wc -l)" 0
-chk "its temp dir is removed on exit" "$(ls -d "$TMPDIR"/bd-prime.* 2>/dev/null | wc -l)" 0
+chk "no fixed-name scratch file created" "$(ls -d "$TMPDIR/bd-prime-mm.jsonl" "$TMPDIR/bd-prime-index" "$TMPDIR/bd-prime-err" 2>/dev/null | wc -l | tr -d ' ')" 0
+chk "its temp dir is removed on exit" "$(ls -d "$TMPDIR"/bd-prime.* 2>/dev/null | wc -l | tr -d ' ')" 0
 mkdir -p "$TMPDIR/bd-prime.other-session"
 printf 'other session sentinel\n' > "$TMPDIR/bd-prime-index"
 run_hook >/dev/null
 chk "another session scratch is untouched" "$(cat "$TMPDIR/bd-prime-index")" "other session sentinel"
-chk "another active temp dir does not interfere" "$(ls -d "$TMPDIR"/bd-prime.* 2>/dev/null | wc -l)" 1
+chk "another active temp dir does not interfere" "$(ls -d "$TMPDIR"/bd-prime.* 2>/dev/null | wc -l | tr -d ' ')" 1
 rm -rf "$TMPDIR/bd-prime.other-session" "$TMPDIR/bd-prime-index"
 
 echo "### a store with no memories yet is tiered as 0 of 0, not treated as a failed export"
@@ -172,14 +180,16 @@ chk "a check that prints becomes a SITE CHECK block"  "$(grep -c 'SITE CHECK —
 chk "its output is in the payload"                     "$(grep -c 'MOUNT-DOWN sentinel' <<<"$out")" 1
 chk "a silent check adds nothing"                      "$(grep -c 'SITE CHECK — quiet' <<<"$out")" 0
 chk "a check that speaks on stderr is heard too"       "$(grep -c 'STDERR-ONLY sentinel' <<<"$out")" 1
+if command -v timeout >/dev/null 2>&1; then
 chk "with timeout present, no UNBOUNDED notice"        "$(grep -c 'run UNBOUNDED' <<<"$out")" 0
+else skipc "with timeout present, no UNBOUNDED notice — no timeout on this box (stock macOS); the UNBOUNDED case below is the one that applies"; fi
 # Hide `timeout`: a PATH of symlinks to everything else the hook needs. The checks must still run
 # and the payload must say they ran unbounded -- not skip them in silence, which is what
 # `out=$(timeout 20 "$f" 2>/dev/null) || true` did on a box with no timeout (stock macOS).
 mkdir -p "$T/notimeout"
 for tool in bash sh mktemp rm cp chmod mkdir cat grep head tail wc git dirname basename ls sed awk sort \
             cut tr date env jq readlink realpath find xargs tee uniq mv touch python3; do
-  b=$(command -v "$tool" 2>/dev/null) && ln -sf "$b" "$T/notimeout/$tool"
+  shim "$T/notimeout" "$tool" || true
 done
 out=$(cd "$T/ws" && PATH="$T/bin:$T/notimeout" bash .claude/bd-prime-hook.sh 2>/dev/null)
 chk "no timeout: the payload says checks run UNBOUNDED" "$(grep -c 'run UNBOUNDED' <<<"$out")" 1
@@ -196,22 +206,35 @@ rm -f "$T/ws/.claude/site-checks/dump.sh"
 # A check the bound kills has usually printed nothing, and `timeout` exits 124 -- both discarded,
 # so the kill read as health. A check without +x was skipped by `[ -x ] || continue` the same
 # way. Both are named now (cairn review, 2026-09-30). BD_PRIME_CHECK_TIMEOUT=1 keeps this fast.
-printf '#!/usr/bin/env bash\nsleep 30\n'                                > "$T/ws/.claude/site-checks/hang.sh"
-printf '#!/usr/bin/env bash\necho "PARTIAL sentinel"; sleep 30\n'      > "$T/ws/.claude/site-checks/slow.sh"
+# Without a real `timeout` the hang and slow checks would run unbounded for 30 s each, so they
+# exist only where the box has one (stock macOS has none); the noexec check needs chmod -x to
+# take effect, which it does not on MSYS, where a #! file is executable whatever its mode bits.
+have_timeout=0; command -v timeout >/dev/null 2>&1 && have_timeout=1
+if [ "$have_timeout" -eq 1 ]; then
+  printf '#!/usr/bin/env bash\nsleep 30\n'                                > "$T/ws/.claude/site-checks/hang.sh"
+  printf '#!/usr/bin/env bash\necho "PARTIAL sentinel"; sleep 30\n'      > "$T/ws/.claude/site-checks/slow.sh"
+  chmod +x "$T/ws/.claude/site-checks/hang.sh" "$T/ws/.claude/site-checks/slow.sh"
+fi
 printf '#!/usr/bin/env bash\necho "NEVER sentinel"\n'                  > "$T/ws/.claude/site-checks/noexec.sh"
-chmod +x "$T/ws/.claude/site-checks/hang.sh" "$T/ws/.claude/site-checks/slow.sh"
 chmod -x "$T/ws/.claude/site-checks/noexec.sh"
+noexec_ok=1; [ -x "$T/ws/.claude/site-checks/noexec.sh" ] && noexec_ok=0
 out=$(cd "$T/ws" && BD_PRIME_CHECK_TIMEOUT=1 PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh 2>/dev/null)
+if [ "$have_timeout" -eq 1 ]; then
 chk "a check killed at the bound is named"             "$(grep -c 'SITE CHECK — hang' <<<"$out")" 1
 chk "...and says it was killed, not healthy"           "$(grep -c 'KILLED after 1 s' <<<"$out")" 2
 chk "...its partial output is kept"                    "$(grep -c 'PARTIAL sentinel' <<<"$out")" 1
+else skipc "a check killed at the bound is named / says it was killed / partial output kept — no timeout on this box"; fi
+if [ "$noexec_ok" -eq 1 ]; then
 chk "a check without +x is named as NOT RUN"           "$(grep -c 'SITE CHECK — noexec: NOT RUN' <<<"$out")" 1
 chk "...and it did not run"                            "$(grep -c 'NEVER sentinel' <<<"$out")" 0
 chk "...the fix is spelled out"                        "$(grep -c 'chmod +x .claude/site-checks/noexec.sh' <<<"$out")" 1
+else skipc "a check without +x is named as NOT RUN / did not run / fix spelled out — chmod -x has no effect on this filesystem (MSYS: a #! file is always executable)"; fi
 chk "a healthy check is still silent beside them"      "$(grep -c 'SITE CHECK — quiet' <<<"$out")" 0
 rm -f "$T/ws/.claude/site-checks/hang.sh" "$T/ws/.claude/site-checks/slow.sh"
 out=$(cd "$T/ws" && PATH="$T/bin:$T/notimeout" bash .claude/bd-prime-hook.sh 2>/dev/null)
+if [ "$noexec_ok" -eq 1 ]; then
 chk "no timeout: a check without +x is still named"    "$(grep -c 'SITE CHECK — noexec: NOT RUN' <<<"$out")" 1
+else skipc "no timeout: a check without +x is still named — chmod -x has no effect on this filesystem"; fi
 rm -rf "$T/ws/.claude/site-checks"
 mkdir -p "$T/ws/.claude/site-checks"
 out=$(run_hook)
@@ -223,7 +246,7 @@ echo "### this suite's no-jq branch: run it again with jq hidden, and require it
 # non-zero, a jq-less box would fail the whole self-test while the README calls jq optional.
 mkdir -p "$T/nojq"
 for tool in bash sh mktemp rm cp chmod mkdir cat grep head tail wc git dirname ls sed awk sort cut tr date env timeout python3; do  # python3: the session-actor export parses the hook payload with it, as bd-prerun-hook.sh already does
-  b=$(command -v "$tool" 2>/dev/null) && ln -sf "$b" "$T/nojq/$tool"
+  shim "$T/nojq" "$tool" || true
 done
 nested=$(PATH="$T/nojq" bash "${BASH_SOURCE[0]}" 2>&1); nrc=$?
 chk "nested run without jq exits 0"          "$nrc" 0
@@ -365,6 +388,27 @@ chk "no arbitrary slice of keys is listed" "$(grep -c '^- long-operational-memor
 chk "an omitted index alone is not a TRIMMED alarm" "$(grep -c 'PAYLOAD TRIMMED' <<<"$out")" 0
 chk "the total count is still disclosed" "$(grep -c 'index (400 more' <<<"$out")" 1
 chk "the end marker survives" "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
+
+echo "### project brief: present with a registry, silent without, loud when broken"
+out=$(run_hook)
+chk "no projects.tsv: no project section"            "$(grep -c '^## Projects\|projects.py' <<<"$out")" 0
+chk "no projects.tsv: rule 1 says bd ready"          "$(grep -c '^1. Run `bd ready` NOW' <<<"$out")" 1
+printf 'project\tstatus\tpaths\trules\tsummary\n' > "$T/ws/projects.tsv"
+out=$(run_hook)
+chk "registry but no tool: one loud line"             "$(grep -c 'tools/projects.py is missing' <<<"$out")" 1
+chk "registry: rule 1 scopes work to active projects" "$(grep -c '^1. Work comes from the ACTIVE projects' <<<"$out")" 1
+chk "registry: rule 2 asks for the project label"     "$(grep -c 'project:<name>' <<<"$out")" 1
+mkdir -p "$T/ws/tools"
+printf '#!/usr/bin/env python3\nprint("## Projects SENTINEL-BRIEF")\n' > "$T/ws/tools/projects.py"
+out=$(run_hook)
+chk "the brief is emitted"                            "$(grep -c 'SENTINEL-BRIEF' <<<"$out")" 1
+l_r=$(grep -n 'MANDATORY SESSION RULES' <<<"$out" | head -1 | cut -d: -f1); l_b=$(grep -n 'SENTINEL-BRIEF' <<<"$out" | cut -d: -f1)
+chk "...right under the rules, at the head"           "$(( l_r < l_b && l_b < 20 ))" 1
+printf '#!/usr/bin/env python3\nimport sys; print("boom"); sys.exit(3)\n' > "$T/ws/tools/projects.py"
+out=$(run_hook)
+chk "a failing brief is named, not hidden"            "$(grep -c 'projects.py brief failed' <<<"$out"):$(grep -c 'boom' <<<"$out")" "1:1"
+chk "...and the session is still primed"              "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
+rm -rf "$T/ws/projects.tsv" "$T/ws/tools"
 
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
