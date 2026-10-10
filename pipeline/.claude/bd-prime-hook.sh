@@ -59,10 +59,11 @@ if not isinstance(data, dict): data = {}
 print(re.sub(r"[^A-Za-z0-9._-]", "_", str(data.get("session_id") or ""))[:128])
 ' 2>/dev/null)
   fi
+  sid=${sid//$'\r'/}   # a native Windows python3 ends its output with CR LF (see the jq note below)
   if [ -z "$sid" ]; then
     SESSION_ACTOR_FAIL="no session_id in the hook payload, or no python3"
   else
-    who=$(git -C "$WS" config user.name 2>/dev/null); who=${who:-${USER:-unknown}}; who=${who//\'/}
+    who=$(git -C "$WS" config user.name 2>/dev/null); who=${who//$'\r'/}; who=${who:-${USER:-unknown}}; who=${who//\'/}
     SESSION_ACTOR="$who/claude/${sid:0:8}"
     printf "export BEADS_ACTOR='%s'\n" "$SESSION_ACTOR" >> "$CLAUDE_ENV_FILE" 2>/dev/null \
       || { SESSION_ACTOR_FAIL="cannot append to CLAUDE_ENV_FILE='$CLAUDE_ENV_FILE'"; SESSION_ACTOR=""; }
