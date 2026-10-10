@@ -31,6 +31,43 @@ if [ -z "$WS" ] || [ ! -d "$WS/.claude" ]; then
   exit 0
 fi
 cd "$WS" || { echo "# 🚨 bd-prime-hook: cannot cd to '$WS' — session NOT primed."; exit 0; }
+
+# ── SESSION IDENTITY FOR bd's AUDIT TRAIL ──────────────────────────────────────────────────────
+# bd stamps an actor on created_by, on the assignee a --claim sets, on comment authors and on the
+# field-change rows of .beads/interactions.jsonl; the default is git user.name, so every session of
+# one human is one name and the log cannot say which run did what (188 of 188 rows on the box that
+# motivated this, 2026-10-10). Claude Code hands SessionStart hooks CLAUDE_ENV_FILE: assignments
+# appended there are sourced before every later Bash call of the session and inherited by its
+# children (git hooks, the exports refresh, bd dolt push). So: BEADS_ACTOR=<git user.name>/claude/<8>
+# -- the human first, so a search for the name still hits every old and new row; then the harness;
+# then 8 hex chars of the hook payload's session_id, which prefix-match the claims record under
+# .git/bd-session-claims/ and the transcript file. Precedence in bd: --actor > BEADS_ACTOR > config.
+# CONSEQUENCE, by design: `bd update --claim` is compare-and-swap on the assignee, so a second
+# session is refused by name and takes over with --assignee first (logged); bd-prerun-hook.sh's
+# stop reminder says how. BD_PRIME_SESSION_ACTOR=0 opts out. Never reads a terminal. Writes nothing
+# to stdout here: a FAILED export is named by emit_session_actor at the top of the payload; a host
+# without CLAUDE_ENV_FILE is not a failure. Guard: tools/bd-prime-hook_test.sh.
+SESSION_ACTOR=""; SESSION_ACTOR_FAIL=""
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ "${BD_PRIME_SESSION_ACTOR:-1}" != "0" ]; then
+  sid=""
+  if [ ! -t 0 ]; then
+    sid=$(python3 -c '
+import sys, json, re
+try: data = json.load(sys.stdin)
+except Exception: data = {}
+if not isinstance(data, dict): data = {}
+print(re.sub(r"[^A-Za-z0-9._-]", "_", str(data.get("session_id") or ""))[:128])
+' 2>/dev/null)
+  fi
+  if [ -z "$sid" ]; then
+    SESSION_ACTOR_FAIL="no session_id in the hook payload, or no python3"
+  else
+    who=$(git -C "$WS" config user.name 2>/dev/null); who=${who:-${USER:-unknown}}; who=${who//\'/}
+    SESSION_ACTOR="$who/claude/${sid:0:8}"
+    printf "export BEADS_ACTOR='%s'\n" "$SESSION_ACTOR" >> "$CLAUDE_ENV_FILE" 2>/dev/null \
+      || { SESSION_ACTOR_FAIL="cannot append to CLAUDE_ENV_FILE='$CLAUDE_ENV_FILE'"; SESSION_ACTOR=""; }
+  fi
+fi
 HOTFILE="$WS/.claude/memory-hot.txt"
 BUDGET=${BD_PRIME_BUDGET:-10000}
 case $BUDGET in ''|*[!0-9]*) BUDGET=10000 ;; esac
@@ -135,7 +172,15 @@ emit_session_rules() {
   echo "4. Use \`bd close <id>\` when work is complete."
   echo "5. Use \`bd remember\` for persistent knowledge — never MEMORY.md files."; echo ""
 }
-emit_rules() { emit_hooks_unwired; emit_session_rules; emit_site_checks; }
+# The session-actor export above names its own failure here, at the top, so a session whose bd
+# writes will carry the bare user.name knows it before its first write. Silent when it worked and
+# when the host gave no CLAUDE_ENV_FILE (that host has no such mechanism; nothing to report).
+emit_session_actor() {
+  [ -n "$SESSION_ACTOR_FAIL" ] || return 0
+  echo "# ⚠ bd-prime-hook: BEADS_ACTOR NOT exported for this session ($SESSION_ACTOR_FAIL); bd writes will"
+  echo "#   carry the bare git user.name. A claim another session holds still needs --assignee to take over."; echo ""
+}
+emit_rules() { emit_hooks_unwired; emit_session_actor; emit_session_rules; emit_site_checks; }
 # Every fallback SAYS it is one, and why. The full dump is the degraded path -- it was measured
 # at 76 KB on a 40-memory store, far past what the host shows -- and a silent fallback reads
 # exactly like the tiered output it replaced. An EMPTY hot list is not a reason to fall back:

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Sessions get an identity in bd's audit trail.** Every bd write carried the bare git user.name
+  (188 of 188 audit rows on one store were one actor across at least five sessions), so the log
+  could not say which run did what. The SessionStart hook now exports
+  `BEADS_ACTOR=<git user.name>/claude/<8 hex of the session id>` through Claude Code's
+  `CLAUDE_ENV_FILE`, which every later Bash call and its children (git hooks, the exports refresh,
+  `bd dolt push`) inherit; the human stays first so a search for the name still hits every row.
+  Deliberate consequence: `bd update --claim` is compare-and-swap on the assignee, so a second
+  session is refused by name and takes over with `--assignee` first, which is logged; the
+  PreToolUse stop reminder now says so instead of calling `--claim` idempotent. Hosts without
+  `CLAUDE_ENV_FILE` are untouched; a failed export is named at the top of the payload;
+  `BD_PRIME_SESSION_ACTOR=0` opts out. Twelve suite cases, run before the jq branch so every box
+  runs them. Not covered: `bd note` carries no author at all (a bd limitation), and non-Claude
+  harnesses set nothing — a peer wrapper that may write bd should export its own actor.
 - Two silent paths in the SessionStart hook's site checks are named. A check that the 20 s bound
   killed had usually printed nothing yet, and `timeout`'s exit 124 went to the discarded stderr, so
   the kill read as a healthy check; the payload now says KILLED, before any partial output, so the

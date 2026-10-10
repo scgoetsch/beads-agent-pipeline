@@ -41,6 +41,31 @@ chmod +x "$T/bin/bd"
 cp -f "$HOOK" "$T/ws/.claude/bd-prime-hook.sh"
 run_hook() { (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null; }
 
+echo "### session identity: BEADS_ACTOR per session via CLAUDE_ENV_FILE (independent of jq)"
+git init -q "$T/ws" 2>/dev/null && git -C "$T/ws" config user.name "Test User"
+ENVF="$T/session-env.sh"
+# The way Claude Code runs it: the hook JSON on stdin, CLAUDE_ENV_FILE named in the environment.
+run_hook_sid() { : > "$ENVF"; (cd "$T/ws" && PATH="$T/bin:$PATH" CLAUDE_ENV_FILE="$ENVF" bash .claude/bd-prime-hook.sh <<<"$1") 2>/dev/null; }
+out=$(run_hook_sid '{"session_id":"8982593f-d7b5-47ce-bc04-b69b9649a6b9","hook_event_name":"SessionStart","source":"startup"}')
+chk "one export line: user.name, harness, 8 hex of the session id" "$(cat "$ENVF")" "export BEADS_ACTOR='Test User/claude/8982593f'"
+chk "the line is a plain assignment bash accepts"                 "$(bash -c "source $ENVF && printf %s \"\$BEADS_ACTOR\"")" "Test User/claude/8982593f"
+chk "nothing about it on stdout: the payload budget is untouched"  "$(grep -c 'BEADS_ACTOR' <<<"$out")" 0
+chk "the payload still ends with its footer"                       "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
+out=$(run_hook_sid '{"session_id":"ab/cd ef$(x)"}')
+chk "a hostile session id is sanitized before it is exported"      "$(cat "$ENVF")" "export BEADS_ACTOR='Test User/claude/ab_cd_ef'"
+out=$(run_hook_sid '{"hook_event_name":"SessionStart"}')
+chk "no session id: nothing written"                               "$(wc -c < "$ENVF" | tr -d ' ')" 0
+chk "no session id: the failure is NAMED at the top of the payload" "$(printf '%s' "$out" | head -6 | grep -c 'BEADS_ACTOR NOT exported')" 1
+out=$(run_hook_sid 'not json at all')
+chk "garbage on stdin: nothing written, no crash"                  "$(wc -c < "$ENVF" | tr -d ' ')" 0
+chk "garbage on stdin: the session is still primed"                "$(grep -c 'MANDATORY SESSION RULES' <<<"$out")" 1
+: > "$ENVF"; out=$( (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh <<<'{"session_id":"8982593f-d7b5"}') 2>/dev/null )
+chk "no CLAUDE_ENV_FILE (another host): nothing written"           "$(wc -c < "$ENVF" | tr -d ' ')" 0
+chk "no CLAUDE_ENV_FILE: not reported as a failure either"         "$(grep -c 'BEADS_ACTOR NOT exported' <<<"$out")" 0
+: > "$ENVF"; out=$( (cd "$T/ws" && PATH="$T/bin:$PATH" CLAUDE_ENV_FILE="$ENVF" BD_PRIME_SESSION_ACTOR=0 bash .claude/bd-prime-hook.sh <<<'{"session_id":"8982593f-d7b5"}') 2>/dev/null )
+chk "BD_PRIME_SESSION_ACTOR=0 opts out silently"                   "$(wc -c < "$ENVF" | tr -d ' ')$(grep -c 'BEADS_ACTOR NOT exported' <<<"$out")" 00
+echo
+
 # jq is OPTIONAL for the pipeline (README says so): without it the hook cannot tier and must fall
 # back to the full dump, loudly. This suite used to exit 2 without jq, which made the whole
 # self-test fail on a box the README calls supported. Without jq, test the fallback -- that IS
@@ -197,7 +222,7 @@ echo "### this suite's no-jq branch: run it again with jq hidden, and require it
 # A PATH of symlinks to everything the fallback path needs, minus jq. If the nested run exits
 # non-zero, a jq-less box would fail the whole self-test while the README calls jq optional.
 mkdir -p "$T/nojq"
-for tool in bash sh mktemp rm cp chmod mkdir cat grep head tail wc git dirname ls sed awk sort cut tr date env timeout; do
+for tool in bash sh mktemp rm cp chmod mkdir cat grep head tail wc git dirname ls sed awk sort cut tr date env timeout python3; do  # python3: the session-actor export parses the hook payload with it, as bd-prerun-hook.sh already does
   b=$(command -v "$tool" 2>/dev/null) && ln -sf "$b" "$T/nojq/$tool"
 done
 nested=$(PATH="$T/nojq" bash "${BASH_SOURCE[0]}" 2>&1); nrc=$?

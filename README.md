@@ -93,6 +93,13 @@ the store (replaced by an explicit INDEX OMITTED line if its keys alone exceed t
 `.claude/memory-hot.txt` while space permits, and the bd context. The hot list ships empty, and empty means
 "index only", not "unconfigured". If the hook has to fall back to the full dump — no `jq`, no
 export — it says so on its first line rather than looking like the tiered output.
+It also gives the session an identity in bd's audit trail: where the host provides
+`CLAUDE_ENV_FILE` (Claude Code does), it exports `BEADS_ACTOR=<git user.name>/claude/<8 chars of
+the session id>`, so `created_by`, claim assignees, comment authors and the field-change rows of
+`.beads/interactions.jsonl` name the run, not just the human. One consequence is deliberate:
+`bd update --claim` is compare-and-swap on the assignee, so a second session is refused by name
+and takes an issue over with `--assignee` first (logged). `BD_PRIME_SESSION_ACTOR=0` opts out; a
+failed export is named at the top of the payload.
 
 **The host has a budget, and the hook knows it.** Claude Code keeps only a 2,000-byte preview of
 any one SessionStart hook command's output above 10,000 bytes and writes the rest to a file

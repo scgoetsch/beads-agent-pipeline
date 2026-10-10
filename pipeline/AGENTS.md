@@ -54,6 +54,12 @@ bd dolt push            # ONLY if the store has a remote (`bd dolt status`); an 
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files.
 - **Every `--<field>` flag on `bd update` is a SET, not an append.** Use `bd note <id>` to add to
   a running record. `bd remember --key X` likewise REPLACES the body, so `bd recall <key>` first.
+- **Claims are per session.** The SessionStart hook exports `BEADS_ACTOR=<git user.name>/claude/<8
+  chars of the session id>` where the host allows (Claude Code does), and bd stamps it on
+  `created_by`, claim assignees, comment authors and the field-change rows of
+  `.beads/interactions.jsonl` (notes carry no author). `--claim` is compare-and-swap on the
+  assignee: an issue still claimed by an earlier session is refused by name. Take it over first —
+  the change is logged — then claim: `bd update <id> --assignee="$BEADS_ACTOR" && bd update <id> --claim`.
 
 ### These rules SUPERSEDE the harness, which will actively contradict them
 

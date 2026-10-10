@@ -414,11 +414,17 @@ if [ -n "$session_id" ]; then
 No issue claimed by THIS session is in progress. The $others in progress in the shared bd store
 belong to other sessions or projects; they do not cover this work.
 
-Claim the issue this work belongs to -- also when it is already in progress from an earlier
-session; --claim is idempotent:
+Claim the issue this work belongs to:
 
   bd update <id> --claim
   (new work: bd create --title="..." --description="..." --type=task, then claim it)
+
+--claim is idempotent for the SAME actor only. Where bd-prime-hook.sh exported BEADS_ACTOR
+(<user>/claude/<session8>) the actor is this session, so an issue still claimed by an EARLIER
+session is refused by name ("already claimed by ..."). Take it over first -- the assignee
+change is logged -- then claim:
+
+  bd update <id> --assignee="\$BEADS_ACTOR" && bd update <id> --claim
 
 Then re-run your command.
 
