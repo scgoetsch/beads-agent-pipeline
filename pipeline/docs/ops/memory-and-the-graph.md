@@ -26,7 +26,7 @@ existed to prevent. If you tighten it, tighten the structure test.
 `bd update <id> --notes "..."` REPLACES the notes. `bd remember --key X` REPLACES the body. Use
 `bd note <id>` to add to a running record, and `bd recall <key>` immediately before any
 `bd remember` you intend as an edit. With more than one session running the same rule becomes a
-race — see `docs/ops/concurrent-sessions.md`, installed only with `install.sh --with-peer`.
+race — see `docs/ops/concurrent-sessions.md`, installed only with `install.sh --with-concurrent`.
 
 ## The hot tier
 

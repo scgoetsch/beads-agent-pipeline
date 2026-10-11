@@ -198,21 +198,24 @@ printf '\n\033[1m### the peer layer is opt-in and self-consistent\033[0m\n'
   || ok "default: peer doc not installed"
 grep -q '^## Concurrent sessions' "$T/AGENTS.md" && bad "default: peer section stripped" \
   || ok "default: peer section stripped from AGENTS.md"
-grep -q 'peer:begin\|peer:end' "$T/AGENTS.md" && bad "default: no marker comments leak" \
+grep -q 'concurrent:begin\|concurrent:end' "$T/AGENTS.md" && bad "default: no marker comments leak" \
   || ok "default: no marker comments leak"
 grep -q 'concurrent-sessions.md' "$T/AGENTS.md" && bad "default: AGENTS.md cites no missing doc" \
   || ok "default: AGENTS.md cites no missing doc"
 
 P=$(mktemp -d); git -C "$P" init -q
-"$SRC/install.sh" --no-shell --with-peer "$P" >/dev/null 2>&1
-[ -f "$P/docs/ops/concurrent-sessions.md" ] && ok "--with-peer: peer doc installed" \
-  || bad "--with-peer: peer doc installed"
-grep -q '^## Concurrent sessions' "$P/AGENTS.md" && ok "--with-peer: peer section present" \
-  || bad "--with-peer: peer section present"
-grep -q 'peer:begin\|peer:end' "$P/AGENTS.md" && bad "--with-peer: no marker comments leak" \
-  || ok "--with-peer: no marker comments leak"
-if (cd "$P" && ./tools/agent_docs_test.sh) >"$P/.suite.log" 2>&1; then ok "--with-peer: agent_docs_test passes"
-else bad "--with-peer: agent_docs_test passes"; sed -n '1,20p' "$P/.suite.log" | sed 's/^/        /'; fi
+"$SRC/install.sh" --no-shell --with-concurrent "$P" >/dev/null 2>&1
+[ -f "$P/docs/ops/concurrent-sessions.md" ] && ok "--with-concurrent: concurrency doc installed" \
+  || bad "--with-concurrent: concurrency doc installed"
+grep -q '^## Concurrent sessions' "$P/AGENTS.md" && ok "--with-concurrent: concurrency section present" \
+  || bad "--with-concurrent: concurrency section present"
+grep -q 'concurrent:begin\|concurrent:end' "$P/AGENTS.md" && bad "--with-concurrent: no marker comments leak" \
+  || ok "--with-concurrent: no marker comments leak"
+if (cd "$P" && ./tools/agent_docs_test.sh) >"$P/.suite.log" 2>&1; then ok "--with-concurrent: agent_docs_test passes"
+else bad "--with-concurrent: agent_docs_test passes"; sed -n '1,20p' "$P/.suite.log" | sed 's/^/        /'; fi
+"$SRC/install.sh" --no-shell --with-peer "$P" >"$P/.alias.log" 2>&1
+grep -q -- '--with-peer is now --with-concurrent' "$P/.alias.log" && ok "--with-peer: deprecated alias still accepted, with a note" \
+  || bad "--with-peer: deprecated alias still accepted, with a note"
 rm -rf "$P"
 
 printf '\n\033[1m### the Pi adapter is opt-in and does not overwrite user files\033[0m\n'

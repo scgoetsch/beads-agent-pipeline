@@ -78,7 +78,7 @@ SITE_CHECK_CAP=1500
 FOOTER="# — end of bd-prime-hook payload —"
 # Scratch files are per process. Fixed names under /tmp were shared by every user on the box
 # (the second user hit Permission denied on the first user's 0644 files and silently fell back)
-# and by every concurrent session of one user (the --with-peer case), which raced on the index.
+# and by every concurrent session of one user (the --with-concurrent case), which raced on the index.
 TMPD=$(mktemp -d "${TMPDIR:-/tmp}/bd-prime.XXXXXX") || { echo "# 🚨 bd-prime-hook: cannot create a temp dir — session NOT primed."; exit 0; }
 trap 'rm -rf "$TMPD"' EXIT
 MM="$TMPD/mm.jsonl"; ERR="$TMPD/err"; INDEX="$TMPD/index"

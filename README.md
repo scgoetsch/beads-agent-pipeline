@@ -39,7 +39,10 @@ existing extensions are preserved. See [Pi adapter](pipeline/docs/ops/pi-adapter
 coverage, fail-open warnings and the trust limitation. Git pre-commit guards remain the shared
 enforcement layer.
 
-**`--with-peer` is opt-in**, because running several agent sessions against one repo is an
+**`--with-concurrent` is opt-in** (`--with-peer` until 2026-10-11; the old spelling is still
+accepted with a note, and was renamed because "peer" collided with foreign-lab peer-review
+tooling that can sit beside this pipeline in one session), because running several agent
+sessions against one repo is an
 environment question, not a default. Without it the concurrency doc is not installed and the
 matching section is stripped from `AGENTS.md`, so nothing cites a file that is not there — a
 single-session user carries none of it in a session payload that hosts already truncate. With it,
@@ -228,7 +231,8 @@ fixed and tested.
 
 **What it will not do.** Sign in to Claude Code for you. On a box that is not signed in, the
 session hooks are verified by running each script by hand; on one that is, section 7 proves they
-fire with a `claude -p` sentinel check. Install the peer layer, unless you ask for `--with-peer`.
+fire with a `claude -p` sentinel check. Install the concurrent-sessions layer, unless you ask
+for `--with-concurrent`.
 Bypass a guard: the runbook forbids `git commit --no-verify`, and an agent that reaches for it has
 found a bug, not a shortcut.
 

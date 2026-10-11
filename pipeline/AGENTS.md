@@ -166,7 +166,7 @@ so a green hook is not evidence the ledger saw your session.
 
 Details: **`docs/ops/memory-and-the-graph.md`**.
 
-<!-- peer:begin -->
+<!-- concurrent:begin -->
 ## Concurrent sessions
 
 More than one agent session may run against this repo at once. That is safe at the storage layer —
@@ -185,7 +185,7 @@ write, and nothing reports it.
   message self-scoping: *"Only relevant if you are in `<repo>` — ignore otherwise."*
 
 Full detail, including the two decay patterns: **`docs/ops/concurrent-sessions.md`**.
-<!-- peer:end -->
+<!-- concurrent:end -->
 
 ## Session completion
 

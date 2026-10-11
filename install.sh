@@ -5,14 +5,17 @@
 #     ./install.sh --check [TARGET]     # preflight only, changes nothing
 #     ./install.sh --dry-run [TARGET]   # print every action, change nothing
 #     ./install.sh --no-shell [TARGET]  # skip the one thing written outside the repo
-#     ./install.sh --with-peer [TARGET] # also install the concurrent-session layer (see below)
+#     ./install.sh --with-concurrent [TARGET]  # also install the concurrent-sessions layer (see below)
 #     ./install.sh --with-pi [TARGET]   # also install project-local Pi session hooks (requires trust)
 #
-# THE PEER LAYER IS OPT-IN because it is environment-dependent. It is only worth anything if more
-# than one agent session may run against the repo at once; for a single-session user it is dead
-# weight in a session payload that hosts already truncate. Without --with-peer, the concurrency
-# doc is not installed and the matching section is stripped out of AGENTS.md, so nothing cites a
-# file that is not there. Re-run with the flag to add it later.
+# THE CONCURRENT-SESSIONS LAYER IS OPT-IN because it is environment-dependent. It is only worth
+# anything if more than one agent session may run against the repo at once; for a single-session
+# user it is dead weight in a session payload that hosts already truncate. Without
+# --with-concurrent, the concurrency doc is not installed and the matching section is stripped out
+# of AGENTS.md, so nothing cites a file that is not there. Re-run with the flag to add it later.
+# The flag was --with-peer until 2026-10-11; that spelling is still accepted, with a note, because
+# "peer" collided with foreign-lab peer-review tooling that can sit beside this pipeline in the
+# same agent session (one word, two meanings, one context window).
 #
 # One piece of concurrency machinery ships either way: the flock in tools/dolt-guard.sh, which
 # stops two shells racing to start the Dolt server. It costs a single-session user nothing.
@@ -37,13 +40,14 @@ set -uo pipefail
 SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PAYLOAD="$SRC/pipeline"
 
-MODE=install; DO_SHELL=1; WITH_PEER=0; WITH_PI=0; TARGET=""
+MODE=install; DO_SHELL=1; WITH_CONCURRENT=0; WITH_PI=0; TARGET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check)    MODE=check ;;
     --dry-run)  MODE=dryrun ;;
     --no-shell) DO_SHELL=0 ;;
-    --with-peer) WITH_PEER=1 ;;
+    --with-concurrent) WITH_CONCURRENT=1 ;;
+    --with-peer) WITH_CONCURRENT=1; echo "note: --with-peer is now --with-concurrent (accepted; update your command)" >&2 ;;
     --with-pi)   WITH_PI=1 ;;
     -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
     -*)         echo "unknown option: $1" >&2; exit 2 ;;
@@ -298,10 +302,10 @@ hdr "tools (tools/)"
 while IFS= read -r rel; do install_file "$rel" 755; done < <(cd "$PAYLOAD" && find tools -type f | sort)
 
 hdr "docs (docs/ops/)"
-PEER_DOC="docs/ops/concurrent-sessions.md"
+CONCURRENT_DOC="docs/ops/concurrent-sessions.md"
 while IFS= read -r rel; do
-  if [ "$rel" = "$PEER_DOC" ] && [ "$WITH_PEER" -eq 0 ]; then
-    say "$PEER_DOC — skipped (peer layer is opt-in; re-run with --with-peer)"
+  if [ "$rel" = "$CONCURRENT_DOC" ] && [ "$WITH_CONCURRENT" -eq 0 ]; then
+    say "$CONCURRENT_DOC — skipped (concurrent-sessions layer is opt-in; re-run with --with-concurrent)"
     continue
   fi
   install_file "$rel"
@@ -324,14 +328,14 @@ fi
 
 # ------------------------------------------------------------- agent docs --
 hdr "agent docs (AGENTS.md + CLAUDE.md)"
-# Render the template for this install: with --with-peer the concurrency section stays (markers
+# Render the template for this install: with --with-concurrent the concurrency section stays (markers
 # removed); without it the whole block goes, so AGENTS.md never cites a doc we did not install.
 AGENTS_RENDERED=$(mktemp "${TMPDIR:-/tmp}/bap-agents.XXXXXX") || exit 1
-if [ "$WITH_PEER" -eq 1 ]; then
-  sed '/<!-- peer:begin -->/d; /<!-- peer:end -->/d' "$PAYLOAD/AGENTS.md" > "$AGENTS_RENDERED"
+if [ "$WITH_CONCURRENT" -eq 1 ]; then
+  sed '/<!-- concurrent:begin -->/d; /<!-- concurrent:end -->/d' "$PAYLOAD/AGENTS.md" > "$AGENTS_RENDERED"
 else
   # squeeze the blank-line run the removal leaves behind, so the seam is invisible
-  sed '/<!-- peer:begin -->/,/<!-- peer:end -->/d' "$PAYLOAD/AGENTS.md" \
+  sed '/<!-- concurrent:begin -->/,/<!-- concurrent:end -->/d' "$PAYLOAD/AGENTS.md" \
     | awk 'BEGIN{b=0} /^$/{b++; if(b>1) next} !/^$/{b=0} {print}' > "$AGENTS_RENDERED"
 fi
 trap 'rm -f "$AGENTS_RENDERED"' EXIT
@@ -346,7 +350,7 @@ if [ -e "$TARGET/AGENTS.md" ]; then
     say "AGENTS.md (current — differs only inside bd's own block, which bd init appends)"
   else
     say "AGENTS.md is yours — kept. It differs from our template, which is the point."
-    say "    our template: $PAYLOAD/AGENTS.md  (the peer section is stripped unless --with-peer)"
+    say "    our template: $PAYLOAD/AGENTS.md  (the concurrent-sessions section is stripped unless --with-concurrent)"
   fi
   if [ -e "$TARGET/AGENTS.md.new" ]; then
     run rm -f "$TARGET/AGENTS.md.new"
@@ -563,7 +567,7 @@ Next:
   bd hooks install --shared    # --shared matters: without it git ignores them
   tools/agent_docs_test.sh     # and the rest of the suite in AGENTS.md
 Then open AGENTS.md and make it yours.
-The concurrent-session layer is $( [ "$WITH_PEER" -eq 1 ] && echo INSTALLED || echo "NOT installed — add it with --with-peer if more than one session will run against this repo" ).
+The concurrent-sessions layer is $( [ "$WITH_CONCURRENT" -eq 1 ] && echo INSTALLED || echo "NOT installed — add it with --with-concurrent if more than one session will run against this repo" ).
 Pi adapter is $( [ "$WITH_PI" -eq 1 ] && echo "COPIED — verify Pi project trust and run tools/pi-extension_test.sh" || echo "NOT installed — add it with --with-pi, then grant Pi project trust" ).
 NEXT
 exit $(( problems > 0 ))

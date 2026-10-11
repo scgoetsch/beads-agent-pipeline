@@ -2,9 +2,14 @@
 
 **This document is OPTIONAL and environment-dependent.** It applies only if more than one agent
 session may run against this repo at once. If you work one session at a time, none of it is
-needed — install it with `install.sh --with-peer`, or skip it.
+needed — install it with `install.sh --with-concurrent`, or skip it.
 
-Nothing else in the pipeline assumes peers. The one piece of concurrency machinery that always
+"Peer" below means another agent session on this store — the harness's own word for a session
+it can message — not a foreign-lab peer reviewer; peer-review tooling that sits beside this
+pipeline uses the same word for a different thing, which is why the install flag is no longer
+`--with-peer`.
+
+Nothing else in the pipeline assumes concurrent sessions. The one piece of concurrency machinery that always
 ships is the `flock` in `tools/dolt-guard.sh`, which stops two shells racing to start the Dolt
 server; that costs a single-session user nothing and prevents a real race when it matters.
 

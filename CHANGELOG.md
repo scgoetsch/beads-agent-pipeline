@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **`--with-peer` is now `--with-concurrent`.** The flag installs the concurrent-sessions layer
+  (`docs/ops/concurrent-sessions.md` and the matching `AGENTS.md` section), where "peer" is the
+  harness's word for another session. A project that also carries foreign-lab peer-review
+  tooling (a grok-peer or agy-peer subagent, `*_PEER_ACTIVE` guards, a "peer" policy section)
+  loaded both meanings into one context window. The old spelling is still accepted and prints a
+  note; the template markers are `concurrent:begin` / `concurrent:end`; the self-test covers
+  both spellings. Filed from the project that hit it (aigent-i9pu).
 - **Sessions get an identity in bd's audit trail.** Every bd write carried the bare git user.name
   (188 of 188 audit rows on one store were one actor across at least five sessions), so the log
   could not say which run did what. The SessionStart hook now exports
