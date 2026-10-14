@@ -19,7 +19,7 @@ and bd has no decay/compaction of its own. This skill adds the missing lifecycle
 ## Modes (first arg; default `audit`)
 
 ### `audit`  — read-only report
-1. **Metrics:** count = `bd memories | grep -cE '^  [a-z0-9]'`; memory payload bytes =
+1. **Metrics:** count = `bd memories | /usr/bin/grep -acE '^  [a-z0-9]'`; memory payload bytes =
    `bd export --include-memories` size − `bd export` size → KB and ~tokens (KB×256).
 2. **Classify** each memory into: `transient` · `retracted/superseded` · `near-dup cluster` ·
    `bloated` (>~15 lines) · `stale` (not updated > 3 months) · `KEEP-HOT` (convention/gotcha guard).
@@ -86,8 +86,13 @@ The session-start gate (`.claude/site-checks/memory-curation-gate.sh`) reads
 of this skill ends by rewriting it and committing it with the curation:
 
 ```bash
-printf '%s\t%s\n' "$(date +%F)" "$(bd memories | grep -cE '^  [a-z0-9]')" > .claude/memory-curation.txt
+printf '%s\t%s\n' "$(date +%F)" "$(bd memories | /usr/bin/grep -acE '^  [a-z0-9]')" > .claude/memory-curation.txt
 ```
+
+`/usr/bin/grep -a`, not bare `grep`: `bd memories` truncates each body by BYTE, so a split multibyte
+character (an em dash on 2026-10-09) makes the listing "binary". An agent shell's `grep` wrapper
+that skips binary input (Claude Code's does: ugrep `-I`) then prints NOTHING — not 0 — and the
+stamp would carry an empty count. A script gets the real grep; the gate keeps `-a` anyway.
 
 An audit that finds nothing to do still stamps — otherwise the gate nags every session. The
 gate replaces the old advice to wrap `audit` in `/loop`; run `prune` / `consolidate` / `tier`

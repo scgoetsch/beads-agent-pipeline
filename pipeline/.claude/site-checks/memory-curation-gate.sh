@@ -53,7 +53,7 @@ elif command -v bd >/dev/null 2>&1; then
     echo "memory curation gate: no .beads/memories.jsonl and \`bd memories\` failed — cannot count memories, the gate did NOT run."
     exit 0
   }
-  now=$(printf '%s\n' "$listing" | grep -cE '^  [a-z0-9]')
+  now=$(printf '%s\n' "$listing" | grep -acE '^  [a-z0-9]')
 else
   echo "memory curation gate: no .beads/memories.jsonl and no bd on PATH — cannot count memories, the gate did NOT run."
   exit 0

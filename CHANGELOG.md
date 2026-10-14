@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The memory-curate stamp recipe counts through `/usr/bin/grep -a`.** `bd memories` truncates
+  each body by byte, so a split multibyte character makes the listing "binary". Claude Code's
+  interactive `grep` wrapper (ugrep `-I`) skips binary input and prints nothing, not 0, so the
+  stamp carried an empty count. The skill's metrics and stamp lines now bypass the wrapper. The
+  gate's fallback count gains `-a` as well; it runs as a script and gets the real grep, so this
+  is belt-and-braces there.
 - **A site check that exits nonzero without output is named, not read as health.** The
   2026-10-06 rework of `emit_site_checks` kept the case where the time bound kills a check (exit
   124) but dropped the general one, so a check that crashed in silence emitted nothing, which is
