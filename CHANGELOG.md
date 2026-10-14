@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A site check that exits nonzero without output is named, not read as health.** The
+  2026-10-06 rework of `emit_site_checks` kept the case where the time bound kills a check (exit
+  124) but dropped the general one, so a check that crashed in silence emitted nothing, which is
+  exactly what a healthy check emits. It now gets a block saying `<name> exited <rc> without a
+  verdict — treat it as NOT RUN`. Caught by a downstream workspace suite that still asserted the
+  old message; `bd-prime-hook_test.sh` now carries the case itself.
 - **`--with-peer` is now `--with-concurrent`.** The flag installs the concurrent-sessions layer
   (`docs/ops/concurrent-sessions.md` and the matching `AGENTS.md` section), where "peer" is the
   harness's word for another session. A project that also carries foreign-lab peer-review

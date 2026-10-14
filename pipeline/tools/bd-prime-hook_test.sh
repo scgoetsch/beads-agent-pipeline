@@ -174,12 +174,18 @@ mkdir -p "$T/ws/.claude/site-checks"
 printf '#!/usr/bin/env bash\necho "MOUNT-DOWN sentinel"\n'        > "$T/ws/.claude/site-checks/mount.sh"
 printf '#!/usr/bin/env bash\nexit 0\n'                             > "$T/ws/.claude/site-checks/quiet.sh"
 printf '#!/usr/bin/env bash\necho "STDERR-ONLY sentinel" >&2\n'   > "$T/ws/.claude/site-checks/noisy-stderr.sh"
+printf '#!/usr/bin/env bash\nexit 3\n'                             > "$T/ws/.claude/site-checks/crash.sh"
 chmod +x "$T/ws/.claude/site-checks/"*.sh
 out=$(run_hook)
 chk "a check that prints becomes a SITE CHECK block"  "$(grep -c 'SITE CHECK — mount' <<<"$out")" 1
 chk "its output is in the payload"                     "$(grep -c 'MOUNT-DOWN sentinel' <<<"$out")" 1
 chk "a silent check adds nothing"                      "$(grep -c 'SITE CHECK — quiet' <<<"$out")" 0
 chk "a check that speaks on stderr is heard too"       "$(grep -c 'STDERR-ONLY sentinel' <<<"$out")" 1
+# A check that fails without a word did not check anything. Treating its silence as health is
+# the open-and-silent shape; the 2026-10-06 sync dropped this branch and nothing noticed for a
+# week (workspace WS-sibz).
+chk "a check that exits nonzero in silence is named"   "$(grep -c 'SITE CHECK — crash' <<<"$out")" 1
+chk "...as NOT RUN, with its exit status"              "$(grep -c 'exited 3 without a verdict' <<<"$out")" 1
 if command -v timeout >/dev/null 2>&1; then
 chk "with timeout present, no UNBOUNDED notice"        "$(grep -c 'run UNBOUNDED' <<<"$out")" 0
 else skipc "with timeout present, no UNBOUNDED notice — no timeout on this box (stock macOS); the UNBOUNDED case below is the one that applies"; fi

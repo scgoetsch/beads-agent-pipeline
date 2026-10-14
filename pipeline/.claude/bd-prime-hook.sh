@@ -135,6 +135,10 @@ emit_site_checks() {
     if [ -n "$bound" ] && [ "$rc" -eq 124 ]; then
       out="⚠ KILLED after $limit s by bd-prime-hook — the check did not finish; treat it as NOT RUN, not as healthy.${out:+
 $out}"
+    elif [ "$rc" -ne 0 ] && [ -z "$out" ]; then
+      # A check that fails without a word has no verdict; its silence is not health. The
+      # 2026-10-06 sync dropped this branch and nothing noticed for a week (workspace WS-sibz).
+      out="⚠ $name exited $rc without a verdict — treat it as NOT RUN, not as healthy."
     fi
     [ -n "$out" ] || continue
     # A check is bounded in BYTES as well as time. One that dumps a log would push the rules over
