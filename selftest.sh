@@ -89,10 +89,15 @@ chk "core.hooksPath set" "$(git -C "$T" config core.hooksPath)" ".beads-hooks"
 printf '\n\033[1m### the shipped pre-commit carries all four stanzas\033[0m\n'
 # The hook is one file with four independent guards. Dropping one leaves the repo SILENTLY
 # unguarded, so assert each by name rather than trusting that the file copied.
-for m in 'BEADS INTEGRATION' 'bd-memgraph check' 'agent-cache path guard' 'agent-docs symlink guard'; do
+for m in 'BEADS INTEGRATION' 'bd-memgraph check' 'agent-cache path guard' 'agent-docs symlink guard' \
+         '>>> store CLI >>>' 'store CLI: cairn stops here'; do
   grep -q "$m" "$T/.beads-hooks/pre-commit" && ok "pre-commit stanza: $m" \
     || bad "pre-commit stanza: $m"
 done
+# Opting in to cairn is a commit the repo makes, never something an install does: a reinstall on an
+# install that never opted in must leave it on bd.
+[ ! -e "$T/.claude/store-cli" ] && ok "no .claude/store-cli after install (the store stays bd's until opted in)" \
+  || bad "the installer wrote .claude/store-cli"
 # The memory-graph stanza must self-skip when the optional tool is absent, or installing the
 # pipeline without bd-memgraph would block every commit.
 grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
@@ -104,7 +109,8 @@ for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/s
          tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/bd-stop-hook_test.sh \
          tools/dolt-guard_test.sh tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
-         tools/audit_wikilinks_test.sh tools/memory-curation-gate_test.sh; do
+         tools/audit_wikilinks_test.sh tools/memory-curation-gate_test.sh \
+         tools/pre-commit-store-cli_test.sh; do
   suite_tmp=$(mktemp -d)
   if (cd "$T" && TMPDIR="$suite_tmp" ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; tail -35 "$T/.suite.log" | sed 's/^/        /'; fi

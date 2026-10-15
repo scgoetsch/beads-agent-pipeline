@@ -1,13 +1,39 @@
 #!/usr/bin/env sh
 
+# >>> store CLI >>>
+# .claude/store-cli names the store's CLI: bd (absent: bd) or cairn, its replacement. The same
+# rule as the session hooks (.claude/bd-prerun-hook.sh): tracked, one word, no environment
+# override, an unknown value means bd. Git runs this hook from the top of the work tree.
+STORE_CLI=bd
+if [ -f .claude/store-cli ]; then
+  case $(tr -d ' \t\r\n' < .claude/store-cli) in
+    cairn) STORE_CLI=cairn ;;
+    bd) ;;
+    *) echo "⚠ .claude/store-cli is neither bd nor cairn — the pre-commit treats the store as bd's" >&2 ;;
+  esac
+fi
+# <<< store CLI <<<
+
 # >>> bd-memgraph check >>>
 # Blocks commits on hard memory-graph errors (dangling/self links); warnings pass.
 # Skips silently when bd, bd-memgraph, or .beads are absent — never bricks a repo.
 # Bypass once with: git commit --no-verify   Remove with: bd-memgraph install-hook --remove
-if command -v bd-memgraph >/dev/null 2>&1 && command -v bd >/dev/null 2>&1 && [ -d .beads ]; then
+if command -v bd-memgraph >/dev/null 2>&1 && command -v "$STORE_CLI" >/dev/null 2>&1 && [ -d .beads ]; then
   # --no-ledger: the guard validates only — writing observations mid-commit would
   # dirty .beads/memgraph-ledger.json in the working tree on every commit
-  bd-memgraph --no-ledger check || {
+  if [ "$STORE_CLI" = cairn ]; then
+    # bd-memgraph reads `bd memories --json` by itself; cairn's is the same map, given as a file.
+    _mg_json=$(mktemp) || exit 1
+    if cairn memories --json > "$_mg_json"; then
+      bd-memgraph --no-ledger --json-file "$_mg_json" check; _mg_rc=$?
+    else
+      echo "bd-memgraph: \`cairn memories --json\` failed — the memory graph was NOT checked" >&2; _mg_rc=0
+    fi
+    rm -f "$_mg_json"
+  else
+    bd-memgraph --no-ledger check; _mg_rc=$?
+  fi
+  [ "$_mg_rc" -eq 0 ] || {
     echo "bd-memgraph: hard errors in the memory graph (see above) — fix or --no-verify" >&2
     exit 1
   }
@@ -36,6 +62,13 @@ if [ -x tools/check-agent-docs-linked.sh ]; then
   tools/check-agent-docs-linked.sh --cached || exit 1
 fi
 # <<< agent-docs symlink guard <<<
+
+# >>> store CLI: cairn stops here >>>
+# Everything below is bd's managed block (`bd hooks run pre-commit`). With cairn as the store's CLI
+# bd's store is frozen, and a bd call on every commit is exactly what the move retires. This
+# stanza sits ABOVE bd's markers so `bd hooks install` cannot remove it.
+[ "$STORE_CLI" = cairn ] && exit 0
+# <<< store CLI: cairn stops here <<<
 
 # --- BEGIN BEADS INTEGRATION v1.1.2 ---
 # This section is managed by beads. Do not remove these markers.

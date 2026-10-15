@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The hooks can run cairn instead of bd, per checkout.** A tracked `.claude/store-cli` (`bd` or
+  `cairn`; absent means bd) selects the store's CLI for the prime, prerun and stop hooks and the
+  pre-commit; there is no environment override, so a checkout's sessions and git hooks cannot
+  disagree. With the file present, the prerun hook blocks writes through the other name (a `bd
+  update` typed from habit after a move would land in a frozen store and vanish). Both names are
+  parsed on every install, so `cairn remember` without `--key` is refused and `cairn update
+  --claim` is recorded even where nobody opted in. The prime hook no longer runs cairn's prime
+  through bd's `## Persistent Memories`…`## Core Rules` filter, which with cairn's layout would
+  have deleted from the first memory heading to the end. New `tools/pre-commit-store-cli_test.sh`;
+  the prerun, prime and stop suites cover every mode.
+- **A claim the session record missed is still this session's.** The scripts gate and the stop
+  hook knew a session's claims only from ids typed literally in `bd update <id> --claim`, so
+  `bd update "$id" --claim` and `ready --claim` left the session's own work blocked as untracked
+  (workspace-aa20). Both now also accept an in-progress issue whose assignee is the session's own
+  actor, and only a session-scoped one (`<user>/<harness>/<id>`): a bare user name is shared by
+  every session and would make all of that user's issues "mine". The in-progress listings pass
+  `--limit 0`; both CLIs stop at 50 rows by default and say so only on stderr.
+
 - **The memory-curate stamp recipe counts through `/usr/bin/grep -a`.** `bd memories` truncates
   each body by byte, so a split multibyte character makes the listing "binary". Claude Code's
   interactive `grep` wrapper (ugrep `-I`) skips binary input and prints nothing, not 0, so the

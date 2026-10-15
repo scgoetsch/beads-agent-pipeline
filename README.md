@@ -361,6 +361,31 @@ re-running the installer leaves both alone. Our SessionStart hook runs `bd prime
 installer replaces bd's; after that `bd setup claude --check` reports "No hooks installed", which
 is expected — re-running `bd setup claude` would only re-add a duplicate.
 
+## Using cairn instead of bd
+
+[cairn](https://github.com/scgoetsch/cairn) is an agent-native replacement for bd's store that
+keeps bd's verbs and flags. The hooks here run either. Which one is a per-checkout decision in one
+tracked file:
+
+```bash
+echo cairn > .claude/store-cli     # commit it; `bd` switches back
+```
+
+| `.claude/store-cli` | Runs | Blocked by the prerun hook |
+|---|---|---|
+| absent (every install that never opted in) | `bd` | nothing |
+| `bd` | `bd` | writes through `cairn` |
+| `cairn` | `cairn` | writes through `bd`, `bd dolt push` included |
+
+There is no environment override on purpose: every session, harness and git hook of the checkout
+must agree, or one of them writes a store the others have left. The prerun hook parses both names
+in any mode (a keyless `cairn remember` is refused like a keyless `bd remember`; a `cairn update
+--claim` is recorded). With `cairn`, the prime hook prints the rules with `cairn`, takes the
+workflow context from `cairn prime` up to its first memory heading and tiers the memories from
+`cairn export`, and the pre-commit feeds `cairn memories --json` to bd-memgraph and stops before
+bd's managed block. The installer never writes the file. Moving a store over (and back) is
+cairn's job: see its README, "Moving a bd store over".
+
 ## Known limitations
 
 - **No upgrade path.** The installer never overwrites a file you have. When a shipped tool changes

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # PreToolUse hook — blocks bare pkill/killall and a keyless `bd remember`, gates analysis
-# scripts on an in_progress issue (a knob, see SCRIPT_DIRS_RE below), and records what each
-# session claims (read by bd-stop-hook.sh).
+# scripts on an in_progress issue (a knob, see SCRIPT_DIRS_RE below), records what each
+# session claims (read by bd-stop-hook.sh), and, when .claude/store-cli names the store's CLI,
+# blocks writes through the other one. Both CLIs (bd, and cairn, its replacement) are parsed.
 #
 # Claude Code passes the tool call as JSON on stdin:
 #   { "tool_name": "Bash", "tool_input": { "command": "..." }, ... }
@@ -39,6 +40,24 @@ command=${parsed#*$'\n'}
 
 [ -z "$command" ] && exit 0
 
+# ── The store's CLI: bd (default) or cairn ────────────────────────────────────
+# .claude/store-cli holds one word, bd or cairn. It is TRACKED, so every session, every harness and
+# the git hooks agree; there is deliberately no environment override (one session must not write
+# a store the others have left). Absent: the CLI is bd and neither name is write-blocked, which is
+# how every install that never opted in keeps working. Present: the named CLI runs, and a write
+# through the OTHER name is blocked below, because it would land in a store nobody reads.
+# Keep this block identical in bd-prime-hook.sh, bd-stop-hook.sh and .beads-hooks/pre-commit.
+STORE_MODE=""
+if [ -f "$WS/.claude/store-cli" ]; then
+    STORE_MODE=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
+    case $STORE_MODE in
+        bd|cairn) ;;
+        *) echo "⚠ .claude/store-cli says '$STORE_MODE' (expected bd or cairn) — using bd, nothing write-blocked." >&2
+           STORE_MODE="" ;;
+    esac
+fi
+STORE_CLI=${STORE_MODE:-bd}
+
 # ── GUARD: bare pkill / killall ────────────────────────────────────────
 # Runs before memory admission; all invocations in a compound command are checked.
 #
@@ -63,8 +82,16 @@ command=${parsed#*$'\n'}
 SCRIPT_DIRS_RE='scripts'
 [ -f "$WS/.claude/bd-prerun.conf" ] && . "$WS/.claude/bd-prerun.conf"
 [ -n "${BD_SCRIPT_DIRS_RE+x}" ] && SCRIPT_DIRS_RE=$BD_SCRIPT_DIRS_RE
-policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" <<'PY'
+policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" "$STORE_MODE" <<'PY'
 import os, re, shlex, sys
+
+STORE_CLIS = ('bd', 'cairn')
+# The other CLI, whose writes are blocked; none when .claude/store-cli is absent.
+FOREIGN = {'bd': 'cairn', 'cairn': 'bd'}.get(sys.argv[3])
+# Subcommands that change a store. `dolt` changes bd's (push, pull, commit, ...); `ready` only with --claim.
+WRITE_VERBS = {'create', 'q', 'update', 'close', 'reopen', 'remember', 'forget', 'delete', 'dep',
+               'comment', 'note', 'defer', 'undefer', 'import', 'init', 'label', 'edit',
+               'supersede', 'duplicate', 'claim', 'migrate', 'dolt', 'compact', 'gc', 'flatten'}
 
 script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*') if sys.argv[2] else None  # None: gate off
 assignment = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
@@ -122,7 +149,7 @@ def safe_kill(name, args):
 
 def remember_call(name, args):
     """(is a `bd remember` call, lacks --key) for one unwrapped command. Help is not a write."""
-    if name != 'bd': return False, False
+    if name not in STORE_CLIS: return False, False
     sub = next((a for a in args if not a.startswith('-')), None)
     if sub != 'remember' or any(a in ('-h', '--help') for a in args): return False, False
     return True, not any(a == '--key' or a.startswith('--key=') for a in args)
@@ -139,10 +166,12 @@ def claim_call(name, args):
 
     Recorded per session, because the bd store is shared by every session and all of them claim
     as the same actor: bd itself cannot say which in-progress issue is whose."""
-    if name != 'bd': return set()
+    if name not in STORE_CLIS: return set()
     i = 0
     while i < len(args) and args[i].startswith('-'):
         i += 2 if args[i] in BD_GLOBAL_VALUED else 1
+    if i < len(args) and args[i] == 'ready' and '--claim' in args[i + 1:]:
+        return {'ready'}       # a claim whose id only the store knows: see the gate below
     if i >= len(args) or args[i] != 'update': return set()
     rest = args[i + 1:]; ids = set(); claim = False; j = 0
     while j < len(rest):
@@ -156,8 +185,23 @@ def claim_call(name, args):
         elif ISSUE_ID.fullmatch(a): ids.add(a)
     return ids if claim else set()
 
+def foreign_write(name, args):
+    """True for a write through the CLI .claude/store-cli does NOT name. Help is not a write."""
+    if FOREIGN is None or name != FOREIGN: return False
+    if any(a in ('-h', '--help') for a in args): return False
+    i = 0
+    while i < len(args) and args[i].startswith('-'):
+        i += 2 if args[i] in BD_GLOBAL_VALUED else 1
+    if i >= len(args): return False
+    verb, rest = args[i], args[i + 1:]
+    if verb == 'ready': return '--claim' in rest
+    if verb == 'comments': return bool(rest) and rest[0] == 'add'
+    if verb == 'dolt': return bool(rest) and rest[0] not in ('show', 'status', 'test', 'remote')
+    return verb in WRITE_VERBS
+
 def inspect(command, depth=0):
-    """-> (bare kill, analysis script, bd remember call, bd remember WITHOUT --key, claimed ids)."""
+    """-> (bare kill, analysis script, bd remember call, bd remember WITHOUT --key, foreign
+    write, claimed ids)."""
     if depth > 8: raise ValueError('nested shell command limit exceeded')
     lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()\n')
     lexer.whitespace = ' \t\r'; lexer.whitespace_split = True
@@ -168,7 +212,7 @@ def inspect(command, depth=0):
             unit = []
         else: unit.append(token)
     if unit: units.append(unit)
-    flags = [False] * 4 + [set()]
+    flags = [False] * 5 + [set()]
     def merge(more):
         for k, v in enumerate(more): flags[k] |= v
     # Retain the previous guard's conservative coverage of literal command substitutions,
@@ -182,7 +226,8 @@ def inspect(command, depth=0):
         if name in ('pkill', 'killall') and not safe_kill(name, args): flags[0] = True
         is_remember, keyless = remember_call(name, args)
         if is_remember: flags[2] = True; flags[3] |= keyless
-        flags[4] |= claim_call(name, args)
+        flags[4] |= foreign_write(name, args)
+        flags[5] |= claim_call(name, args)
         if name in ('bash', 'sh', 'zsh'):
             for i, arg in enumerate(args):
                 if arg.startswith('-') and not arg.startswith('--') and 'c' in arg and i + 1 < len(args):
@@ -215,7 +260,7 @@ def line_fallback(command):
         segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
         if not safe_kill(m[1], segment.split()): bare = True
     calls = [command[m.end():].split('\n', 1)[0]
-             for m in re.finditer(pos + r'bd[ \t]+remember(?=[ \t]|$)', command, re.M)]
+             for m in re.finditer(pos + r'(?:bd|cairn)[ \t]+remember(?=[ \t]|$)', command, re.M)]
     calls = [c for c in calls if not re.match(r'[ \t]+(?:-h|--help)(?:[ \t]|$)', c)]
     keyless = any(not re.search(r'--key(?:[ \t]|=)', c) for c in calls)
     d = sys.argv[2]
@@ -223,11 +268,15 @@ def line_fallback(command):
                   or re.search(r'(?:^|[ \t])(?:bash|sh)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.sh(?:[ \t]|$)', command, re.M)
                   or re.search(pos + r'(?:\S*/)?(?:' + d + r')/\S+', command, re.M))
     claims = set()
-    for m in re.finditer(pos + r'bd[ \t]+(?:\S+[ \t]+)*?update(?=[ \t])', command, re.M):
+    for m in re.finditer(pos + r'(?:bd|cairn)[ \t]+(?:\S+[ \t]+)*?update(?=[ \t])', command, re.M):
         segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
         if re.search(r'--claim\b|(?:--status|-s)[ \t=]+in_progress\b', segment):
             claims |= {w for w in segment.split() if ISSUE_ID.fullmatch(w)}
-    return bare, script, bool(calls), keyless, claims
+    foreign = False
+    if FOREIGN:
+        for m in re.finditer(pos + re.escape(FOREIGN) + r'[ \t]+(\S+)([^;&|\n]*)', command, re.M):
+            foreign |= foreign_write(FOREIGN, [m[1], *m[2].split()])
+    return bare, script, bool(calls), keyless, foreign, claims
 
 SHELLS = ('bash', 'sh', 'zsh', 'dash', 'ksh', 'ssh')
 
@@ -262,11 +311,11 @@ try:
 except (ValueError, re.error) as exc:
     print('bd-prerun-hook: command not tokenizable (' + str(exc) + '); judged by the line-based fallback checks instead', file=sys.stderr)
     flags = line_fallback(text)
-print(*(int(x) for x in flags[:4]), ','.join(sorted(flags[4])) or '-')
+print(*(int(x) for x in flags[:5]), ','.join(sorted(flags[5])) or '-')
 PY
 ) || exit 0   # python itself failed: open, as the header says
 policy=${policy//$'\r'/}
-read -r bare is_script remember remember_keyless claims <<< "$policy"
+read -r bare is_script remember remember_keyless foreign claims <<< "$policy"
 if [ "$bare" -eq 1 ]; then
     cat >&2 <<KILLGATE
 ⛔ BARE pkill / killall BLOCKED
@@ -294,6 +343,24 @@ KILLGATE
     exit 2
 fi
 
+# ── GATE: a write through the CLI this checkout has left ───────────────────────
+# After a move (.claude/store-cli = cairn) bd's store is frozen: nothing reads it, so a `bd update`
+# typed from habit, a transcript or an old memory would succeed and vanish. And after a rollback
+# (store-cli = bd) the same holds for cairn. Reads of the other store stay allowed.
+if [ "$foreign" -eq 1 ]; then
+    other=$([ "$STORE_CLI" = cairn ] && echo bd || echo cairn)
+    cat >&2 <<FGATE
+⛔ WRITE THROUGH $other BLOCKED — this checkout's store is written with $STORE_CLI
+
+.claude/store-cli names $STORE_CLI. $other's store is frozen here: a write to it succeeds and
+is never seen again. Run the same command with $STORE_CLI instead (same verbs and flags).
+
+(Gate: .claude/bd-prerun-hook.sh. Tests: tools/bd-prerun-hook_test.sh)
+Blocked command: $command
+FGATE
+    exit 2
+fi
+
 # ── GATE: bd remember admission control (memory-curate "gate" mode) ───────────
 # Keep the persistent-memory store lean at the SOURCE. Blocks only unambiguous
 # violations (missing --key; transient session/status state); warns on oversized
@@ -305,10 +372,10 @@ fi
 if [ "$remember" -eq 1 ]; then
     gate_reason=""
     if [ "$remember_keyless" -eq 1 ]; then
-        gate_reason='"bd remember" without --key. Auto-generated keys cannot be deduped or updated
+        gate_reason="\"$STORE_CLI remember\" without --key. Auto-generated keys cannot be deduped or updated
 in place — that is how the store bloats. Re-run with a stable slug:
 
-  bd remember --key <topic-slug> "<load-bearing fact>"'
+  $STORE_CLI remember --key <topic-slug> \"<load-bearing fact>\""
     else
         # This used to block on VOCABULARY — any body containing
         # "session-handoff", "wrap-up", etc. That matched memories which merely MENTION the
@@ -382,19 +449,21 @@ claims_dir() {
     if [ -n "$g" ]; then printf '%s/bd-session-claims' "$g"
     else printf '%s/bd-session-claims-%s' "${TMPDIR:-/tmp}" "$(id -u)"; fi
 }
-# "<id><TAB><title>" per in-progress issue; returns 1 when bd is unavailable.
+# "<id><TAB><title><TAB><assignee>" per in-progress issue; returns 1 when the CLI is unavailable.
+# --limit 0: both CLIs stop at 50 rows by default, and say so only on the stderr discarded here.
 in_progress_rows() {
     local json rows text
-    if json=$(bd --json list --status=in_progress 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
+    if json=$("$STORE_CLI" --json list --status=in_progress --limit 0 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert isinstance(d, list)
 for x in d:
-    if isinstance(x, dict) and x.get("id"): print("%s\t%s" % (x["id"], x.get("title", "")))
+    if isinstance(x, dict) and x.get("id"):
+        print("%s\t%s\t%s" % (x["id"], str(x.get("title", "")).replace("\t", " "), x.get("assignee") or ""))
 ' 2>/dev/null); then
         printf '%s' "${rows//$'\r'/}"; return 0   # CR LF from a native Windows Python
     fi
-    text=$(bd list --status=in_progress 2>/dev/null) || return 1
+    text=$("$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null) || return 1
     # rows start with the in_progress glyph after any tree prefix; the legend never does
     printf '%s\n' "$text" | awk '/^[^[:alnum:]]*◐ /{ sub(/^[^[:alnum:]]*◐ +/, ""); id = $1;
         sub(/^[^ ]+ */, ""); print id "\t" $0 }'
@@ -403,7 +472,9 @@ for x in d:
 if [ -n "$session_id" ] && [ "$claims" != "-" ]; then
     d=$(claims_dir)
     if mkdir -p "$d" 2>/dev/null; then
-        printf '%s\n' ${claims//,/ } >> "$d/$session_id" && sort -u -o "$d/$session_id" "$d/$session_id"
+        # `ready` marks a `ready --claim`, whose id the gate learns from the store's assignee
+        printf '%s\n' ${claims//,/ } | grep -vx ready >> "$d/$session_id"
+        sort -u -o "$d/$session_id" "$d/$session_id"
         find "$d" -type f -mtime +30 -delete 2>/dev/null
     else
         echo "⚠ bd-prerun-hook: cannot record this session's claim in $d — its scripts gate cannot see it." >&2
@@ -417,27 +488,34 @@ fi
 if [ -n "$session_id" ]; then
     # A claim in the SAME command licenses it: `bd update X --claim && python3 scripts/run.py`.
     [ "$claims" != "-" ] && exit 0
-    rows=$(in_progress_rows) || exit 0      # bd unavailable — fail open rather than block all work
+    rows=$(in_progress_rows) || exit 0      # CLI unavailable — fail open rather than block all work
     mine=$(printf '%s\n' "$rows" | cut -f1 | grep -Fx -f "$(claims_dir)/$session_id" 2>/dev/null | head -1)
     [ -n "$mine" ] && exit 0
+    # A claim the record missed (id in a variable, `ready --claim`, a claim made by another tool):
+    # the store names the assignee. Only a SESSION-scoped actor (<user>/<harness>/<id>) counts; a
+    # bare user name is shared by every session and would make all of that user's issues "mine".
+    case ${BEADS_ACTOR:-} in
+        */*) mine=$(printf '%s\n' "$rows" | awk -F '\t' -v a="$BEADS_ACTOR" '$3 == a { print $1; exit }')
+             [ -n "$mine" ] && exit 0 ;;
+    esac
     others=$(printf '%s\n' "$rows" | grep -c . || true)
     cat >&2 <<SBLOCK
 ⛔ UNTRACKED WORK BLOCKED
 
-No issue claimed by THIS session is in progress. The $others in progress in the shared bd store
+No issue claimed by THIS session is in progress. The $others in progress in the shared store
 belong to other sessions or projects; they do not cover this work.
 
 Claim the issue this work belongs to:
 
-  bd update <id> --claim
-  (new work: bd create --title="..." --description="..." --type=task, then claim it)
+  $STORE_CLI update <id> --claim
+  (new work: $STORE_CLI create --title="..." --description="..." --type=task, then claim it)
 
 --claim is idempotent for the SAME actor only. Where bd-prime-hook.sh exported BEADS_ACTOR
 (<user>/claude/<session8>) the actor is this session, so an issue still claimed by an EARLIER
 session is refused by name ("already claimed by ..."). Take it over first -- the assignee
 change is logged -- then claim:
 
-  bd update <id> --assignee="\$BEADS_ACTOR" && bd update <id> --claim
+  $STORE_CLI update <id> --assignee="\$BEADS_ACTOR" && $STORE_CLI update <id> --claim
 
 Then re-run your command.
 
@@ -456,9 +534,9 @@ fi
 # number bd-stop-hook.sh prints; keep the two identical (the comment there has the shape).
 count_in_progress() {
     local text n=""
-    text=$(bd list --status=in_progress 2>/dev/null) || return 1
+    text=$("$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null) || return 1
     if command -v jq >/dev/null 2>&1; then
-        n=$(bd --json list --status=in_progress 2>/dev/null \
+        n=$("$STORE_CLI" --json list --status=in_progress --limit 0 2>/dev/null \
             | jq -r 'if type == "array" then length else empty end' 2>/dev/null)
     fi
     case $n in ''|*[!0-9]*) n=$(printf '%s\n' "$text" | grep -cE '^[^[:alnum:]]*◐ ' || true) ;; esac
@@ -480,8 +558,8 @@ Untracked runs are how reproducibility gaps get created in the first place.
 
 Before running scripts, create and claim an issue:
 
-  bd create --title="..." --description="..." --type=task
-  bd update <id> --claim
+  $STORE_CLI create --title="..." --description="..." --type=task
+  $STORE_CLI update <id> --claim
 
 Then re-run your command.
 

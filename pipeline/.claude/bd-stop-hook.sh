@@ -20,6 +20,48 @@ if [ -z "$WS" ] || ! cd "$WS"; then
     exit 0
 fi
 
+# ── The store's CLI: bd (default) or cairn ────────────────────────────────────
+# .claude/store-cli holds one word, bd or cairn. It is TRACKED, so every session, every harness and
+# the git hooks agree; there is deliberately no environment override (one session must not write
+# a store the others have left). Absent: the CLI is bd and neither name is write-blocked, which is
+# how every install that never opted in keeps working. Present: the named CLI runs, and a write
+# through the OTHER name is blocked below, because it would land in a store nobody reads.
+# Keep this block identical in bd-prime-hook.sh, bd-stop-hook.sh and .beads-hooks/pre-commit.
+STORE_MODE=""
+if [ -f "$WS/.claude/store-cli" ]; then
+    STORE_MODE=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
+    case $STORE_MODE in
+        bd|cairn) ;;
+        *) echo "⚠ .claude/store-cli says '$STORE_MODE' (expected bd or cairn) — using bd, nothing write-blocked." >&2
+           STORE_MODE="" ;;
+    esac
+fi
+STORE_CLI=${STORE_MODE:-bd}
+
+# ── GUARD: bare pkill / killall ────────────────────────────────────────
+# Runs before memory admission; all invocations in a compound command are checked.
+#
+# THE TRAP. pkill -f PATTERN matches against the FULL command line, and the
+# agent shell running the command has that very pattern on its own command
+# line. So the pattern matches the shell issuing it and the command kills
+# itself. Observed twice on 2026-07-25 (exit 144), once aborting a chained job
+# submission; and again on 2026-08-13, where the same self-match killed twelve
+# running simulations mid-flight (rc=143) plus the shell writing the note that
+# was documenting the trap.
+#
+# This is an accident guard, NOT a shell sandbox. Tokenize literal commands to handle quoting,
+# wrappers and interpreter options; never evaluate shell input. Dynamic expansion/aliases and
+# arbitrary shell programs remain outside this heuristic's scope.
+# THE SCRIPTS-GATE KNOB. SCRIPT_DIRS_RE is the directory pattern the gate watches: a regex
+# alternation such as scripts|pipelines|analysis. EMPTY turns the gate off -- a repo whose
+# scripts/ directories all belong to retired projects has nothing to gate, and the gate's bd call
+# is then skipped too. Precedence: the environment (BD_SCRIPT_DIRS_RE, set-but-empty counts),
+# then .claude/bd-prerun.conf (a one-line `SCRIPT_DIRS_RE=...`, tracked so every clone agrees),
+# then the default. The knob lives OUTSIDE this file so the hook stays byte-identical with the
+# upstream copy; editing the default here is the one way to make the two diverge.
+SCRIPT_DIRS_RE='scripts'
+[ -f "$WS/.claude/bd-prerun.conf" ] && . "$WS/.claude/bd-prerun.conf"
+[ -n "${BD_SCRIPT_DIRS_RE+x}" ] && SCRIPT_DIRS_RE=$BD_SCRIPT_DIRS_RE
 # COUNT ISSUE ROWS, NOT GLYPHS. In `bd list` output ◐ marks in_progress; ● is the BLOCKED glyph,
 # and it is also the priority separator in every row ("◐ ws-1 ● P2 [bug] ..."), and a non-empty
 # listing ends with a legend that itself says "● blocked". `grep -c "●"` therefore reported 2 for
@@ -29,9 +71,9 @@ fi
 # legend line never does. bd-prerun-hook.sh carries the same function; keep the two identical.
 count_in_progress() {
     local text n=""
-    text=$(bd list --status=in_progress 2>/dev/null) || return 1
+    text=$("$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null) || return 1
     if command -v jq >/dev/null 2>&1; then
-        n=$(bd --json list --status=in_progress 2>/dev/null \
+        n=$("$STORE_CLI" --json list --status=in_progress --limit 0 2>/dev/null \
             | jq -r 'if type == "array" then length else empty end' 2>/dev/null)
     fi
     case $n in ''|*[!0-9]*) n=$(printf '%s\n' "$text" | grep -cE '^[^[:alnum:]]*◐ ' || true) ;; esac
@@ -45,19 +87,21 @@ claims_dir() {
     if [ -n "$g" ]; then printf '%s/bd-session-claims' "$g"
     else printf '%s/bd-session-claims-%s' "${TMPDIR:-/tmp}" "$(id -u)"; fi
 }
-# "<id><TAB><title>" per in-progress issue; returns 1 when bd is unavailable.
+# "<id><TAB><title><TAB><assignee>" per in-progress issue; returns 1 when the CLI is unavailable.
+# --limit 0: both CLIs stop at 50 rows by default, and say so only on the stderr discarded here.
 in_progress_rows() {
     local json rows text
-    if json=$(bd --json list --status=in_progress 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
+    if json=$("$STORE_CLI" --json list --status=in_progress --limit 0 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert isinstance(d, list)
 for x in d:
-    if isinstance(x, dict) and x.get("id"): print("%s\t%s" % (x["id"], x.get("title", "")))
+    if isinstance(x, dict) and x.get("id"):
+        print("%s\t%s\t%s" % (x["id"], str(x.get("title", "")).replace("\t", " "), x.get("assignee") or ""))
 ' 2>/dev/null); then
         printf '%s' "${rows//$'\r'/}"; return 0   # CR LF from a native Windows Python
     fi
-    text=$(bd list --status=in_progress 2>/dev/null) || return 1
+    text=$("$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null) || return 1
     # rows start with the in_progress glyph after any tree prefix; the legend never does
     printf '%s\n' "$text" | awk '/^[^[:alnum:]]*◐ /{ sub(/^[^[:alnum:]]*◐ +/, ""); id = $1;
         sub(/^[^ ]+ */, ""); print id "\t" $0 }'
@@ -84,25 +128,32 @@ if [ -z "$session_id" ]; then
     if [ "$open" -gt 0 ]; then
         echo "# ⚠️  SESSION CLOSE REMINDER"
         echo ""
-        echo "You have $open in-progress issue(s) — run \`bd close <id>\` before finishing:"
+        echo "You have $open in-progress issue(s) — run \`$STORE_CLI close <id>\` before finishing:"
         echo ""
-        bd list --status=in_progress 2>/dev/null
+        "$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null
     fi
     exit 0
 fi
 
-rows=$(in_progress_rows) || exit 0          # bd unavailable: nothing to report, never fail the event
+rows=$(in_progress_rows) || exit 0          # CLI unavailable: nothing to report, never fail the event
 record="$(claims_dir)/$session_id"
 mine=""
 # -s, not -f: with an EMPTY first file awk's NR == FNR stays true into stdin and every row "matches".
 [ -s "$record" ] && mine=$(printf '%s\n' "$rows" | awk -F'\t' 'NR == FNR { claimed[$1]; next } ($1 in claimed)' "$record" - | sort -u)
+# Also the issues the store assigns to this session's own actor: a claim the record missed (an id
+# in a variable, `ready --claim`). Session-scoped actors only (<user>/<harness>/<id>); a bare user
+# name is shared by every session. Same rule as the scripts gate in bd-prerun-hook.sh.
+case ${BEADS_ACTOR:-} in
+    */*) mine=$(printf '%s\n%s\n' "$mine" "$(printf '%s\n' "$rows" | awk -F '\t' -v a="$BEADS_ACTOR" '$3 == a')" \
+                | grep . | sort -u) ;;
+esac
 n=$(printf '%s\n' "$mine" | grep -c . || true)
 
 if [ "$event" = "SessionEnd" ]; then
     [ "$n" -gt 0 ] || exit 0
     echo "# ⚠️  SESSION CLOSE REMINDER"
     echo ""
-    echo "$n issue(s) claimed in this session are still in progress — \`bd close <id>\` each, or note why it stays open:"
+    echo "$n issue(s) claimed in this session are still in progress — \`$STORE_CLI close <id>\` each, or note why it stays open:"
     echo ""
     printf '%s\n' "$mine" | awk -F'\t' '{ print "  ◐ " $1 "  " $2 }'
     exit 0
@@ -113,6 +164,6 @@ last=""; [ -f "$record.reported" ] && last=$(cat "$record.reported")
 [ "$mine" = "$last" ] && exit 0
 if [ -d "$(dirname "$record")" ]; then printf '%s' "$mine" > "$record.reported" 2>/dev/null; fi
 [ "$n" -gt 0 ] || exit 0
-echo "# ◐ In progress, claimed in this session ($n) — close each with \`bd close <id>\` when done:"
+echo "# ◐ In progress, claimed in this session ($n) — close each with \`$STORE_CLI close <id>\` when done:"
 printf '%s\n' "$mine" | awk -F'\t' '{ print "  ◐ " $1 "  " $2 }'
 exit 0

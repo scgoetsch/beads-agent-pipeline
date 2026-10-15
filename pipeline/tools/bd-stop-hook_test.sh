@@ -112,6 +112,22 @@ chk "text fallback: own issue only"                "$(grep -c 'mine-9' <<<"$out"
 echo "### bd absent with a session id: silent, exit 0"
 rc=0; out=$(cd "$T/ws" && printf '{"hook_event_name":"SessionEnd","session_id":"s1"}' | PATH="$T/nojq" bash .claude/bd-stop-hook.sh 2>/dev/null) || rc=$?
 chk "exit 0, nothing printed"                      "$rc/$(grep -c . <<<"$out")" "0/0"
+
+echo "### a claim the record missed: the store's assignee == this session's actor (session-scoped only)"
+rm -f "$BD_SESSION_CLAIMS_DIR"/s5*
+export BD_STUB_JSON='[{"id":"var-1","title":"claimed via a variable","assignee":"u/claude/abcd1234"},{"id":"bare-1","title":"bare","assignee":"u"}]'
+chk "assignee match is reported at close"          "$(BEADS_ACTOR=u/claude/abcd1234 run_s SessionEnd s5 | grep -c 'var-1')" 1
+chk "a bare user name matches nothing"             "$(BEADS_ACTOR=u run_s SessionEnd s5 | grep -c .)" 0
+
+echo "### .claude/store-cli = cairn: the hook asks cairn and names it"
+printf 'cairn\n' > "$T/ws/.claude/store-cli"
+mkdir -p "$T/cairnbin"; cp "$T/bin/bd" "$T/cairnbin/cairn"
+printf '#!/bin/sh\nexit 1\n' > "$T/cairnbin/bd"; chmod +x "$T/cairnbin/bd"
+export BD_STUB_JSON='[{"id":"c-1","title":"in cairn","assignee":""}]'
+printf 'c-1\n' > "$BD_SESSION_CLAIMS_DIR/s6"
+out=$( (cd "$T/ws" && printf '{"hook_event_name":"SessionEnd","session_id":"s6"}' | PATH="$T/cairnbin:$PATH" bash .claude/bd-stop-hook.sh) 2>/dev/null)
+chk "listed from cairn, reminder says cairn close"  "$(grep -c 'c-1' <<<"$out")/$(grep -c 'cairn close' <<<"$out")" "1/1"
+rm -f "$T/ws/.claude/store-cli"
 unset BD_SESSION_CLAIMS_DIR
 
 echo

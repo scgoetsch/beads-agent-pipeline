@@ -243,5 +243,64 @@ PATH="$STUB:$PATH" blocks "conf off: the pkill guard is untouched"              
 HOOK=$REAL_HOOK
 unset BD_STUB_LIST BD_STUB_JSON
 
+echo "### both CLI names are parsed on every install (no .claude/store-cli: nothing write-blocked)"
+export BD_SCRIPT_DIRS_RE=scripts BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
+export BD_SESSION_CLAIMS_DIR="$STUB/claims2"     # never the clone's own git dir
+cp "$STUB/bd" "$STUB/cairn"
+PATH="$STUB:$PATH" blocks "cairn remember without --key"                 "cairn remember 'a fact'"
+PATH="$STUB:$PATH" allows "cairn remember with --key"                    "cairn remember --key k 'a fact about tools/x.sh'"
+PATH="$STUB:$PATH" HOOK_SID=c1 allows "a cairn claim licenses the script in the same command" \
+                          "cairn update c-1 --claim && python3 scripts/run.py"
+if grep -qx c-1 "$STUB/claims2/c1" 2>/dev/null; then ok "the cairn claim is recorded for the session"
+else bad "the cairn claim is recorded for the session" "claims file: $(cat "$STUB/claims2/c1" 2>&1)"; fi
+PATH="$STUB:$PATH" HOOK_SID=c2 allows "ready --claim licenses the script in the same command" \
+                          "cairn ready --claim && python3 scripts/run.py"
+if [ ! -s "$STUB/claims2/c2" ] || ! grep -qx ready "$STUB/claims2/c2"; then ok "…and records no placeholder id"
+else bad "…and records no placeholder id" "claims file has 'ready'"; fi
+PATH="$STUB:$PATH" allows "bd and cairn writes both pass when no store-cli is set" "bd close x-1 && cairn close x-2"
+
+echo "### aa20: a claim the record missed is found by the store's assignee (session-scoped actor only)"
+export BD_STUB_JSON='[{"id":"v-1","title":"t","assignee":"u/claude/abcd1234"}]'
+PATH="$STUB:$PATH" HOOK_SID=a1 BEADS_ACTOR=u/claude/abcd1234 allows "assignee == this session's actor licenses a script" "python3 scripts/run.py"
+PATH="$STUB:$PATH" HOOK_SID=a1 BEADS_ACTOR=u/claude/ffff0000 blocks "another session's actor does not"              "python3 scripts/run.py"
+export BD_STUB_JSON='[{"id":"v-1","title":"t","assignee":"u"}]'
+PATH="$STUB:$PATH" HOOK_SID=a1 BEADS_ACTOR=u blocks "a bare user name is shared by every session: not mine"            "python3 scripts/run.py"
+export BD_STUB_JSON="[]"
+
+echo "### .claude/store-cli = cairn: bd's store is frozen, bd writes are blocked, cairn answers the gate"
+SW="$STUB/storews"; mkdir -p "$SW/.claude" "$STUB/cairnonly"; cp "$REAL_HOOK" "$SW/.claude/"
+printf 'cairn\n' > "$SW/.claude/store-cli"
+HOOK="$SW/.claude/bd-prerun-hook.sh"
+for c in "bd update w-1 --claim" "bd close w-1" "bd create --title x" "bd remember --key k 'v'" \
+         "bd dolt push" "bd ready --claim" "bd comments add w-1 hi" "bd note w-1 x" "bd dep add w-1 w-2" \
+         "env X=1 bd delete w-1 --force" "bash -c 'bd close w-1'" "bd --json update w-1 -p 1" \
+         "echo ok && bd reopen w-1" $'bd close w-1; echo don\'t'; do
+  PATH="$STUB:$PATH" blocks "blocked: $c" "$c"
+done
+for c in "bd show w-1" "bd list --status=in_progress" "bd ready" "bd dolt status" "bd close --help" \
+         "bd export --all" "cairn close w-1" "cairn update w-1 --claim" "git commit -m 'bd close w-1'"; do
+  PATH="$STUB:$PATH" allows "allowed: $c" "$c"
+done
+cp "$STUB/bd" "$STUB/cairnonly/cairn"
+printf '#!/bin/sh\nexit 1\n' > "$STUB/cairnonly/bd"; chmod +x "$STUB/cairnonly/bd"
+BD_STUB_JSON='[{"id":"w-9","title":"t","assignee":"u/claude/abcd1234"}]' PATH="$STUB/cairnonly:$PATH" \
+  HOOK_SID=k1 BEADS_ACTOR=u/claude/abcd1234 allows "the scripts gate asks cairn, not bd" "python3 scripts/run.py"
+run_hook "cairn remember 'x'"
+if grep -q 'cairn remember --key' "$ERRF"; then ok "the remember gate names cairn"; else bad "the remember gate names cairn" "$(cat "$ERRF")"; fi
+
+echo "### .claude/store-cli = bd (after a rollback): cairn writes are blocked"
+printf 'bd\n' > "$SW/.claude/store-cli"
+PATH="$STUB:$PATH" blocks "blocked: cairn update"  "cairn update w-1 --claim"
+PATH="$STUB:$PATH" blocks "blocked: cairn migrate" "cairn migrate"
+PATH="$STUB:$PATH" allows "allowed: cairn show"    "cairn show w-1"
+PATH="$STUB:$PATH" allows "allowed: bd close"      "bd close w-1"
+
+echo "### an unknown store-cli value: warned, nothing blocked"
+printf 'beads\n' > "$SW/.claude/store-cli"
+PATH="$STUB:$PATH" allows "unknown value: bd write passes"    "bd close w-1"
+if grep -q "expected bd or cairn" "$ERRF"; then ok "…and says why"; else bad "…and says why" "$(cat "$ERRF")"; fi
+HOOK=$REAL_HOOK
+unset BD_STUB_LIST BD_STUB_JSON BD_SESSION_CLAIMS_DIR
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

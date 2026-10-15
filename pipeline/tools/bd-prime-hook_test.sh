@@ -416,6 +416,38 @@ chk "a failing brief is named, not hidden"            "$(grep -c 'projects.py br
 chk "...and the session is still primed"              "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
 rm -rf "$T/ws/projects.tsv" "$T/ws/tools"
 
+echo "### .claude/store-cli = cairn: rules, context and retrieval lines come from cairn"
+# cairn prime's real layout: its own context, then its own memory sections and no "## Core Rules".
+mkdir -p "$T/cairnbin"
+cat > "$T/cairnbin/cairn" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  prime)
+    printf '# Cairn Workflow Context\n\n> Writable store (t): cairn is its only writer.\n\n## Work\nCAIRN-WORK sentinel\n\n## Persistent Memories — HOT tier (0 in full of 2 total)\n\nCAIRN-OWN-TIER sentinel\n\n## Persistent Memories — index (2 more)\n- alpha-key\n' ;;
+  export)
+    out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
+    printf '{"_type":"memory","key":"alpha-key","value":"ALPHA-BODY sentinel"}\n{"_type":"memory","key":"beta-key","value":"BETA-BODY sentinel"}\n' > "$out" ;;
+  *) exit 0 ;;
+esac
+STUB
+printf '#!/bin/sh\necho "bd must not be called" >&2; exit 1\n' > "$T/cairnbin/bd"
+chmod +x "$T/cairnbin/cairn" "$T/cairnbin/bd"
+printf 'cairn\n' > "$T/ws/.claude/store-cli"
+out=$( (cd "$T/ws" && PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>"$T/hook.err")
+chk "the rules name cairn, not bd"                   "$(grep -c 'Run `cairn ready` NOW' <<<"$out"):$(grep -c 'Run `bd ready`' <<<"$out")" "1:0"
+chk "rule 6 says bd is frozen and blocked"           "$(grep -c 'bd` is frozen here' <<<"$out")" 1
+chk "cairn's own context is in"                      "$(grep -c 'CAIRN-WORK sentinel' <<<"$out")" 1
+chk "cairn's own memory tier is not (the hook tiers)" "$(grep -c 'CAIRN-OWN-TIER' <<<"$out")" 0
+chk "the hook's index is built from cairn's export"  "$(grep -c 'retrieve full text with `cairn memories <keyword>` or `cairn recall <key>`' <<<"$out")" 1
+chk "no fallback banner"                             "$(grep -c 'FULL .* prime dump' <<<"$out")" 0
+chk "bd was never called"                            "$(grep -c 'bd must not be called' "$T/hook.err")" 0
+out=$( (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "cairn selected but missing or failing: loud, names cairn" "$(grep -c 'cairn export --include-memories failed' <<<"$out")" 1
+printf 'beads\n' > "$T/ws/.claude/store-cli"
+out=$(run_hook)
+chk "an unknown store-cli value is named in the payload" "$(grep -c "store-cli says 'beads'" <<<"$out"):$(grep -c 'Run `bd ready`' <<<"$out")" "1:1"
+rm -f "$T/ws/.claude/store-cli"
+
 echo
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

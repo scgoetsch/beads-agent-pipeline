@@ -32,6 +32,52 @@ if [ -z "$WS" ] || [ ! -d "$WS/.claude" ]; then
 fi
 cd "$WS" || { echo "# 🚨 bd-prime-hook: cannot cd to '$WS' — session NOT primed."; exit 0; }
 
+# ── The store's CLI: bd (default) or cairn ────────────────────────────────────
+# .claude/store-cli holds one word, bd or cairn. It is TRACKED, so every session, every harness and
+# the git hooks agree; there is deliberately no environment override (one session must not write
+# a store the others have left). Absent: the CLI is bd and neither name is write-blocked, which is
+# how every install that never opted in keeps working. Present: the named CLI runs, and a write
+# through the OTHER name is blocked below, because it would land in a store nobody reads.
+# Keep this block identical in bd-prime-hook.sh, bd-stop-hook.sh and .beads-hooks/pre-commit.
+STORE_MODE=""
+if [ -f "$WS/.claude/store-cli" ]; then
+    STORE_MODE=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
+    case $STORE_MODE in
+        bd|cairn) ;;
+        *) echo "⚠ .claude/store-cli says '$STORE_MODE' (expected bd or cairn) — using bd, nothing write-blocked." >&2
+           STORE_MODE="" ;;
+    esac
+fi
+STORE_CLI=${STORE_MODE:-bd}
+
+# ── GUARD: bare pkill / killall ────────────────────────────────────────
+# Runs before memory admission; all invocations in a compound command are checked.
+#
+# THE TRAP. pkill -f PATTERN matches against the FULL command line, and the
+# agent shell running the command has that very pattern on its own command
+# line. So the pattern matches the shell issuing it and the command kills
+# itself. Observed twice on 2026-07-25 (exit 144), once aborting a chained job
+# submission; and again on 2026-08-13, where the same self-match killed twelve
+# running simulations mid-flight (rc=143) plus the shell writing the note that
+# was documenting the trap.
+#
+# This is an accident guard, NOT a shell sandbox. Tokenize literal commands to handle quoting,
+# wrappers and interpreter options; never evaluate shell input. Dynamic expansion/aliases and
+# arbitrary shell programs remain outside this heuristic's scope.
+# THE SCRIPTS-GATE KNOB. SCRIPT_DIRS_RE is the directory pattern the gate watches: a regex
+# alternation such as scripts|pipelines|analysis. EMPTY turns the gate off -- a repo whose
+# scripts/ directories all belong to retired projects has nothing to gate, and the gate's bd call
+# is then skipped too. Precedence: the environment (BD_SCRIPT_DIRS_RE, set-but-empty counts),
+# then .claude/bd-prerun.conf (a one-line `SCRIPT_DIRS_RE=...`, tracked so every clone agrees),
+# then the default. The knob lives OUTSIDE this file so the hook stays byte-identical with the
+# upstream copy; editing the default here is the one way to make the two diverge.
+SCRIPT_DIRS_RE='scripts'
+[ -f "$WS/.claude/bd-prerun.conf" ] && . "$WS/.claude/bd-prerun.conf"
+[ -n "${BD_SCRIPT_DIRS_RE+x}" ] && SCRIPT_DIRS_RE=$BD_SCRIPT_DIRS_RE
+# (SessionStart stderr is not shown: the rules below repeat an unknown value in the payload.)
+STORE_CLI_BAD=""
+[ -f "$WS/.claude/store-cli" ] && [ -z "$STORE_MODE" ] && STORE_CLI_BAD=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
+
 # ── SESSION IDENTITY FOR bd's AUDIT TRAIL ──────────────────────────────────────────────────────
 # bd stamps an actor on created_by, on the assignee a --claim sets, on comment authors and on the
 # field-change rows of .beads/interactions.jsonl; the default is git user.name, so every session of
@@ -189,14 +235,21 @@ emit_session_rules() {
     # ranked every project's backlog together (on one store, 45 of 68 top items belonged to a
     # retired project).
     echo "1. Work comes from the ACTIVE projects listed below; inactive ones stay parked unless the user reopens them."
-    echo "2. Use \`bd create ... -l project:<name>\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+    echo "2. Use \`$STORE_CLI create ... -l project:<name>\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
   else
-    echo "1. Run \`bd ready\` NOW to check for available work before doing anything else."
-    echo "2. Use \`bd create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+    echo "1. Run \`$STORE_CLI ready\` NOW to check for available work before doing anything else."
+    echo "2. Use \`$STORE_CLI create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
   fi
-  echo "3. Use \`bd update <id> --claim\` before starting any issue."
-  echo "4. Use \`bd close <id>\` when work is complete."
-  echo "5. Use \`bd remember\` for persistent knowledge — never MEMORY.md files."; echo ""
+  echo "3. Use \`$STORE_CLI update <id> --claim\` before starting any issue."
+  echo "4. Use \`$STORE_CLI close <id>\` when work is complete."
+  echo "5. Use \`$STORE_CLI remember --key <slug>\` for persistent knowledge — never MEMORY.md files."
+  if [ "$STORE_MODE" = cairn ]; then
+    echo "6. This checkout's store is written with \`cairn\` (.claude/store-cli). \`bd\` is frozen here: its writes"
+    echo "   (\`bd dolt push\` included) are BLOCKED; reads still work but show the old store. Where AGENTS.md or a"
+    echo "   memory says \`bd <verb>\`, run \`cairn <verb>\` with the same flags."
+  fi
+  [ -n "$STORE_CLI_BAD" ] && echo "⚠ .claude/store-cli says '$STORE_CLI_BAD' (expected bd or cairn) — using bd, nothing write-blocked."
+  echo ""
   emit_projects
 }
 # OPTIONAL PROJECT REGISTRY. When the repo keeps a projects.tsv (one bd store, several projects,
@@ -230,14 +283,14 @@ emit_rules() { emit_hooks_unwired; emit_session_actor; emit_session_rules; emit_
 # the cut is announced on line 2, because a 36 KB dump that the host reduces to its first
 # 2,000 bytes is not "the full dump" however the hook labels it.
 fallback_full() {
-  local banner="# ⚠ bd-prime-hook: $1 — emitting the FULL bd prime dump (no memory tiering)."
+  local banner="# ⚠ bd-prime-hook: $1 — emitting the FULL $STORE_CLI prime dump (no memory tiering)."
   local note="" used total dump room
   echo "$banner"
   emit_rules > "$TMPD/s.rules_all"
-  if ! bd prime > "$TMPD/dump" 2>"$ERR"; then { echo "# WARNING: bd prime failed"; cat "$ERR"; } >> "$TMPD/dump"; fi
+  if ! "$STORE_CLI" prime > "$TMPD/dump" 2>"$ERR"; then { echo "# WARNING: $STORE_CLI prime failed (is $STORE_CLI installed? .claude/store-cli selects it) — this session is NOT primed with the store's context"; cat "$ERR"; } >> "$TMPD/dump"; fi
   used=$(( ${#banner} + 1 + $(size "$TMPD/s.rules_all") + ${#FOOTER} + 2 )); dump=$(size "$TMPD/dump"); total=$((used + dump))
   if [ "$BUDGET" -gt 0 ] && [ "$total" -gt "$BUDGET" ]; then
-    note="# ⚠ bd-prime-hook: this dump is $total bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000) — CUT to fit. Run \`bd prime\` yourself for all of it; fix the cause named above so the tiered path can run, and keep the store lean (memory-curate)."
+    note="# ⚠ bd-prime-hook: this dump is $total bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000) — CUT to fit. Run \`$STORE_CLI prime\` yourself for all of it; fix the cause named above so the tiered path can run, and keep the store lean (memory-curate)."
     echo "$note"; used=$((used + ${#note} + 1))
   fi
   cat "$TMPD/s.rules_all"
@@ -251,8 +304,8 @@ fallback_full() {
 }
 command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
 [ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
-bd export --include-memories -o "$MM" 2>/dev/null || { fallback_full "bd export --include-memories failed"; exit 0; }
-[ -f "$MM" ] || { fallback_full "bd export exited 0 but wrote no file"; exit 0; }
+"$STORE_CLI" export --include-memories -o "$MM" 2>/dev/null || { fallback_full "$STORE_CLI export --include-memories failed"; exit 0; }
+[ -f "$MM" ] || { fallback_full "$STORE_CLI export exited 0 but wrote no file"; exit 0; }
 # A store with NO memories yet is the normal state of a fresh project, not a failed export: the
 # tiered output is simply "0 of 0". Treating it as a fallback put a warning banner on every
 # session of a new project until its first `bd remember`. The failure this guards against -- an
@@ -267,10 +320,17 @@ emit_site_checks   > "$TMPD/s.site"
 # (delete from "## Persistent Memories" up to but NOT including "## Core Rules")
 # Capture status BEFORE filtering. A pipeline ending in sed hid bd's failure, and the
 # captured stderr was then discarded. Put the alarm with the never-dropped top sections.
-if bd prime > "$TMPD/prime" 2>"$ERR"; then
-  sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}' "$TMPD/prime" > "$TMPD/s.ctx"
+# cairn prints its own layout and has no "## Core Rules": bd's range would delete from the first
+# memory heading to the END of it. Its context is everything before its first memory heading;
+# the memories are tiered below from the export, as for bd.
+if "$STORE_CLI" prime > "$TMPD/prime" 2>"$ERR"; then
+  if [ "$STORE_CLI" = cairn ]; then
+    sed '/^## Persistent Memories/,$d' "$TMPD/prime" > "$TMPD/s.ctx"
+  else
+    sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}' "$TMPD/prime" > "$TMPD/s.ctx"
+  fi
 else
-  { echo '# WARNING: bd prime failed — workflow context unavailable; memories below came from export.'
+  { echo "# WARNING: $STORE_CLI prime failed — workflow context unavailable; memories below came from export."
     head -c 1000 "$ERR"; echo; } >> "$TMPD/s.unwired"
   : > "$TMPD/s.ctx"
 fi
@@ -291,11 +351,11 @@ UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .
 {
   echo ""; echo "## Persistent Memories — HOT tier ($HOTN selected keys of $TOTAL total; bodies included while budget permits)"
   if [ -n "$UNKNOWN" ]; then
-    echo "> ⚠ .claude/memory-hot.txt names memories that are not in the store — fix the list or \`bd remember\` them:"
+    echo "> ⚠ .claude/memory-hot.txt names memories that are not in the store — fix the list or \`$STORE_CLI remember\` them:"
     printf '%s\n' "$UNKNOWN" | sed 's/^/>   /'; echo ""
   fi
-  [ "$TOTAL" -eq 0 ] && echo "_The store has no memories yet — nothing to tier. \`bd remember --key <slug> \"<fact>\"\` adds the first._"
-  echo "_Only recurring-mistake guards are injected in full below. Retrieve any other memory on demand with \`bd memories <keyword>\`._"; echo ""
+  [ "$TOTAL" -eq 0 ] && echo "_The store has no memories yet — nothing to tier. \`$STORE_CLI remember --key <slug> \"<fact>\"\` adds the first._"
+  echo "_Only recurring-mistake guards are injected in full below. Retrieve any other memory on demand with \`$STORE_CLI memories <keyword>\`._"; echo ""
 } > "$TMPD/s.hothdr"
 # One scratch file per hot body, in memory-hot.txt order, so the budget can keep the first N
 # that fit and name the rest. hot.keys holds the key for each file, line for line.
@@ -327,11 +387,11 @@ jq -r --argjson hot "$HOTLIST" \
    "$MM" | tr -d '\r' > "$INDEX"
 EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . "$INDEX")
 {
-  echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"
+  echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`$STORE_CLI memories <keyword>\` or \`$STORE_CLI recall <key>\`)"
   echo "_Keys only. They are written as sentences precisely so this index does not need previews._"
   if [ "$GOT" -ne "$EXPECT" ]; then
     echo "> ⚠ INDEX IS INCOMPLETE — listing $GOT of an expected $EXPECT memories."
-    echo "> Do not read the list below as the full set. Use \`bd memories <keyword>\` to search the"
+    echo "> Do not read the list below as the full set. Use \`$STORE_CLI memories <keyword>\` to search the"
     echo "> store directly, and fix .claude/bd-prime-hook.sh."; echo ""
   fi
   cat "$INDEX"
@@ -351,8 +411,8 @@ if [ "$BUDGET" -gt 0 ]; then
     # NONE and say so plainly; search is the discovery path. Never implies the list is complete.
     INDEX_PARTIAL=1; INDEX_SHOWN=0
     {
-      echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`bd memories <keyword>\` or \`bd recall <key>\`)"
-      echo "> INDEX OMITTED — $EXPECT keys are too many to list within the host budget. Search with \`bd memories <keyword>\`; list every key with \`bd export --include-memories\`."
+      echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`$STORE_CLI memories <keyword>\` or \`$STORE_CLI recall <key>\`)"
+      echo "> INDEX OMITTED — $EXPECT keys are too many to list within the host budget. Search with \`$STORE_CLI memories <keyword>\`; list every key with \`$STORE_CLI export --include-memories\`."
     } > "$TMPD/s.index"
   fi
 fi
@@ -385,12 +445,12 @@ done
 ctx_in=0; if [ $((used + ctx)) -le "$BUDGET" ]; then ctx_in=1; used=$((used + ctx)); fi
 if [ -n "$dropped" ]; then
   echo "# ⚠ bd-prime-hook: PAYLOAD TRIMMED TO FIT THIS HOST — the tiered output is $all bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000). Not shipped, fetch on demand:"
-  echo "#   hot memories, in full via \`bd recall <key>\`:$dropped"
-  [ "$ctx_in" -eq 0 ] && echo "#   bd's workflow context and command reference: run \`bd prime\`"
+  echo "#   hot memories, in full via \`$STORE_CLI recall <key>\`:$dropped"
+  [ "$ctx_in" -eq 0 ] && echo "#   $STORE_CLI's workflow context and command reference: run \`$STORE_CLI prime\`"
   echo "#   Fix: trim .claude/memory-hot.txt or shrink the bodies it names (/memory-curate). BD_PRIME_BUDGET=0 lifts the cap on a host that has none."; echo ""
 elif [ "$ctx_in" -eq 0 ]; then
   # Expected on a large store, not an alarm: AGENTS.md carries bd's quick reference.
-  echo "# bd-prime-hook: bd's workflow context is not inlined (host budget) — run \`bd prime\` for it."; echo ""
+  echo "# bd-prime-hook: $STORE_CLI's workflow context is not inlined (host budget) — run \`$STORE_CLI prime\` for it."; echo ""
 fi
 cat "$TMPD/s.unwired" "$TMPD/s.rules" "$TMPD/s.site" "$TMPD/s.index" "$TMPD/s.hothdr"
 emit_hot "$kept"
