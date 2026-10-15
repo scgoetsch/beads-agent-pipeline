@@ -98,6 +98,18 @@ rows 100; stamp 2026-10-01 100
 out=$(PATH="$T/bin" "$G" 2>&1)
 chk "export present: bd is not consulted (no bd on PATH, still silent)" "$out" ""
 
+echo "### .claude/store-cli = cairn: the count comes from cairn, bd is not asked"
+rm -f "$ws/.beads/memories.jsonl"; stamp 2026-10-01 100
+printf '#!/usr/bin/env bash\n[ "$1" = memories ] || exit 1\necho "Memories (112):"\nfor i in $(seq 1 112); do printf "  key-%%03d\\n    body\\n" "$i"; done\n' > "$T/bin/cairn"; chmod +x "$T/bin/cairn"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$T/bin/bd"; chmod +x "$T/bin/bd"
+printf 'cairn\n' > "$ws/.claude/store-cli"
+out=$(PATH="$T/bin" "$G" 2>&1)
+chk "counts 112 through cairn, 12 new -> fires"   "$(grep -c '(12 new)' <<<"$out")" 1
+rm -f "$T/bin/cairn"
+out=$(PATH="$T/bin" "$G" 2>&1)
+chk "cairn selected but absent: says so by name"  "$(grep -c 'no cairn on PATH' <<<"$out")" 1
+rm -f "$ws/.claude/store-cli" "$T/bin/bd"; rows 100
+
 echo "### the export is counted by memory rows, not by lines of anything"
 rows 100; printf '{"_type":"issue","id":"WS-x"}\n' >> "$ws/.beads/memories.jsonl"; stamp 2026-10-01 100; run
 chk "an issue row does not count as a memory"     "$out" ""

@@ -15,7 +15,9 @@
 #                                 The installer writes it once; /memory-curate rewrites it after
 #                                 ANY mode, audit included. Tracked in git so every clone agrees.
 #   the current memory count      from .beads/memories.jsonl when a tracked export exists (no bd
-#                                 call, no server needed), else from `bd memories`.
+#                                 call, no server needed), else from `<cli> memories`, where
+#                                 <cli> is .claude/store-cli's bd or cairn (absent: bd); the two
+#                                 print the same listing.
 #
 # An input it cannot read is said out loud. A gate that could not run must never look like a
 # gate that passed -- that is the open-and-silent shape this hook exists to prevent.
@@ -29,6 +31,9 @@ STAMP="$WS/.claude/memory-curation.txt"
 EXPORT="$WS/.beads/memories.jsonl"
 MAXD=${BD_CURATION_MAX_DAYS:-30}; case $MAXD in ''|*[!0-9]*) MAXD=30 ;; esac
 MAXN=${BD_CURATION_MAX_NEW:-10};  case $MAXN in ''|*[!0-9]*) MAXN=10 ;; esac
+# The store's CLI, by the rule of the session hooks: .claude/store-cli, bd or cairn; else bd.
+CLI=bd
+[ -f "$WS/.claude/store-cli" ] && [ "$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")" = cairn ] && CLI=cairn
 HOWTO="Run /memory-curate audit (prune/consolidate if it flags drift), then stamp .claude/memory-curation.txt with today's date<TAB>memory count."
 
 if [ ! -r "$STAMP" ]; then
@@ -48,14 +53,14 @@ esac
 # each key on a line indented by two spaces; count those lines, not the header.
 if [ -r "$EXPORT" ]; then
   now=$(grep -c '^{"_type":"memory"' "$EXPORT")
-elif command -v bd >/dev/null 2>&1; then
-  listing=$(bd memories 2>/dev/null) || {
-    echo "memory curation gate: no .beads/memories.jsonl and \`bd memories\` failed — cannot count memories, the gate did NOT run."
+elif command -v "$CLI" >/dev/null 2>&1; then
+  listing=$("$CLI" memories 2>/dev/null) || {
+    echo "memory curation gate: no .beads/memories.jsonl and \`$CLI memories\` failed — cannot count memories, the gate did NOT run."
     exit 0
   }
   now=$(printf '%s\n' "$listing" | grep -acE '^  [a-z0-9]')
 else
-  echo "memory curation gate: no .beads/memories.jsonl and no bd on PATH — cannot count memories, the gate did NOT run."
+  echo "memory curation gate: no .beads/memories.jsonl and no $CLI on PATH — cannot count memories, the gate did NOT run."
   exit 0
 fi
 
