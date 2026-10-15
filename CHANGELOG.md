@@ -10,8 +10,11 @@
   parsed on every install, so `cairn remember` without `--key` is refused and `cairn update
   --claim` is recorded even where nobody opted in. The prime hook no longer runs cairn's prime
   through bd's `## Persistent Memories`…`## Core Rules` filter, which with cairn's layout would
-  have deleted from the first memory heading to the end. New `tools/pre-commit-store-cli_test.sh`;
-  the prerun, prime and stop suites cover every mode.
+  have deleted from the first memory heading to the end. While the file is set, the prerun hook
+  lets the other CLI READ only (an allowlist of read verbs: a write verb nobody listed is blocked
+  too). New `tools/store-cli-git-hooks.sh` puts the same stop into bd's own four git hooks. New
+  `tools/pre-commit-store-cli_test.sh` and `tools/store-cli-git-hooks_test.sh`; the prerun, prime
+  and stop suites cover every mode.
 - **A claim the session record missed is still this session's.** The scripts gate and the stop
   hook knew a session's claims only from ids typed literally in `bd update <id> --claim`, so
   `bd update "$id" --claim` and `ready --claim` left the session's own work blocked as untracked

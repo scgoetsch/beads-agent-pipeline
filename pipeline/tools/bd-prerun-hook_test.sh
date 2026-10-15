@@ -259,6 +259,27 @@ if [ ! -s "$STUB/claims2/c2" ] || ! grep -qx ready "$STUB/claims2/c2"; then ok "
 else bad "…and records no placeholder id" "claims file has 'ready'"; fi
 PATH="$STUB:$PATH" allows "bd and cairn writes both pass when no store-cli is set" "bd close x-1 && cairn close x-2"
 
+echo "### ready --claim records no id: the LATER command is licensed by the assignee, and only by it"
+export BD_STUB_JSON="[]"
+PATH="$STUB:$PATH" HOOK_SID=r1 BEADS_ACTOR=u/claude/abcd1234 allows "ready --claim itself"            "cairn ready --claim"
+PATH="$STUB:$PATH" HOOK_SID=r1 BEADS_ACTOR=u/claude/abcd1234 blocks "…a later script with no assignee row" "python3 scripts/run.py"
+export BD_STUB_JSON='[{"id":"r-7","title":"t","assignee":"u/claude/abcd1234"}]'
+PATH="$STUB:$PATH" HOOK_SID=r1 BEADS_ACTOR=u/claude/abcd1234 allows "…a later script once the store names the actor" "python3 scripts/run.py"
+export BD_STUB_JSON="[]"
+
+echo "### the in-progress listing asks for every row (both CLIs stop at 50 by default)"
+cat > "$STUB/argv-bd" <<'ARGV'
+#!/usr/bin/env bash
+echo "$*" >> "$ARGV_LOG"
+printf '%s\n' "${BD_STUB_JSON-}"
+ARGV
+chmod +x "$STUB/argv-bd"; mkdir -p "$STUB/argvbin"; cp "$STUB/argv-bd" "$STUB/argvbin/bd"
+export ARGV_LOG="$STUB/argv.log"; : > "$ARGV_LOG"
+PATH="$STUB/argvbin:$PATH" HOOK_SID=l1 blocks "(gate consulted)" "python3 scripts/run.py"
+if grep -q -- '--json list --status=in_progress --limit 0' "$ARGV_LOG"; then ok "the listing passes --limit 0"
+else bad "the listing passes --limit 0" "argv seen: $(cat "$ARGV_LOG")"; fi
+unset ARGV_LOG
+
 echo "### aa20: a claim the record missed is found by the store's assignee (session-scoped actor only)"
 export BD_STUB_JSON='[{"id":"v-1","title":"t","assignee":"u/claude/abcd1234"}]'
 PATH="$STUB:$PATH" HOOK_SID=a1 BEADS_ACTOR=u/claude/abcd1234 allows "assignee == this session's actor licenses a script" "python3 scripts/run.py"
@@ -277,8 +298,14 @@ for c in "bd update w-1 --claim" "bd close w-1" "bd create --title x" "bd rememb
          "echo ok && bd reopen w-1" $'bd close w-1; echo don\'t'; do
   PATH="$STUB:$PATH" blocks "blocked: $c" "$c"
 done
+for c in "bd link w-1 w-2" "bd rename w-1 w-9" "bd set-state w-1 x=y" "bd batch -f ops.txt" \
+         "bd dolt remote add o url" "bd dep remove w-1 w-2" "bd doctor --fix" "bd config set k v" \
+         "bd sql 'delete from issues'" "bd shadow sync"; do
+  PATH="$STUB:$PATH" blocks "blocked (not a read): $c" "$c"
+done
 for c in "bd show w-1" "bd list --status=in_progress" "bd ready" "bd dolt status" "bd close --help" \
-         "bd export --all" "cairn close w-1" "cairn update w-1 --claim" "git commit -m 'bd close w-1'"; do
+         "bd export --all" "cairn close w-1" "cairn update w-1 --claim" "git commit -m 'bd close w-1'" \
+         "bd dep tree w-1" "bd dolt remote list" "bd doctor" "bd --version" "bd memories key" "bd comments w-1"; do
   PATH="$STUB:$PATH" allows "allowed: $c" "$c"
 done
 cp "$STUB/bd" "$STUB/cairnonly/cairn"
@@ -293,6 +320,8 @@ printf 'bd\n' > "$SW/.claude/store-cli"
 PATH="$STUB:$PATH" blocks "blocked: cairn update"  "cairn update w-1 --claim"
 PATH="$STUB:$PATH" blocks "blocked: cairn migrate" "cairn migrate"
 PATH="$STUB:$PATH" allows "allowed: cairn show"    "cairn show w-1"
+PATH="$STUB:$PATH" allows "allowed: cairn shadow run (the mirror of bd)" "cairn shadow run --quiet"
+PATH="$STUB:$PATH" blocks "blocked: cairn remember" "cairn remember --key k v"
 PATH="$STUB:$PATH" allows "allowed: bd close"      "bd close w-1"
 
 echo "### an unknown store-cli value: warned, nothing blocked"

@@ -110,7 +110,7 @@ for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/s
          tools/dolt-guard_test.sh tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
          tools/audit_wikilinks_test.sh tools/memory-curation-gate_test.sh \
-         tools/pre-commit-store-cli_test.sh; do
+         tools/pre-commit-store-cli_test.sh tools/store-cli-git-hooks_test.sh; do
   suite_tmp=$(mktemp -d)
   if (cd "$T" && TMPDIR="$suite_tmp" ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; tail -35 "$T/.suite.log" | sed 's/^/        /'; fi

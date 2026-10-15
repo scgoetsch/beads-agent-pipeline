@@ -416,6 +416,11 @@ chk "a failing brief is named, not hidden"            "$(grep -c 'projects.py br
 chk "...and the session is still primed"              "$(printf '%s' "$out" | tail -1 | grep -c 'end of bd-prime-hook payload')" 1
 rm -rf "$T/ws/projects.tsv" "$T/ws/tools"
 
+echo "### the prime hook does not execute the prerun hook's knob file"
+printf 'echo PRERUN-CONF-SOURCED\n' > "$T/ws/.claude/bd-prerun.conf"
+chk "bd-prerun.conf is not sourced at SessionStart"   "$(run_hook | grep -c PRERUN-CONF-SOURCED)" 0
+rm -f "$T/ws/.claude/bd-prerun.conf"
+
 echo "### .claude/store-cli = cairn: rules, context and retrieval lines come from cairn"
 # cairn prime's real layout: its own context, then its own memory sections and no "## Core Rules".
 mkdir -p "$T/cairnbin"

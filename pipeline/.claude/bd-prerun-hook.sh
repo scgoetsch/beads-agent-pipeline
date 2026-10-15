@@ -88,10 +88,12 @@ import os, re, shlex, sys
 STORE_CLIS = ('bd', 'cairn')
 # The other CLI, whose writes are blocked; none when .claude/store-cli is absent.
 FOREIGN = {'bd': 'cairn', 'cairn': 'bd'}.get(sys.argv[3])
-# Subcommands that change a store. `dolt` changes bd's (push, pull, commit, ...); `ready` only with --claim.
-WRITE_VERBS = {'create', 'q', 'update', 'close', 'reopen', 'remember', 'forget', 'delete', 'dep',
-               'comment', 'note', 'defer', 'undefer', 'import', 'init', 'label', 'edit',
-               'supersede', 'duplicate', 'claim', 'migrate', 'dolt', 'compact', 'gc', 'flatten'}
+# What the OTHER CLI may still do: read. An allowlist, so a write verb nobody listed (bd has dozens:
+# link, rename, set-state, batch, mol, ...) is blocked too. Some verbs read in one form only.
+READ_VERBS = {'show', 'list', 'ready', 'blocked', 'search', 'query', 'stats', 'export', 'memories',
+              'recall', 'prime', 'version', 'help', 'history', 'where', 'status', 'info', 'stale',
+              'orphans', 'lint', 'preflight', 'count', 'graph', 'comments', 'dep', 'dolt', 'doctor',
+              'config', 'human', 'types', 'check', 'shadow', 'seed-from-dolt'}
 
 script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*') if sys.argv[2] else None  # None: gate off
 assignment = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
@@ -192,12 +194,19 @@ def foreign_write(name, args):
     i = 0
     while i < len(args) and args[i].startswith('-'):
         i += 2 if args[i] in BD_GLOBAL_VALUED else 1
-    if i >= len(args): return False
+    if i >= len(args): return False                    # flags only: --version, --help
     verb, rest = args[i], args[i + 1:]
+    sub = next((a for a in rest if not a.startswith('-')), None)
+    if verb not in READ_VERBS: return True
     if verb == 'ready': return '--claim' in rest
-    if verb == 'comments': return bool(rest) and rest[0] == 'add'
-    if verb == 'dolt': return bool(rest) and rest[0] not in ('show', 'status', 'test', 'remote')
-    return verb in WRITE_VERBS
+    if verb == 'comments': return sub == 'add'
+    if verb == 'dep': return sub not in ('tree', 'list', 'cycles')
+    if verb == 'dolt': return not (sub in ('show', 'status', 'test')
+                                   or (sub == 'remote' and 'list' in rest))
+    if verb == 'doctor': return any(a.startswith('--fix') for a in rest)
+    if verb == 'config': return sub not in ('get', 'list')
+    if verb == 'shadow': return FOREIGN != 'cairn'      # cairn's read-only mirror of bd
+    return False
 
 def inspect(command, depth=0):
     """-> (bare kill, analysis script, bd remember call, bd remember WITHOUT --key, foreign

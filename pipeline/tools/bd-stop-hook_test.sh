@@ -119,6 +119,11 @@ export BD_STUB_JSON='[{"id":"var-1","title":"claimed via a variable","assignee":
 chk "assignee match is reported at close"          "$(BEADS_ACTOR=u/claude/abcd1234 run_s SessionEnd s5 | grep -c 'var-1')" 1
 chk "a bare user name matches nothing"             "$(BEADS_ACTOR=u run_s SessionEnd s5 | grep -c .)" 0
 
+echo "### the stop hook does not execute the prerun hook's knob file"
+printf 'echo PRERUN-CONF-SOURCED\n' > "$T/ws/.claude/bd-prerun.conf"
+chk "bd-prerun.conf is not sourced"                "$(run_s Stop s9 | grep -c PRERUN-CONF-SOURCED)" 0
+rm -f "$T/ws/.claude/bd-prerun.conf"
+
 echo "### .claude/store-cli = cairn: the hook asks cairn and names it"
 printf 'cairn\n' > "$T/ws/.claude/store-cli"
 mkdir -p "$T/cairnbin"; cp "$T/bin/bd" "$T/cairnbin/cairn"

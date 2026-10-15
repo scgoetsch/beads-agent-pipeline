@@ -19,6 +19,9 @@
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+# The store's CLI (.claude/store-cli: bd or cairn; absent: bd), the session hooks' rule.
+store_cli=bd
+[ -f .claude/store-cli ] && [ "$(tr -d ' \t\r\n' < .claude/store-cli)" = cairn ] && store_cli=cairn
 
 case ${1:-} in
   --cached)
@@ -175,7 +178,10 @@ if command grep -q 'BEGIN BEADS INTEGRATION' AGENTS.md; then
     # and a dozen lines of slack; 56 stays the floor on a box without bd, or a bd without --print.
     managed_lines=$(printf '%s' "$managed" | wc -l | tr -d ' ')
     template_lines=0
-    if bd setup --help 2>&1 | command grep -q -- '--print'; then
+    # With .claude/store-cli = cairn (read at the top, before --cached moves to a snapshot), bd
+    # is frozen and its block in AGENTS.md is not regenerated: the floor below stands, and the
+    # guard does not call bd.
+    if [ "$store_cli" = bd ] && bd setup --help 2>&1 | command grep -q -- '--print'; then
         template_lines=$(bd setup --print 2>/dev/null | wc -l | tr -d ' ')
     fi
     case $template_lines in ''|*[!0-9]*) template_lines=0 ;; esac

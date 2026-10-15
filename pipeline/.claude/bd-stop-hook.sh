@@ -38,30 +38,6 @@ if [ -f "$WS/.claude/store-cli" ]; then
 fi
 STORE_CLI=${STORE_MODE:-bd}
 
-# ── GUARD: bare pkill / killall ────────────────────────────────────────
-# Runs before memory admission; all invocations in a compound command are checked.
-#
-# THE TRAP. pkill -f PATTERN matches against the FULL command line, and the
-# agent shell running the command has that very pattern on its own command
-# line. So the pattern matches the shell issuing it and the command kills
-# itself. Observed twice on 2026-07-25 (exit 144), once aborting a chained job
-# submission; and again on 2026-08-13, where the same self-match killed twelve
-# running simulations mid-flight (rc=143) plus the shell writing the note that
-# was documenting the trap.
-#
-# This is an accident guard, NOT a shell sandbox. Tokenize literal commands to handle quoting,
-# wrappers and interpreter options; never evaluate shell input. Dynamic expansion/aliases and
-# arbitrary shell programs remain outside this heuristic's scope.
-# THE SCRIPTS-GATE KNOB. SCRIPT_DIRS_RE is the directory pattern the gate watches: a regex
-# alternation such as scripts|pipelines|analysis. EMPTY turns the gate off -- a repo whose
-# scripts/ directories all belong to retired projects has nothing to gate, and the gate's bd call
-# is then skipped too. Precedence: the environment (BD_SCRIPT_DIRS_RE, set-but-empty counts),
-# then .claude/bd-prerun.conf (a one-line `SCRIPT_DIRS_RE=...`, tracked so every clone agrees),
-# then the default. The knob lives OUTSIDE this file so the hook stays byte-identical with the
-# upstream copy; editing the default here is the one way to make the two diverge.
-SCRIPT_DIRS_RE='scripts'
-[ -f "$WS/.claude/bd-prerun.conf" ] && . "$WS/.claude/bd-prerun.conf"
-[ -n "${BD_SCRIPT_DIRS_RE+x}" ] && SCRIPT_DIRS_RE=$BD_SCRIPT_DIRS_RE
 # COUNT ISSUE ROWS, NOT GLYPHS. In `bd list` output ◐ marks in_progress; ● is the BLOCKED glyph,
 # and it is also the priority separator in every row ("◐ ws-1 ● P2 [bug] ..."), and a non-empty
 # listing ends with a legend that itself says "● blocked". `grep -c "●"` therefore reported 2 for

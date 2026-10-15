@@ -368,6 +368,7 @@ keeps bd's verbs and flags. The hooks here run either. Which one is a per-checko
 tracked file:
 
 ```bash
+tools/store-cli-git-hooks.sh       # bd's own git hooks must stop under cairn too (see below)
 echo cairn > .claude/store-cli     # commit it; `bd` switches back
 ```
 
@@ -383,8 +384,17 @@ in any mode (a keyless `cairn remember` is refused like a keyless `bd remember`;
 --claim` is recorded). With `cairn`, the prime hook prints the rules with `cairn`, takes the
 workflow context from `cairn prime` up to its first memory heading and tiers the memories from
 `cairn export`, and the pre-commit feeds `cairn memories --json` to bd-memgraph and stops before
-bd's managed block. The installer never writes the file. Moving a store over (and back) is
-cairn's job: see its README, "Moving a bd store over".
+bd's managed block. bd writes four more git hooks itself (`post-checkout`, `post-merge`,
+`pre-push`, `prepare-commit-msg`, by `bd hooks install --shared`); `tools/store-cli-git-hooks.sh`
+puts the same stop in each, and must run again after any `bd hooks install`. The installer never
+writes `.claude/store-cli`. Moving a store over (and back) is cairn's job: see its README,
+"Moving a bd store over".
+
+Without the file nothing is write-blocked and bd runs as before, but three things changed for
+every install: a keyless `cairn remember` is refused and a `cairn update --claim` is recorded
+(the parser knows both names); the scripts gate and the stop hook also count an in-progress issue
+whose assignee is the session's own session-scoped actor (a claim made as `bd update "$id"
+--claim` was invisible before); and the in-progress listings pass `--limit 0`.
 
 ## Known limitations
 
