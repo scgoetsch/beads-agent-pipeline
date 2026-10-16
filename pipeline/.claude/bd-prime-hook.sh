@@ -220,9 +220,10 @@ emit_session_rules() {
   echo "4. Use \`$STORE_CLI close <id>\` when work is complete."
   echo "5. Use \`$STORE_CLI remember --key <slug>\` for persistent knowledge — never MEMORY.md files."
   if [ "$STORE_MODE" = cairn ]; then
-    echo "6. This checkout's store is written with \`cairn\` (.claude/store-cli). \`bd\` is frozen here: its writes"
-    echo "   (\`bd dolt push\` included) are BLOCKED; reads still work but show the old store. Where AGENTS.md or a"
-    echo "   memory says \`bd <verb>\`, run \`cairn <verb>\` with the same flags."
+    echo "6. This checkout's store is written with \`cairn\` (.claude/store-cli). \`bd\` is frozen here: EVERY bd call"
+    echo "   is BLOCKED (\`bd dolt push\` included; a read would answer from the old store without saying so)."
+    echo "   Where AGENTS.md or a memory says \`bd <verb>\`, run \`cairn <verb>\` with the same flags; the gate names"
+    echo "   the cairn verb, or says cairn has none (search, label, history, ...)."
   fi
   [ -n "$STORE_CLI_BAD" ] && echo "⚠ .claude/store-cli says '$STORE_CLI_BAD' (expected bd or cairn) — using bd, nothing write-blocked."
   echo ""

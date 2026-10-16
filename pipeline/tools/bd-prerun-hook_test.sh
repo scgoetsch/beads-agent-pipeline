@@ -288,7 +288,7 @@ export BD_STUB_JSON='[{"id":"v-1","title":"t","assignee":"u"}]'
 PATH="$STUB:$PATH" HOOK_SID=a1 BEADS_ACTOR=u blocks "a bare user name is shared by every session: not mine"            "python3 scripts/run.py"
 export BD_STUB_JSON="[]"
 
-echo "### .claude/store-cli = cairn: bd's store is frozen, bd writes are blocked, cairn answers the gate"
+echo "### .claude/store-cli = cairn: bd's store is frozen, every bd call is blocked, cairn answers the gate"
 SW="$STUB/storews"; mkdir -p "$SW/.claude" "$STUB/cairnonly"; cp "$REAL_HOOK" "$SW/.claude/"
 printf 'cairn\n' > "$SW/.claude/store-cli"
 HOOK="$SW/.claude/bd-prerun-hook.sh"
@@ -303,11 +303,49 @@ for c in "bd link w-1 w-2" "bd rename w-1 w-9" "bd set-state w-1 x=y" "bd batch 
          "bd sql 'delete from issues'" "bd shadow sync"; do
   PATH="$STUB:$PATH" blocks "blocked (not a read): $c" "$c"
 done
-for c in "bd show w-1" "bd list --status=in_progress" "bd ready" "bd dolt status" "bd close --help" \
-         "bd export --all" "cairn close w-1" "cairn update w-1 --claim" "git commit -m 'bd close w-1'" \
-         "bd dep tree w-1" "bd dolt remote list" "bd doctor" "bd --version" "bd memories key" "bd comments w-1"; do
+# workspace-7m8.16: a bd READ answers from the frozen store without saying so. Blocked too.
+for c in "bd show w-1" "bd list --status=in_progress" "bd ready" "bd dolt status" "bd export --all" \
+         "bd dep tree w-1" "bd dolt remote list" "bd doctor" "bd memories key" "bd comments w-1" \
+         "bd search frozen" "bd history w-1" "bd --json list" "env X=1 bd show w-1" "bash -c 'bd ready'" \
+         "echo ok && bd show w-1" $'echo don\'t; bd show w-1' "bd close w-1 # frozen-store-ok" \
+         "bd update w-1 --claim  # frozen-store-ok" "bd dolt push # frozen-store-ok"; do
+  PATH="$STUB:$PATH" blocks "blocked (a read of the frozen store, or a write however marked): $c" "$c"
+done
+for c in $'echo don\'t; env X=1 bd show w-1' $'echo don\'t; /usr/local/bin/bd ready' $'echo don\'t; sudo bd list' \
+         $'echo don\'t; env X=1 bd close w-1 # frozen-store-ok' \
+         $'cat > f <<EOF\nsee # frozen-store-ok\nEOF\nbd show w-1'; do
+  PATH="$STUB:$PATH" blocks "blocked (fallback unwraps; a marker in a data heredoc is text): $c" "$c"
+done
+for c in "bd close --help" "bd --version" "bd version" "bd help" "bd help close" "cairn close w-1" \
+         "cairn update w-1 --claim" "cairn show w-1" "git commit -m 'bd close w-1'" \
+         "bd show w-1 # frozen-store-ok" "bd export --all -o /tmp/x.jsonl  # frozen-store-ok" \
+         "bd dolt status #frozen-store-ok" $'echo don\'t; bd show w-1 # frozen-store-ok'; do
   PATH="$STUB:$PATH" allows "allowed: $c" "$c"
 done
+run_hook "bd show w-1"
+if grep -q 'READ THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn show' "$ERRF" && grep -q 'frozen-store-ok' "$ERRF"
+then ok "a blocked read names the cairn verb and the escape"; else bad "a blocked read names the cairn verb and the escape" "$(cat "$ERRF")"; fi
+run_hook "bd search frozen"
+if grep -q 'READ THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn has no `search`' "$ERRF"
+then ok "a blocked read says when cairn has no such verb"; else bad "a blocked read says when cairn has no such verb" "$(cat "$ERRF")"; fi
+run_hook "bd update w-1 --claim"
+if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn update' "$ERRF"
+then ok "a blocked write names the cairn verb"; else bad "a blocked write names the cairn verb" "$(cat "$ERRF")"; fi
+run_hook "bd tag w-1 urgent"
+if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn update --add-label' "$ERRF"
+then ok "a blocked write names the cairn form when the verb differs"; else bad "a blocked write names the cairn form" "$(cat "$ERRF")"; fi
+run_hook "bd label add w-1 x"
+if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn has no `label`' "$ERRF"
+then ok "a blocked write says when cairn has no such verb"; else bad "a blocked write says when cairn has no such verb" "$(cat "$ERRF")"; fi
+run_hook "bd show w-1; bd close w-2"
+if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF"; then ok "a read and a write in one command: the write is reported"
+else bad "a read and a write in one command: the write is reported" "$(cat "$ERRF")"; fi
+run_hook "bd close w-2; bd show w-1"
+if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF"; then ok "…in either order"
+else bad "…in either order" "$(cat "$ERRF")"; fi
+run_hook $'echo don\'t; bd close w-2; bd show w-1'
+if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF"; then ok "…and through the line fallback"
+else bad "…and through the line fallback" "$(cat "$ERRF")"; fi
 cp "$STUB/bd" "$STUB/cairnonly/cairn"
 printf '#!/bin/sh\nexit 1\n' > "$STUB/cairnonly/bd"; chmod +x "$STUB/cairnonly/bd"
 BD_STUB_JSON='[{"id":"w-9","title":"t","assignee":"u/claude/abcd1234"}]' PATH="$STUB/cairnonly:$PATH" \
@@ -315,11 +353,16 @@ BD_STUB_JSON='[{"id":"w-9","title":"t","assignee":"u/claude/abcd1234"}]' PATH="$
 run_hook "cairn remember 'x'"
 if grep -q 'cairn remember --key' "$ERRF"; then ok "the remember gate names cairn"; else bad "the remember gate names cairn" "$(cat "$ERRF")"; fi
 
-echo "### .claude/store-cli = bd (after a rollback): cairn writes are blocked"
+echo "### .claude/store-cli = bd (after a rollback): cairn writes are blocked, cairn reads pass (its shadow mirrors bd)"
 printf 'bd\n' > "$SW/.claude/store-cli"
 PATH="$STUB:$PATH" blocks "blocked: cairn update"  "cairn update w-1 --claim"
 PATH="$STUB:$PATH" blocks "blocked: cairn migrate" "cairn migrate"
+PATH="$STUB:$PATH" blocks "blocked: cairn update, however marked" "cairn update w-1 --claim # frozen-store-ok"
+run_hook "cairn update w-1 --claim"
+if grep -q 'same verbs and flags' "$ERRF"; then ok "…and the message points at bd"; else bad "…and the message points at bd" "$(cat "$ERRF")"; fi
 PATH="$STUB:$PATH" allows "allowed: cairn show"    "cairn show w-1"
+PATH="$STUB:$PATH" allows "allowed: cairn ready"   "cairn ready"
+PATH="$STUB:$PATH" allows "allowed: cairn export"  "cairn export --all"
 PATH="$STUB:$PATH" allows "allowed: cairn shadow run (the mirror of bd)" "cairn shadow run --quiet"
 PATH="$STUB:$PATH" blocks "blocked: cairn remember" "cairn remember --key k v"
 PATH="$STUB:$PATH" allows "allowed: bd close"      "bd close w-1"

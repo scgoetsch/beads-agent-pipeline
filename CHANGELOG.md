@@ -10,9 +10,13 @@
   parsed on every install, so `cairn remember` without `--key` is refused and `cairn update
   --claim` is recorded even where nobody opted in. The prime hook no longer runs cairn's prime
   through bd's `## Persistent Memories`…`## Core Rules` filter, which with cairn's layout would
-  have deleted from the first memory heading to the end. While the file is set, the prerun hook
-  lets the other CLI READ only (an allowlist of read verbs: a write verb nobody listed is blocked
-  too). New `tools/store-cli-git-hooks.sh` puts the same stop into bd's own four git hooks. New
+  have deleted from the first memory heading to the end. While the file says `bd`, the prerun hook
+  lets cairn READ only (an allowlist of read verbs: a write verb nobody listed is blocked too; the
+  shadow mirrors bd, so its reads are current). While it says `cairn`, every bd call is blocked,
+  reads included: bd's store is frozen at the cutover and would answer from that day without
+  saying so (workspace-7m8.16). The message names the cairn verb that answers instead, or says
+  cairn has none; `# frozen-store-ok` in the command lets a read through on purpose, never a
+  write. New `tools/store-cli-git-hooks.sh` puts the same stop into bd's own four git hooks. New
   `tools/pre-commit-store-cli_test.sh` and `tools/store-cli-git-hooks_test.sh`; the prerun, prime
   and stop suites cover every mode.
 - **A claim the session record missed is still this session's.** The scripts gate and the stop

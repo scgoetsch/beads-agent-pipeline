@@ -2,7 +2,8 @@
 # PreToolUse hook — blocks bare pkill/killall and a keyless `bd remember`, gates analysis
 # scripts on an in_progress issue (a knob, see SCRIPT_DIRS_RE below), records what each
 # session claims (read by bd-stop-hook.sh), and, when .claude/store-cli names the store's CLI,
-# blocks writes through the other one. Both CLIs (bd, and cairn, its replacement) are parsed.
+# blocks the other one: every bd call under cairn (bd's store is frozen and would answer
+# silently), cairn's writes under bd. Both CLIs (bd, and cairn, its replacement) are parsed.
 #
 # Claude Code passes the tool call as JSON on stdin:
 #   { "tool_name": "Bash", "tool_input": { "command": "..." }, ... }
@@ -44,8 +45,11 @@ command=${parsed#*$'\n'}
 # .claude/store-cli holds one word, bd or cairn. It is TRACKED, so every session, every harness and
 # the git hooks agree; there is deliberately no environment override (one session must not write
 # a store the others have left). Absent: the CLI is bd and neither name is write-blocked, which is
-# how every install that never opted in keeps working. Present: the named CLI runs, and a write
-# through the OTHER name is blocked below, because it would land in a store nobody reads.
+# how every install that never opted in keeps working. Present: the named CLI runs, and the OTHER
+# name is blocked below: under cairn every bd call (bd's store is frozen: a write would land where
+# nobody reads, a read answers from the past without saying so); under bd, cairn's writes (its
+# shadow is rebuilt from bd, so its reads are current). `# frozen-store-ok` in the command lets a
+# bd READ through on purpose; nothing lets a write through.
 # Keep this block identical in bd-prime-hook.sh, bd-stop-hook.sh and .beads-hooks/pre-commit.
 STORE_MODE=""
 if [ -f "$WS/.claude/store-cli" ]; then
@@ -86,14 +90,28 @@ policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" "$STORE_MODE" <<'PY'
 import os, re, shlex, sys
 
 STORE_CLIS = ('bd', 'cairn')
-# The other CLI, whose writes are blocked; none when .claude/store-cli is absent.
+# The other CLI, which is blocked; none when .claude/store-cli is absent.
 FOREIGN = {'bd': 'cairn', 'cairn': 'bd'}.get(sys.argv[3])
-# What the OTHER CLI may still do: read. An allowlist, so a write verb nobody listed (bd has dozens:
-# link, rename, set-state, batch, mol, ...) is blocked too. Some verbs read in one form only.
+# Read verbs, an allowlist: a write verb nobody listed (bd has dozens: link, rename, set-state,
+# batch, mol, ...) counts as a write. Some verbs read in one form only. Under bd, cairn may read
+# (its shadow mirrors bd). Under cairn, bd may not even read: its store is frozen at the cutover
+# and answers from the past without saying so (workspace-7m8.16). `# frozen-store-ok` in the
+# command lets that command's bd reads through, visibly; a write never.
 READ_VERBS = {'show', 'list', 'ready', 'blocked', 'search', 'query', 'stats', 'export', 'memories',
               'recall', 'prime', 'version', 'help', 'history', 'where', 'status', 'info', 'stale',
               'orphans', 'lint', 'preflight', 'count', 'graph', 'comments', 'dep', 'dolt', 'doctor',
               'config', 'human', 'types', 'check', 'shadow', 'seed-from-dolt'}
+FROZEN_OK = False   # set below, on the command with its data heredocs removed
+# bd verbs and the cairn verb that answers instead (cairn --help vs bd --help, 2026-10-16). A bd
+# verb missing here has no cairn equivalent; the gate's message says so.
+CAIRN_FOR = {'ready': 'ready', 'list': 'list', 'blocked': 'blocked', 'show': 'show',
+             'memories': 'memories', 'recall': 'recall', 'prime': 'prime', 'export': 'export',
+             'status': 'stats', 'where': 'where', 'create': 'create', 'update': 'update',
+             'close': 'close', 'reopen': 'reopen', 'note': 'note', 'comment': 'comment',
+             'comments': 'comments', 'defer': 'defer', 'undefer': 'undefer', 'delete': 'delete',
+             'dep': 'dep', 'remember': 'remember', 'forget': 'forget', 'import': 'import',
+             'tag': 'update --add-label', 'priority': 'update -p', 'assign': 'update --assignee',
+             'q': 'create --silent', 'children': 'list --parent'}
 
 script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*') if sys.argv[2] else None  # None: gate off
 assignment = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
@@ -187,15 +205,8 @@ def claim_call(name, args):
         elif ISSUE_ID.fullmatch(a): ids.add(a)
     return ids if claim else set()
 
-def foreign_write(name, args):
-    """True for a write through the CLI .claude/store-cli does NOT name. Help is not a write."""
-    if FOREIGN is None or name != FOREIGN: return False
-    if any(a in ('-h', '--help') for a in args): return False
-    i = 0
-    while i < len(args) and args[i].startswith('-'):
-        i += 2 if args[i] in BD_GLOBAL_VALUED else 1
-    if i >= len(args): return False                    # flags only: --version, --help
-    verb, rest = args[i], args[i + 1:]
+def is_write(verb, rest):
+    """Whether this verb, with these arguments, writes the store."""
     sub = next((a for a in rest if not a.startswith('-')), None)
     if verb not in READ_VERBS: return True
     if verb == 'ready': return '--claim' in rest
@@ -208,9 +219,31 @@ def foreign_write(name, args):
     if verb == 'shadow': return FOREIGN != 'cairn'      # cairn's read-only mirror of bd
     return False
 
+def foreign_call(name, args):
+    """None, or ('write'|'read', verb) for a call through the CLI .claude/store-cli does NOT
+    name that must be blocked. Help and --version touch no store and pass. A read through bd
+    under cairn is blocked unless the command carries `# frozen-store-ok`; a read through cairn
+    under bd passes (the shadow is bd's mirror)."""
+    if FOREIGN is None or name != FOREIGN: return None
+    if any(a in ('-h', '--help') for a in args): return None
+    i = 0
+    while i < len(args) and args[i].startswith('-'):
+        i += 2 if args[i] in BD_GLOBAL_VALUED else 1
+    if i >= len(args): return None                     # flags only: --version, --help
+    verb, rest = args[i], args[i + 1:]
+    if verb in ('help', 'version'): return None
+    if is_write(verb, rest): return ('write', verb)
+    if FOREIGN == 'bd' and not FROZEN_OK: return ('read', verb)
+    return None
+
+def worse(a, b):
+    """Of two gate results keep the one to report: a write over a read over nothing."""
+    rank = {None: 0, 'read': 1, 'write': 2}
+    return a if rank[a[0] if a else None] >= rank[b[0] if b else None] else b
+
 def inspect(command, depth=0):
     """-> (bare kill, analysis script, bd remember call, bd remember WITHOUT --key, foreign
-    write, claimed ids)."""
+    call (None or (kind, verb)), claimed ids)."""
     if depth > 8: raise ValueError('nested shell command limit exceeded')
     lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()\n')
     lexer.whitespace = ' \t\r'; lexer.whitespace_split = True
@@ -221,9 +254,11 @@ def inspect(command, depth=0):
             unit = []
         else: unit.append(token)
     if unit: units.append(unit)
-    flags = [False] * 5 + [set()]
+    flags = [False] * 4 + [None, set()]
     def merge(more):
-        for k, v in enumerate(more): flags[k] |= v
+        for k, v in enumerate(more):
+            if k == 4: flags[k] = worse(flags[k], v)
+            else: flags[k] |= v
     # Retain the previous guard's conservative coverage of literal command substitutions,
     # including ones shlex folds into a quoted argument. No substitution is ever evaluated.
     for sub in re.finditer(r'\$\(([^()]*)\)|`([^`]*)`', command):
@@ -235,7 +270,7 @@ def inspect(command, depth=0):
         if name in ('pkill', 'killall') and not safe_kill(name, args): flags[0] = True
         is_remember, keyless = remember_call(name, args)
         if is_remember: flags[2] = True; flags[3] |= keyless
-        flags[4] |= foreign_write(name, args)
+        flags[4] = worse(flags[4], foreign_call(name, args))
         flags[5] |= claim_call(name, args)
         if name in ('bash', 'sh', 'zsh'):
             for i, arg in enumerate(args):
@@ -281,10 +316,13 @@ def line_fallback(command):
         segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
         if re.search(r'--claim\b|(?:--status|-s)[ \t=]+in_progress\b', segment):
             claims |= {w for w in segment.split() if ISSUE_ID.fullmatch(w)}
-    foreign = False
+    foreign = None
     if FOREIGN:
-        for m in re.finditer(pos + re.escape(FOREIGN) + r'[ \t]+(\S+)([^;&|\n]*)', command, re.M):
-            foreign |= foreign_write(FOREIGN, [m[1], *m[2].split()])
+        # The tokenised path unwraps `env X=1 bd`, `sudo bd`, `/usr/bin/bd`; here the same shapes are
+        # matched by regex, so an unbalanced quote elsewhere in the command does not open the gate.
+        lead = r'(?:(?:sudo|env|command|exec|nohup)[ \t]+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*(?:\S*/)?'
+        for m in re.finditer(pos + lead + re.escape(FOREIGN) + r'[ \t]+(\S+)([^;&|\n]*)', command, re.M):
+            foreign = worse(foreign, foreign_call(FOREIGN, [m[1], *m[2].split()]))
     return bare, script, bool(calls), keyless, foreign, claims
 
 SHELLS = ('bash', 'sh', 'zsh', 'dash', 'ksh', 'ssh')
@@ -315,12 +353,19 @@ def drop_data_heredocs(command):
     return '\n'.join(out)
 
 text = drop_data_heredocs(sys.argv[1])
+# The escape is read from the command text, not from tokens (shlex drops shell comments), and
+# after the data heredocs are gone: a marker inside text that is only being written is none.
+FROZEN_OK = re.search(r'#[ \t]*frozen-store-ok\b', text) is not None
 try:
     flags = inspect(text)
 except (ValueError, re.error) as exc:
     print('bd-prerun-hook: command not tokenizable (' + str(exc) + '); judged by the line-based fallback checks instead', file=sys.stderr)
     flags = line_fallback(text)
-print(*(int(x) for x in flags[:5]), ','.join(sorted(flags[5])) or '-')
+foreign = flags[4]
+# One word: kind:verb:hint, the hint with ~ for spaces (the shell reads the policy word by word).
+print(*(int(x) for x in flags[:4]),
+      ':'.join((foreign[0], foreign[1], CAIRN_FOR.get(foreign[1], '').replace(' ', '~'))) if foreign else '-',
+      ','.join(sorted(flags[5])) or '-')
 PY
 ) || exit 0   # python itself failed: open, as the header says
 policy=${policy//$'\r'/}
@@ -352,21 +397,45 @@ KILLGATE
     exit 2
 fi
 
-# ── GATE: a write through the CLI this checkout has left ───────────────────────
-# After a move (.claude/store-cli = cairn) bd's store is frozen: nothing reads it, so a `bd update`
-# typed from habit, a transcript or an old memory would succeed and vanish. And after a rollback
-# (store-cli = bd) the same holds for cairn. Reads of the other store stay allowed.
-if [ "$foreign" -eq 1 ]; then
+# ── GATE: a call through the CLI this checkout has left ────────────────────────
+# After a move (.claude/store-cli = cairn) bd's store is frozen: nothing writes it and nothing
+# syncs it, so a `bd update` typed from habit, a transcript or an old memory would succeed and
+# vanish, and a `bd show` would answer from the day of the cutover as if that were now (its output
+# says nothing). Every bd call is blocked; `# frozen-store-ok` in the command lets a read through
+# on purpose (workspace-7m8.16). After a rollback (store-cli = bd) cairn's writes are blocked the
+# same way; its reads pass, because its shadow is rebuilt from bd.
+if [ "$foreign" != - ]; then
     other=$([ "$STORE_CLI" = cairn ] && echo bd || echo cairn)
-    cat >&2 <<FGATE
+    kind=${foreign%%:*}; rest=${foreign#*:}; verb=${rest%%:*}; hint=${rest#*:}; hint=${hint//\~/ }
+    if [ "$STORE_CLI" = cairn ]; then
+        if [ -n "$hint" ]; then instead="Run it with cairn instead: \`cairn $hint ...\` (bd's flags carry over)."
+        else instead="cairn has no \`$verb\`: bd verbs outside the agent contract were not carried over (cairn --help lists what is)."; fi
+    else
+        instead="Run the same command with bd instead (same verbs and flags)."
+    fi
+    if [ "$kind" = write ]; then
+        cat >&2 <<FGATE
 ⛔ WRITE THROUGH $other BLOCKED — this checkout's store is written with $STORE_CLI
 
 .claude/store-cli names $STORE_CLI. $other's store is frozen here: a write to it succeeds and
-is never seen again. Run the same command with $STORE_CLI instead (same verbs and flags).
+is never seen again. $instead
 
 (Gate: .claude/bd-prerun-hook.sh. Tests: tools/bd-prerun-hook_test.sh)
 Blocked command: $command
 FGATE
+    else
+        cat >&2 <<FGATE
+⛔ READ THROUGH bd BLOCKED — this checkout's store moved to cairn
+
+.claude/store-cli names cairn. bd's store is frozen at the cutover and nothing updates it:
+\`bd $verb\` would answer from that old copy as if it were current, and its output would not say so.
+$instead
+To read the frozen bd store on purpose, say so in the command:  $command  # frozen-store-ok
+
+(Gate: .claude/bd-prerun-hook.sh. Tests: tools/bd-prerun-hook_test.sh)
+Blocked command: $command
+FGATE
+    fi
     exit 2
 fi
 

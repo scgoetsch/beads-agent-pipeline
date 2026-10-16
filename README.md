@@ -375,13 +375,18 @@ echo cairn > .claude/store-cli     # commit it; `bd` switches back
 | `.claude/store-cli` | Runs | Blocked by the prerun hook |
 |---|---|---|
 | absent (every install that never opted in) | `bd` | nothing |
-| `bd` | `bd` | writes through `cairn` |
-| `cairn` | `cairn` | writes through `bd`, `bd dolt push` included |
+| `bd` | `bd` | writes through `cairn` (its reads pass: the shadow mirrors bd) |
+| `cairn` | `cairn` | every `bd` call, `bd dolt push` included; `# frozen-store-ok` in the command lets a read through |
 
 There is no environment override on purpose: every session, harness and git hook of the checkout
-must agree, or one of them writes a store the others have left. The prerun hook parses both names
-in any mode (a keyless `cairn remember` is refused like a keyless `bd remember`; a `cairn update
---claim` is recorded). With `cairn`, the prime hook prints the rules with `cairn`, takes the
+must agree, or one of them writes a store the others have left. Under `cairn`, bd's store is frozen
+at the cutover and nothing syncs it, so a `bd show` would answer from that day as if it were now
+and say nothing: reads are blocked like writes, and the message names the cairn verb that answers
+instead, or says cairn has none (bd's `search`, `label`, `history`, `supersede`, `link`, `rename`,
+`stale`, `orphans`, `lint`, `doctor`, `human`, `formula`/`mol` were not carried over). `bd --version`
+and `bd <verb> --help` touch no store and pass. The prerun hook parses both names in any mode (a
+keyless `cairn remember` is refused like a keyless `bd remember`; a `cairn update --claim` is
+recorded). With `cairn`, the prime hook prints the rules with `cairn`, takes the
 workflow context from `cairn prime` up to its first memory heading and tiers the memories from
 `cairn export`, and the pre-commit feeds `cairn memories --json` to bd-memgraph and stops before
 bd's managed block. bd writes four more git hooks itself (`post-checkout`, `post-merge`,
