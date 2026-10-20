@@ -432,6 +432,9 @@ case "$1" in
   export)
     out=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done
     printf '{"_type":"memory","key":"alpha-key","value":"ALPHA-BODY sentinel"}\n{"_type":"memory","key":"beta-key","value":"BETA-BODY sentinel"}\n' > "$out" ;;
+  sync)
+    [ -n "${CAIRN_SYNC_SAYS:-}" ] || exit 0
+    echo "$CAIRN_SYNC_SAYS"; exit "${CAIRN_SYNC_RC:-0}" ;;
   *) exit 0 ;;
 esac
 STUB
@@ -446,6 +449,13 @@ chk "cairn's own memory tier is not (the hook tiers)" "$(grep -c 'CAIRN-OWN-TIER
 chk "the hook's index is built from cairn's export"  "$(grep -c 'retrieve full text with `cairn memories <keyword>` or `cairn recall <key>`' <<<"$out")" 1
 chk "no fallback banner"                             "$(grep -c 'FULL .* prime dump' <<<"$out")" 0
 chk "bd was never called"                            "$(grep -c 'bd must not be called' "$T/hook.err")" 0
+chk "a store in step says nothing about sync"        "$(grep -c 'cairn sync\|brought up to them' <<<"$out")" 0
+out=$( (cd "$T/ws" && CAIRN_SYNC_SAYS="Synced /x/.cairn from /x/.beads (2 events in the files the store does not have)" PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "a store caught up at session start is said"     "$(grep -c 'was behind the tracked exports and was brought up' <<<"$out")" 1
+chk "  …with what sync said"                         "$(grep -c '2 events in the files' <<<"$out")" 1
+out=$( (cd "$T/ws" && CAIRN_SYNC_SAYS="cairn: error: the histories part at event 7" CAIRN_SYNC_RC=2 PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "a refused sync is loud at the top"              "$(grep -c 'cairn sync REFUSED' <<<"$out"):$(grep -c 'part at event 7' <<<"$out")" "1:1"
+chk "  …and the session is still primed"             "$(grep -c 'CAIRN-WORK sentinel' <<<"$out")" 1
 out=$( (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
 chk "cairn selected but missing or failing: loud, names cairn" "$(grep -c 'cairn export --include-memories failed' <<<"$out")" 1
 printf 'beads\n' > "$T/ws/.claude/store-cli"

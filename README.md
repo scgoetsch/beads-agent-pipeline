@@ -395,7 +395,9 @@ puts the same stop in each, and must run again after any `bd hooks install`. bd 
 and `bd setup` also write agent-harness hooks that run bd directly (`bd prime --hook-json` in
 `.claude/settings.json`, `bd codex-hook` in `.codex/hooks.json`, `bd cursor-hook` in
 `.cursor/hooks.json`); `tools/store-cli-harness-hooks.sh` prefixes each with a test that skips it
-under cairn, and must run again after any `bd init` or `bd setup`. The installer never
+under cairn, and must run again after any `bd init` or `bd setup`. Under cairn the post-merge and
+post-checkout stanzas, and the session-start hook, also run `cairn sync`, which brings a clone's
+store up to the exports a pull brought in (cairn README, "More than one clone"). The installer never
 writes `.claude/store-cli`. Moving a store over (and back) is cairn's job: see its README,
 "Moving a bd store over".
 

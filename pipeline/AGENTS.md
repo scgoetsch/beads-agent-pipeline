@@ -57,7 +57,10 @@ where this file says `bd <verb>`, run `cairn <verb>` with the same flags**: read
 show, create, update (`--claim` included), close, reopen, dep, note, comment(s), defer, delete,
 remember, recall, memories, export, prime. cairn has no `dolt push`. The prerun hook blocks every
 typed `bd` call under cairn, reads included (a frozen store answers from the day of the move as
-if it were now), and its message names the cairn verb to use instead.
+if it were now), and its message names the cairn verb to use instead. Another clone of this repo
+has a cairn store of its own: `cairn sync` brings it up to the exports a pull brought in, and the
+session-start and post-merge / post-checkout hooks run it. While a store is behind those exports,
+or two clones both wrote, cairn refuses writes and names the fix; there is no merge.
 
 ### Rules
 

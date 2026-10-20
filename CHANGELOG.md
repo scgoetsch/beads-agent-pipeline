@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Under cairn, a clone's store follows the exports git brings in.** A second clone has a cairn
+  store of its own, and nothing brought it up to another clone's pushed work: it listed finished
+  work as ready, and the export refresh would commit a revert of it (workspace-7m8.21). cairn
+  `d75b625` adds `cairn sync` and refuses writes while a store is behind or diverged. Here the
+  session-start hook runs `cairn sync` first and says at the top of the payload when it caught up
+  or refused; the store-CLI stanza `tools/store-cli-git-hooks.sh` puts into bd's git hooks runs it
+  in post-merge and post-checkout (never failing the git command), and the tool now replaces an
+  older stanza and leaves the pipeline's own pre-commit alone. AGENTS.md says so in "bd or cairn".
 - **The agent-harness hooks bd writes stop under cairn.** bd 1.3's `bd init` writes hooks that run
   bd directly: a SessionStart `bd prime --hook-json` in `.claude/settings.json`, `bd codex-hook`
   in `.codex/hooks.json`, `bd cursor-hook` in `.cursor/hooks.json`. After a move to cairn each of

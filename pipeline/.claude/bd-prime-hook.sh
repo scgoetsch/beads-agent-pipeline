@@ -279,6 +279,22 @@ fallback_full() {
   fi
   echo ""; echo "$FOOTER"
 }
+# Under cairn, catch up first (workspace-7m8.21): another clone's work may have come in with a
+# pull, and every read below would show the store as it was. `cairn sync` rebuilds a store that
+# is behind the tracked exports, builds one in a fresh clone, leaves a store that is equal or
+# ahead alone, and refuses when two clones both wrote; it is said at the top of the payload.
+: > "$TMPD/s.sync"
+if [ "$STORE_CLI" = cairn ]; then
+  if sync_out=$(cairn sync 2>&1); then
+    case $sync_out in Synced*)
+      { echo "# ℹ The cairn store was behind the tracked exports and was brought up to them:"
+        echo "#   $sync_out"; echo ""; } > "$TMPD/s.sync" ;;
+    esac
+  else
+    { echo "# 🚨 cairn sync REFUSED — the store and .beads/ are out of step, and writes are refused until"
+      echo "#    that is resolved: $(printf '%s' "$sync_out" | head -c 600)"; echo ""; } > "$TMPD/s.sync"
+  fi
+fi
 command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
 [ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
 "$STORE_CLI" export --include-memories -o "$MM" 2>/dev/null || { fallback_full "$STORE_CLI export --include-memories failed"; exit 0; }
@@ -290,7 +306,7 @@ command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; 
 #
 # Every section is built into its own scratch file first, so the whole payload can be measured
 # against the budget and reordered before a byte of it is printed.
-emit_hooks_unwired > "$TMPD/s.unwired"
+{ emit_hooks_unwired; cat "$TMPD/s.sync"; } > "$TMPD/s.unwired"
 emit_session_rules > "$TMPD/s.rules"
 emit_site_checks   > "$TMPD/s.site"
 # bd workflow context + command reference, with the full memory dump removed
