@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The agent-harness hooks bd writes stop under cairn.** bd 1.3's `bd init` writes hooks that run
+  bd directly: a SessionStart `bd prime --hook-json` in `.claude/settings.json`, `bd codex-hook`
+  in `.codex/hooks.json`, `bd cursor-hook` in `.cursor/hooks.json`. After a move to cairn each of
+  them put bd's frozen store into the session as if it were current, and the prerun hook cannot
+  see them (it sees typed calls, not hooks; found on a bd 1.3.0 cutover, workspace-7m8.22). New
+  `tools/store-cli-harness-hooks.sh` prefixes every hook command whose first word is `bd` with a
+  test that skips it while `.claude/store-cli` says `cairn` and does nothing otherwise, so the
+  hooks follow the switch both ways; `--check` names the unguarded ones. Run it before the switch
+  and after any `bd init` or `bd setup`. New `tools/store-cli-harness-hooks_test.sh`.
 - **Under cairn the memory graph is the store's own, and agents are told how to work in either
   store.** The pre-commit's memory-graph stanza runs `cairn check` where `.claude/store-cli` says
   `cairn` (the same hard link errors, plus the store's own integrity: dangling dependencies, a

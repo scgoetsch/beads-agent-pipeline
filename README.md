@@ -369,6 +369,7 @@ tracked file:
 
 ```bash
 tools/store-cli-git-hooks.sh       # bd's own git hooks must stop under cairn too (see below)
+tools/store-cli-harness-hooks.sh   # …and the Claude/Codex/Cursor hooks bd init writes (see below)
 echo cairn > .claude/store-cli     # commit it; `bd` switches back
 ```
 
@@ -388,10 +389,13 @@ and `bd <verb> --help` touch no store and pass. The prerun hook parses both name
 keyless `cairn remember` is refused like a keyless `bd remember`; a `cairn update --claim` is
 recorded). With `cairn`, the prime hook prints the rules with `cairn`, takes the
 workflow context from `cairn prime` up to its first memory heading and tiers the memories from
-`cairn export`, and the pre-commit feeds `cairn memories --json` to bd-memgraph and stops before
-bd's managed block. bd writes four more git hooks itself (`post-checkout`, `post-merge`,
+`cairn export`, and the pre-commit runs `cairn check` and stops before bd's managed block. bd writes four more git hooks itself (`post-checkout`, `post-merge`,
 `pre-push`, `prepare-commit-msg`, by `bd hooks install --shared`); `tools/store-cli-git-hooks.sh`
-puts the same stop in each, and must run again after any `bd hooks install`. The installer never
+puts the same stop in each, and must run again after any `bd hooks install`. bd 1.3's `bd init`
+and `bd setup` also write agent-harness hooks that run bd directly (`bd prime --hook-json` in
+`.claude/settings.json`, `bd codex-hook` in `.codex/hooks.json`, `bd cursor-hook` in
+`.cursor/hooks.json`); `tools/store-cli-harness-hooks.sh` prefixes each with a test that skips it
+under cairn, and must run again after any `bd init` or `bd setup`. The installer never
 writes `.claude/store-cli`. Moving a store over (and back) is cairn's job: see its README,
 "Moving a bd store over".
 
