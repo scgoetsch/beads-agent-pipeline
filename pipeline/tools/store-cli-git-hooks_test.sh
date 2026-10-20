@@ -52,7 +52,10 @@ bash "$T/r/tools/store-cli-git-hooks.sh" >/dev/null 2>&1
 chk "a run leaves it byte for byte"            "$(cksum < "$T/r/.beads-hooks/pre-commit")" "$before"
 echo "### the shipped post-merge and post-checkout (a repo bd never installed its hooks in; workspace-7m8.23)"
 rm -f "$T/r/.beads-hooks/"*
-for h in post-merge post-checkout; do cp -f "$(dirname "$SRC")/../.beads-hooks/$h" "$T/r/.beads-hooks/$h"; done
+# Without bd's block: in a checkout where bd has installed its hooks, ours are the lines above it.
+for h in post-merge post-checkout; do
+  sed '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d' "$(dirname "$SRC")/../.beads-hooks/$h" > "$T/r/.beads-hooks/$h"
+done
 chk "--check accepts both as shipped"          "$(bash "$T/r/tools/store-cli-git-hooks.sh" --check 2>&1 | grep -c .)" 0
 chk "a run leaves both as shipped"             "$(bash "$T/r/tools/store-cli-git-hooks.sh" | grep -c .)" 0
 printf 'cairn\n' > "$T/r/.claude/store-cli"
