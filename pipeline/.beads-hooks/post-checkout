@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# post-checkout — shipped by beads-agent-pipeline for a repo bd never installed its hooks in
+# (workspace-7m8.23). `bd hooks install --shared` appends its own marked block below and keeps
+# these lines; tools/store-cli-git-hooks.sh keeps the stanza current.
+# >>> store CLI: cairn stops here >>>
+# With .claude/store-cli = cairn bd's store is frozen; skip bd's managed block below (git runs this
+# hook from the top of the work tree). After a pull or a checkout, first bring this clone's cairn
+# store up to the exports git brought in; never fails the git command. Inserted by
+# tools/store-cli-git-hooks.sh.
+if [ -f .claude/store-cli ] && [ "$(tr -d ' \t\r\n' < .claude/store-cli)" = cairn ]; then
+  case ${0##*/} in post-merge|post-checkout) command -v cairn >/dev/null 2>&1 && cairn sync >&2 ;; esac
+  exit 0
+fi
+# <<< store CLI: cairn stops here <<<

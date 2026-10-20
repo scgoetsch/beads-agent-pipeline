@@ -50,4 +50,30 @@ before=$(cksum < "$T/r/.beads-hooks/pre-commit")
 chk "--check accepts it"                       "$(bash "$T/r/tools/store-cli-git-hooks.sh" --check 2>&1 | grep -c pre-commit)" 0
 bash "$T/r/tools/store-cli-git-hooks.sh" >/dev/null 2>&1
 chk "a run leaves it byte for byte"            "$(cksum < "$T/r/.beads-hooks/pre-commit")" "$before"
+echo "### the shipped post-merge and post-checkout (a repo bd never installed its hooks in; workspace-7m8.23)"
+rm -f "$T/r/.beads-hooks/"*
+for h in post-merge post-checkout; do cp -f "$(dirname "$SRC")/../.beads-hooks/$h" "$T/r/.beads-hooks/$h"; done
+chk "--check accepts both as shipped"          "$(bash "$T/r/tools/store-cli-git-hooks.sh" --check 2>&1 | grep -c .)" 0
+chk "a run leaves both as shipped"             "$(bash "$T/r/tools/store-cli-git-hooks.sh" | grep -c .)" 0
+printf 'cairn\n' > "$T/r/.claude/store-cli"
+: > "$T/calls"; for h in post-merge post-checkout; do (cd "$T/r" && PATH="$T/bin:$PATH" sh ".beads-hooks/$h" a b 2>/dev/null); done
+chk "under cairn each runs cairn sync"         "$(grep -c '^cairn sync$' "$T/calls")" 2
+rm -f "$T/r/.claude/store-cli"
+: > "$T/calls"; (cd "$T/r" && PATH="$T/bin:$PATH" sh .beads-hooks/post-merge a b); rc=$?
+chk "under bd it does nothing and exits 0"     "$rc:$(grep -c . "$T/calls")" "0:0"
+printf '#!/usr/bin/env sh\n%s\necho mine\n' "$old_stanza" > "$T/r/.beads-hooks/post-merge"
+chk "an older stanza without bd's block is updated" "$(bash "$T/r/tools/store-cli-git-hooks.sh" | grep -c 'post-merge store-CLI stanza updated')" 1
+chk "…and the hook's own lines are kept"       "$(tail -n 1 "$T/r/.beads-hooks/post-merge")" "echo mine"
+if command -v bd >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+  # What bd itself does to a hook that is already there: it must keep our lines ABOVE its block.
+  B="$T/bdrepo"; mkdir -p "$B/.beads-hooks" "$B/tools"; git -C "$B" init -q
+  (cd "$B" && bd init --quiet </dev/null >/dev/null 2>&1)
+  for h in post-merge post-checkout; do cp -f "$(dirname "$SRC")/../.beads-hooks/$h" "$B/.beads-hooks/$h"; done
+  cp -f "$SRC" "$B/tools/"
+  (cd "$B" && bd hooks install --shared </dev/null >/dev/null 2>&1)
+  if grep -q 'BEGIN BEADS INTEGRATION' "$B/.beads-hooks/post-merge"; then
+    # (bd also writes pre-push and friends without the stanza; only our two are in question here)
+    chk "real bd hooks install: our stanza stays above bd's block" "$(bash "$B/tools/store-cli-git-hooks.sh" --check 2>&1 | grep -c 'post-merge\|post-checkout')" 0
+  else echo "  SKIP  real bd hooks install did not write post-merge here"; fi
+fi
 echo; printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"; [ "$fail" -eq 0 ]

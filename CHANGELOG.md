@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A repo bd never installed its hooks in also catches up after a pull.** The `cairn sync` stanza
+  lived only in bd's own post-merge and post-checkout, which a repo that started on cairn does not
+  have: after a pull its store stayed behind until the next session start (the safety nets held:
+  writes and the export refresh refuse while behind; workspace-7m8.23). The pipeline now ships
+  `.beads-hooks/post-merge` and `post-checkout` holding only the store-CLI stanza; the installer
+  writes them only where absent and never offers a `.new` for one that is there.
+  `bd hooks install --shared` (1.1.2, tested) appends its block below and keeps them;
+  `tools/store-cli-git-hooks.sh` now also keeps the stanza current in a hook without bd's block.
+  Not fixed, written down: a fresh clone runs no hook until `core.hooksPath` is set in it.
 - **Under cairn, a clone's store follows the exports git brings in.** A second clone has a cairn
   store of its own, and nothing brought it up to another clone's pushed work: it listed finished
   work as ready, and the export refresh would commit a revert of it (workspace-7m8.21). cairn

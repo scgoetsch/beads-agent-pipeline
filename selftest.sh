@@ -65,7 +65,7 @@ grep -q 'AGENTS.md' "$T/.install.log" && ok "installer reports what it did" || b
 
 printf '\n\033[1m### the payload is actually there\033[0m\n'
 for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-prerun-hook.sh \
-         .claude/bd-stop-hook.sh .beads-hooks/pre-commit tools/sweep.sh tools/dolt-guard.sh \
+         .claude/bd-stop-hook.sh .beads-hooks/pre-commit .beads-hooks/post-merge .beads-hooks/post-checkout tools/sweep.sh tools/dolt-guard.sh \
          docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
          .claude/skills/README.md tools/check-no-agent-cache-paths.sh \
          tools/check-agent-docs-linked_test.sh .claude/site-checks/memory-curation-gate.sh \
@@ -316,6 +316,13 @@ chk "the absolute hooksPath is left alone" "$(canon_dir "$(git -C "$T" config co
 grep -q 'NONE of them fires' "$T/.install3.log" && bad "verify does not cry wolf on the absolute path" \
   || ok "verify does not cry wolf on the absolute path"
 git -C "$T" config core.hooksPath .beads-hooks
+# bd hooks install --shared on top of the shipped post-merge appends its block and keeps ours: a
+# re-run must neither offer a .new nor count it as a change (workspace-7m8.23).
+printf '\n# --- BEGIN BEADS INTEGRATION v1.1.2 ---\nbd hooks run post-merge "$@"\n# --- END BEADS INTEGRATION v1.1.2 ---\n' >> "$T/.beads-hooks/post-merge"
+"$SRC/install.sh" --no-shell "$T" >"$T/.install4.log" 2>&1
+grep -q 'nothing to do' "$T/.install4.log" && ok "still a no-op after bd appended its block to post-merge" \
+  || { bad "still a no-op after bd appended its block to post-merge"; grep -E '^\s+[+!]' "$T/.install4.log" | sed 's/^/        /'; }
+[ -e "$T/.beads-hooks/post-merge.new" ] && bad "no post-merge.new left behind" || ok "no post-merge.new left behind"
 
 # bd init (1.3) also registers its own `bd prime` SessionStart hook in .claude/settings.json.
 # The next installer run replaces it with ours -- the designed outcome, since ours runs bd prime
@@ -449,6 +456,22 @@ chk "bare-parent worktree install exit matches dependency status" "$?" "$((missi
 chk "main bare repo stays bare" "$(git --git-dir="$W/bare.git" rev-parse --is-bare-repository)" "true"
 chk "linked checkout stays non-bare" "$(git -C "$W/bare-linked" rev-parse --is-bare-repository)" "false"
 rm -rf "$W"
+
+printf '\n\033[1m### under cairn a pull runs cairn sync in a clone bd never installed hooks in (workspace-7m8.23)\033[0m\n'
+P=$(mktemp -d); git -C "$P" init -q origin; git -C "$P/origin" config user.email s@e; git -C "$P/origin" config user.name s
+"$SRC/install.sh" --no-shell "$P/origin" >/dev/null 2>&1
+printf 'cairn\n' > "$P/origin/.claude/store-cli"
+git -C "$P/origin" add -A >/dev/null 2>&1; git -C "$P/origin" commit -qm install --no-verify
+git clone -q "$P/origin" "$P/b" 2>/dev/null
+mkdir -p "$P/bin"; printf '#!/bin/sh\necho "$*" >> "%s/calls"\n' "$P" > "$P/bin/cairn"; chmod +x "$P/bin/cairn"
+pull_once() { : > "$P/calls"; echo "$1" >> "$P/origin/f"; git -C "$P/origin" add f; git -C "$P/origin" commit -qm "$1" --no-verify
+  PATH="$P/bin:$PATH" git -C "$P/b" pull -q >/dev/null 2>&1; grep -c '^sync$' "$P/calls"; }
+# core.hooksPath is per-clone config, not carried by git: until the installer runs in the clone
+# (or the session-start hook syncs) nothing catches the store up. Written down, not fixed.
+chk "a fresh clone runs no hook until it is wired" "$(pull_once one)" "0"
+git -C "$P/b" config core.hooksPath .beads-hooks
+chk "wired: the pull runs cairn sync from post-merge" "$(pull_once two)" "1"
+rm -rf "$P"
 
 printf '\n\033[1m### --dry-run and --check touch nothing\033[0m\n'
 D=$(mktemp -d); git -C "$D" init -q

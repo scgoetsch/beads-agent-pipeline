@@ -397,7 +397,11 @@ and `bd setup` also write agent-harness hooks that run bd directly (`bd prime --
 `.cursor/hooks.json`); `tools/store-cli-harness-hooks.sh` prefixes each with a test that skips it
 under cairn, and must run again after any `bd init` or `bd setup`. Under cairn the post-merge and
 post-checkout stanzas, and the session-start hook, also run `cairn sync`, which brings a clone's
-store up to the exports a pull brought in (cairn README, "More than one clone"). The installer never
+store up to the exports a pull brought in (cairn README, "More than one clone"). For a repo bd
+never installed its hooks in, the pipeline ships `post-merge` and `post-checkout` holding only that
+stanza (written only where absent; bd appends its block below them). `core.hooksPath` is per-clone
+config: a fresh clone runs none of these hooks until the installer has run in it, and until then
+only the session-start hook syncs. The installer never
 writes `.claude/store-cli`. Moving a store over (and back) is cairn's job: see its README,
 "Moving a bd store over".
 

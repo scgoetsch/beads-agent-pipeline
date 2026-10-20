@@ -9,6 +9,8 @@
 # In post-merge and post-checkout it first runs `cairn sync`, which brings this clone's store up
 # to the exports the pull or checkout brought in (workspace-7m8.21); its verdict goes to stderr and
 # never fails the git command. bd keeps everything outside its markers when it reinstalls a hook.
+# The pipeline also ships post-merge and post-checkout holding only this stanza, for a repo where
+# bd never installed its hooks (workspace-7m8.23); this keeps their stanza current too.
 # Idempotent; an older version of the stanza is replaced.
 #
 #   tools/store-cli-git-hooks.sh           insert where missing; prints what it changed
@@ -35,11 +37,11 @@ check=0; [ "${1:-}" = --check ] && check=1
 missing=0
 for h in .beads-hooks/*; do
   [ -f "$h" ] || continue
-  grep -q 'BEGIN BEADS INTEGRATION' "$h" || continue
+  grep -q 'BEGIN BEADS INTEGRATION' "$h" || grep -qF -- "$MARK" "$h" || continue
   # The stanza must come BEFORE bd's block to stop it: its line number, not its presence.
   m=$(grep -nF -- "$MARK" "$h" | head -n 1 | cut -d: -f1)
   b=$(grep -n 'BEGIN BEADS INTEGRATION' "$h" | head -n 1 | cut -d: -f1)
-  if [ -n "$m" ] && [ "$m" -lt "$b" ]; then
+  if [ -n "$m" ] && { [ -z "$b" ] || [ "$m" -lt "$b" ]; }; then
     # The pre-commit is the pipeline's own hook and carries its own stanza: present is enough.
     [ "${h##*/}" = pre-commit ] && continue
     e=$(grep -nF -- "$END" "$h" | head -n 1 | cut -d: -f1)

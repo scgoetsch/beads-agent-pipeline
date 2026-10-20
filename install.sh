@@ -325,6 +325,22 @@ if [ -e "$HK_DST" ] && ! cmp -s "$HK_SRC" "$HK_DST" \
 else
   install_file ".beads-hooks/pre-commit" 755
 fi
+# post-merge and post-checkout carry only the store-CLI stanza: under cairn they run `cairn sync`
+# after a pull or a checkout, which a repo bd never installed its hooks in had nowhere to run
+# (workspace-7m8.23). Written only where absent. One that is there is bd's (bd appends its block
+# below ours and keeps our lines) or the user's own, and its stanza is
+# tools/store-cli-git-hooks.sh's to keep current, never a .new.
+for h in post-merge post-checkout; do
+  dst="$TARGET/.beads-hooks/$h"
+  if [ ! -e "$dst" ]; then install_file ".beads-hooks/$h" 755; continue; fi
+  if grep -qF '# >>> store CLI: cairn stops here >>>' "$dst"; then
+    say ".beads-hooks/$h (present, with the store-CLI stanza; tools/store-cli-git-hooks.sh keeps it current)"
+  elif grep -q 'BEGIN BEADS INTEGRATION' "$dst"; then
+    say ".beads-hooks/$h (bd's; tools/store-cli-git-hooks.sh adds the store-CLI stanza before a move to cairn)"
+  else
+    say ".beads-hooks/$h (your own; under cairn it does not run \`cairn sync\` — add the stanza from tools/store-cli-git-hooks.sh)"
+  fi
+done
 
 # ------------------------------------------------------------- agent docs --
 hdr "agent docs (AGENTS.md + CLAUDE.md)"
