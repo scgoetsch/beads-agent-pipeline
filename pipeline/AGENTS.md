@@ -48,6 +48,17 @@ bd close <id>           # complete work
 bd dolt push            # ONLY if the store has a remote (`bd dolt status`); an embedded store has none
 ```
 
+### bd or cairn: `.claude/store-cli`
+
+The store's CLI is chosen per checkout by the tracked file `.claude/store-cli`: absent or `bd`, bd
+writes; `cairn`, [cairn](https://github.com/scgoetsch/cairn) writes and bd's store is frozen at the
+move. Every hook and the pre-commit follow it; there is no environment override. **Under cairn,
+where this file says `bd <verb>`, run `cairn <verb>` with the same flags**: ready, list, blocked,
+show, create, update (`--claim` included), close, reopen, dep, note, comment(s), defer, delete,
+remember, recall, memories, export, prime. cairn has no `dolt push`. The prerun hook blocks every
+typed `bd` call under cairn, reads included (a frozen store answers from the day of the move as
+if it were now), and its message names the cairn verb to use instead.
+
 ### Rules
 
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists.
@@ -158,11 +169,18 @@ keys for full session-start injection **while the host budget permits**. Omitted
 named, and an index that cannot fit all remaining keys is replaced by one **INDEX OMITTED** line.
 Use `bd memories` and `bd recall` to retrieve what was not injected.
 
-If `bd-memgraph` is installed, `[[wikilinks]]` in memory bodies form a typed graph
-(`supersedes::`, `depends-on::`, `contradicts::`, `justified-by::`, `refines::`). Links live in
-the NEWER memory and targets must already exist. Run `bd-memgraph evolve "<draft>"` before
-writing, and `bd-memgraph check` before staging — the pre-commit guard runs it with `--no-ledger`,
-so a green hook is not evidence the ledger saw your session.
+`[[wikilinks]]` in memory bodies form a typed graph (`supersedes::`, `depends-on::`,
+`contradicts::`, `justified-by::`, `refines::`). Links live in the NEWER memory and targets must
+already exist.
+
+- **Under bd**, the graph is `bd-memgraph`'s, if installed. Run `bd-memgraph evolve "<draft>"`
+  before writing, and `bd-memgraph check` before staging — the pre-commit guard runs it with
+  `--no-ledger`, so a green hook is not evidence the ledger saw your session.
+- **Under cairn**, the store does both; do not run `bd-memgraph` (it reads bd's frozen store).
+  `cairn remember` is the admission check: a body that nearly duplicates ANOTHER key is refused
+  (exit 1) and names that key — update it in place, or write `supersedes::[[old]]` to replace it
+  (`--force` stores it anyway); a related body with no link gets the keys to link on stderr.
+  `cairn check` is the link check, and the pre-commit runs it.
 
 Details: **`docs/ops/memory-and-the-graph.md`**.
 
@@ -264,9 +282,10 @@ tools/check-agent-docs-linked_test.sh  # …and that guard's own suite (all four
 tools/agent_docs_test.sh         # every path this file and the skills cite still exists
 ```
 
-If `bd-memgraph` is installed, also run `bd-memgraph check` (0 dangling, 0 unswept) before
+Under bd with `bd-memgraph` installed, also run `bd-memgraph check` (0 dangling, 0 unswept) before
 staging, and commit the ledger it writes under `.beads/` — `.beads/` is usually gitignored, so
 re-include the ledger explicitly if you want its tombstone history to travel between machines.
+Under cairn, `cairn check` instead; cairn keeps memory timestamps and deletions itself.
 
 Add your project's own build and test commands to this block. `tools/agent_docs_test.sh` asserts
 that every command named here actually exists, so a rotted entry fails loudly.

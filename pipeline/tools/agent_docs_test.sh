@@ -41,10 +41,11 @@ bad() { printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 #   MEMORY.md  — named only to say DO NOT create one
 #   .beads/…   — created by `bd init`, which the installer deliberately leaves to you so the
 #                issue prefix is your choice
+#   .claude/store-cli — absent means bd; it exists only in a checkout that moved to cairn
 # Add your own here (machine-specific mounts, generated output trees). Keep the list SHORT:
 # every entry is a path this test stops checking, and an exemption you cannot justify in one
 # line is usually a pointer you should have fixed instead.
-ALLOW='^(MEMORY\.md|\.beads(/.*)?)$'
+ALLOW='^(MEMORY\.md|\.beads(/.*)?|\.claude/store-cli)$'
 # Per-repo exemptions and anchors live OUTSIDE this file, in tools/agent_docs_test.conf (sourced
 # when present), so the test itself stays identical to the shipped one:
 #   ALLOW_EXTRA='word/.*|/mnt/data/.*'      regex alternation appended to the allowlist
@@ -52,7 +53,7 @@ ALLOW='^(MEMORY\.md|\.beads(/.*)?)$'
 # Keep both SHORT, for the reason above.
 ALLOW_EXTRA=''; ROOTS_EXTRA=''
 [ -f "$ROOT/tools/agent_docs_test.conf" ] && . "$ROOT/tools/agent_docs_test.conf"
-[ -z "$ALLOW_EXTRA" ] || ALLOW="^(MEMORY\.md|\.beads(/.*)?|$ALLOW_EXTRA)\$"
+[ -z "$ALLOW_EXTRA" ] || ALLOW="^(MEMORY\.md|\.beads(/.*)?|\.claude/store-cli|$ALLOW_EXTRA)\$"
 export ROOTS_EXTRA
 
 # Extract backticked path-looking tokens from a markdown file and report unresolved ones.

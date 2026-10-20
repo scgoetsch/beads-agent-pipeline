@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Under cairn the memory graph is the store's own, and agents are told how to work in either
+  store.** The pre-commit's memory-graph stanza runs `cairn check` where `.claude/store-cli` says
+  `cairn` (the same hard link errors, plus the store's own integrity: dangling dependencies, a
+  second parent, a `blocks` cycle) and no longer calls bd-memgraph or bd there: bd-memgraph reads
+  `bd memories --json` itself, which under cairn is the frozen store. A `cairn check` that cannot
+  run lets the commit through and says the store was NOT checked. cairn's `remember` now does
+  bd-memgraph's `evolve` admission check (cairn `815cce6`). Under bd nothing changes. AGENTS.md
+  gains "bd or cairn: `.claude/store-cli`" (under cairn, `bd <verb>` in this file means `cairn
+  <verb>`) and states the memory section for both stores; `docs/ops/memory-and-the-graph.md`
+  gains "The graph under cairn". `tools/agent_docs_test.sh` allowlists `.claude/store-cli`, which
+  is absent by design in a bd checkout (workspace-7m8.20).
 - **The hooks can run cairn instead of bd, per checkout.** A tracked `.claude/store-cli` (`bd` or
   `cairn`; absent means bd) selects the store's CLI for the prime, prerun and stop hooks and the
   pre-commit; there is no environment override, so a checkout's sessions and git hooks cannot

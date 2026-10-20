@@ -16,24 +16,26 @@ fi
 
 # >>> bd-memgraph check >>>
 # Blocks commits on hard memory-graph errors (dangling/self links); warnings pass.
-# Skips silently when bd, bd-memgraph, or .beads are absent — never bricks a repo.
+# Under cairn the store checks itself: `cairn check` covers the same hard links (and the store's
+# own integrity: dangling dependencies, a second parent, a blocks cycle), and bd-memgraph is not
+# used; cairn's remember does bd-memgraph's admission control itself. Under bd, bd-memgraph.
+# Skips silently when the tools or .beads are absent — never bricks a repo.
 # Bypass once with: git commit --no-verify   Remove with: bd-memgraph install-hook --remove
-if command -v bd-memgraph >/dev/null 2>&1 && command -v "$STORE_CLI" >/dev/null 2>&1 && [ -d .beads ]; then
+if [ "$STORE_CLI" = cairn ]; then
+  if command -v cairn >/dev/null 2>&1 && [ -d .beads ]; then
+    cairn check; _mg_rc=$?
+    if [ "$_mg_rc" -ge 2 ]; then
+      echo "cairn check could not run (exit $_mg_rc) — the store was NOT checked" >&2; _mg_rc=0
+    fi
+    [ "$_mg_rc" -eq 0 ] || {
+      echo "cairn check: errors in the store (see above) — fix or --no-verify" >&2
+      exit 1
+    }
+  fi
+elif command -v bd-memgraph >/dev/null 2>&1 && command -v bd >/dev/null 2>&1 && [ -d .beads ]; then
   # --no-ledger: the guard validates only — writing observations mid-commit would
   # dirty .beads/memgraph-ledger.json in the working tree on every commit
-  if [ "$STORE_CLI" = cairn ]; then
-    # bd-memgraph reads `bd memories --json` by itself; cairn's is the same map, given as a file.
-    _mg_json=$(mktemp) || exit 1
-    if cairn memories --json > "$_mg_json"; then
-      bd-memgraph --no-ledger --json-file "$_mg_json" check; _mg_rc=$?
-    else
-      echo "bd-memgraph: \`cairn memories --json\` failed — the memory graph was NOT checked" >&2; _mg_rc=0
-    fi
-    rm -f "$_mg_json"
-  else
-    bd-memgraph --no-ledger check; _mg_rc=$?
-  fi
-  [ "$_mg_rc" -eq 0 ] || {
+  bd-memgraph --no-ledger check || {
     echo "bd-memgraph: hard errors in the memory graph (see above) — fix or --no-verify" >&2
     exit 1
   }

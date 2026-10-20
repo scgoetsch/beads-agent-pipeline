@@ -55,7 +55,25 @@ key-only index (replaced by an INDEX OMITTED line on large stores), with nothing
 dump for an empty list (an earlier version did, silently); it falls back only when it cannot tier at
 all — no `jq`, no hot file, a failed export — and then says so on its first line.
 
-## bd-memgraph
+## The graph under cairn
+
+Where `.claude/store-cli` says `cairn`, the store does what bd-memgraph does under bd, and
+bd-memgraph is not used (it reads `bd memories --json`, which is bd's frozen store there):
+
+- **Admission** is `cairn remember` itself, with bd-memgraph `evolve`'s heuristic and thresholds.
+  A body that nearly duplicates ANOTHER key is refused, exit 1, naming that key and the update
+  recipe; `--force` stores it anyway. A key the body `supersedes::` is not a candidate, and
+  rewriting the same key is never refused. A related body that links to no memory is stored, with
+  the keys worth linking named on stderr.
+- **Links** are parsed from the bodies in the same transaction as every `remember` and `forget`
+  (the bodies stay the source; the notation is the one below). `cairn check` reports dangling and
+  self links as errors and explains a link to a deleted key; it also checks the issues (dangling
+  dependencies, a second parent, a `blocks` cycle). The pre-commit runs it.
+- **Timestamps and deletions** are columns and a tombstone table in cairn's store, so there is no
+  ledger to commit.
+- `rank`, `lineage`, `related` and `graph` have no cairn verb.
+
+## bd-memgraph (under bd)
 
 [bd-memgraph](https://github.com/scgoetsch/bd-memgraph) (MIT) is an **optional** layer that reads
 `bd memories --json` and treats `[[wikilinks]]` in memory bodies as a typed graph. bd is never

@@ -2,7 +2,8 @@
 # pre-commit-store-cli_test.sh — the shared pre-commit follows .claude/store-cli.
 #
 # Absent or bd: bd-memgraph reads bd itself and bd's managed block (`bd hooks run pre-commit`)
-# runs. cairn: bd-memgraph is fed `cairn memories --json`, and bd is never called. Hermetic: the
+# runs. cairn: `cairn check` is the gate, and neither bd nor bd-memgraph is called
+# (workspace-7m8.20). Hermetic: the
 # hook runs in a throwaway git repo against stubs that log every call; nothing is committed.
 set -uo pipefail
 HOOK=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.beads-hooks/pre-commit
@@ -31,16 +32,21 @@ chk "bd-memgraph checks bd's store itself"     "$(grep -c '^bd-memgraph --no-led
 chk "bd's managed block runs"                  "$(grep -c '^bd hooks run pre-commit' "$T/calls")" 1
 chk "cairn is not called"                      "$(grep -c '^cairn' "$T/calls")" 0
 
-echo "### store-cli = cairn: bd is never called"
+echo "### store-cli = cairn: bd and bd-memgraph are never called"
 printf 'cairn\n' > "$T/repo/.claude/store-cli"
 chk "exit 0"                                   "$(run)" 0
 chk "bd is not called at all"                  "$(grep -c '^bd ' "$T/calls")" 0
-chk "cairn supplies the memory map"            "$(grep -c '^cairn memories --json' "$T/calls")" 1
-chk "bd-memgraph reads it from a file"         "$(grep -c '^bd-memgraph --no-ledger --json-file .* check' "$T/calls")" 1
+chk "bd-memgraph is not called"                "$(grep -c '^bd-memgraph' "$T/calls")" 0
+chk "cairn check is the gate"                  "$(grep -c '^cairn check' "$T/calls")" 1
 
-echo "### store-cli = cairn and the memory graph has errors: the commit is refused"
-printf '#!/usr/bin/env bash\necho "bd-memgraph $*" >> "%s/calls"; exit 1\n' "$T" > "$T/bin/bd-memgraph"
+echo "### store-cli = cairn and cairn check finds errors: the commit is refused"
+printf '#!/usr/bin/env bash\necho "cairn $*" >> "%s/calls"; case "$1" in check) exit 1 ;; esac; exit 0\n' "$T" > "$T/bin/cairn"
 chk "exit 1"                                   "$(run)" 1
+
+echo "### store-cli = cairn and cairn check cannot run: passes, and says the store was not checked"
+printf '#!/usr/bin/env bash\necho "cairn $*" >> "%s/calls"; case "$1" in check) exit 2 ;; esac; exit 0\n' "$T" > "$T/bin/cairn"
+chk "exit 0"                                   "$(run)" 0
+chk "…and the warning says so"                 "$(grep -c 'NOT checked' "$T/err")" 1
 
 echo "### store-cli = bd: as with none"
 printf '#!/usr/bin/env bash\necho "bd-memgraph $*" >> "%s/calls"; exit 0\n' "$T" > "$T/bin/bd-memgraph"
