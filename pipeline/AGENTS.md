@@ -180,8 +180,8 @@ already exist.
   before writing, and `bd-memgraph check` before staging — the pre-commit guard runs it with
   `--no-ledger`, so a green hook is not evidence the ledger saw your session.
 - **Under cairn**, the store does both; do not run `bd-memgraph` (it reads bd's frozen store).
-  `cairn remember` is the admission check: a body that nearly duplicates ANOTHER key is refused
-  (exit 1) and names that key — update it in place, or write `supersedes::[[old]]` to replace it
+  `cairn remember` is the admission check: a body of 20 words or more that nearly duplicates
+  ANOTHER key is refused (exit 1; a shorter one is stored with the advice) and names that key — update it in place, or write `supersedes::[[old]]` to replace it
   (`--force` stores it anyway); a related body with no link gets the keys to link on stderr.
   `cairn check` is the link check, and the pre-commit runs it.
 
