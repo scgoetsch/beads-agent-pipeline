@@ -295,6 +295,20 @@ if [ "$STORE_CLI" = cairn ]; then
       echo "#    that is resolved: $(printf '%s' "$sync_out" | head -c 600)"; echo ""; } > "$TMPD/s.sync"
   fi
 fi
+# bd's own hooks keep running bd under cairn unless the two tools below were run at the switch and
+# after every `bd hooks install`, `bd init` or `bd setup`: git hooks (`bd hooks run <hook>`) and
+# harness hooks that call bd (`bd prime` at SessionStart) read, sync or push the frozen store, and
+# the prerun gate never sees them. Nothing else would say so (workspace-pg6h); a tool the install
+# does not have is not run.
+if [ "$STORE_CLI" = cairn ]; then
+  for t in store-cli-git-hooks store-cli-harness-hooks; do
+    [ -x "$WS/tools/$t.sh" ] || continue
+    if ! t_out=$("$WS/tools/$t.sh" --check 2>&1); then
+      { echo "# 🚨 bd's own hooks still run bd under cairn, against the FROZEN store — run tools/$t.sh:"
+        echo "#    $(printf '%s' "$t_out" | tr '\n' ' ' | head -c 400)"; echo ""; } >> "$TMPD/s.sync"
+    fi
+  done
+fi
 command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
 [ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
 "$STORE_CLI" export --include-memories -o "$MM" 2>/dev/null || { fallback_full "$STORE_CLI export --include-memories failed"; exit 0; }

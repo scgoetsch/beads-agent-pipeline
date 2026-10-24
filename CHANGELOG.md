@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Under cairn, bd's own hooks that still run bd are named at session start.** `bd hooks install
+  --shared` writes four git hooks that run `bd hooks run <hook>`, and `bd init` / `bd setup` write
+  harness hooks that run `bd prime`; under cairn each reads, syncs or pushes bd's frozen store, and
+  the prerun gate never sees a hook. `tools/store-cli-git-hooks.sh` and
+  `tools/store-cli-harness-hooks.sh` stop them, but only when someone runs them at the switch and
+  after every reinstall, and nothing said when nobody had (workspace-pg6h). The session-start hook
+  now runs both with `--check` under cairn and, when either finds an unguarded hook, says so at
+  the top of the payload with the tool to run. Under bd, or where the tools are absent, nothing runs.
 - **A repo bd never installed its hooks in also catches up after a pull.** The `cairn sync` stanza
   lived only in bd's own post-merge and post-checkout, which a repo that started on cairn does not
   have: after a pull its store stayed behind until the next session start (the safety nets held:

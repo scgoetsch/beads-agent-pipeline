@@ -456,6 +456,25 @@ chk "  …with what sync said"                         "$(grep -c '2 events in t
 out=$( (cd "$T/ws" && CAIRN_SYNC_SAYS="cairn: error: the histories part at event 7" CAIRN_SYNC_RC=2 PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
 chk "a refused sync is loud at the top"              "$(grep -c 'cairn sync REFUSED' <<<"$out"):$(grep -c 'part at event 7' <<<"$out")" "1:1"
 chk "  …and the session is still primed"             "$(grep -c 'CAIRN-WORK sentinel' <<<"$out")" 1
+echo "### under cairn, bd's own hooks that still run bd are named (workspace-pg6h)"
+mkdir -p "$T/ws/tools"
+for t in store-cli-git-hooks store-cli-harness-hooks; do
+  printf '#!/bin/sh\n[ "$1" = --check ] || exit 9\necho "%s: SENTINEL-UNGUARDED" >&2; exit "${%s_RC:-0}"\n' "$t" "$(echo "$t" | tr a-z- A-Z_)" > "$T/ws/tools/$t.sh"
+  chmod +x "$T/ws/tools/$t.sh"
+done
+out=$( (cd "$T/ws" && PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "both checks pass: nothing said"                  "$(grep -c "bd's own hooks still run" <<<"$out")" 0
+out=$( (cd "$T/ws" && STORE_CLI_GIT_HOOKS_RC=1 PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "an unguarded git hook is loud, names the tool"   "$(grep -c "run tools/store-cli-git-hooks.sh" <<<"$out"):$(grep -c 'store-cli-git-hooks: SENTINEL-UNGUARDED' <<<"$out")" "1:1"
+chk "  …at the head of the payload"                   "$(( $(grep -n "bd's own hooks still run" <<<"$out" | cut -d: -f1) < 20 ))" 1
+chk "  …and the session is still primed"              "$(grep -c 'CAIRN-WORK sentinel' <<<"$out")" 1
+out=$( (cd "$T/ws" && STORE_CLI_HARNESS_HOOKS_RC=1 PATH="$T/cairnbin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "an unguarded harness hook is loud too"           "$(grep -c "run tools/store-cli-harness-hooks.sh" <<<"$out")" 1
+printf 'bd\n' > "$T/ws/.claude/store-cli"
+out=$( (cd "$T/ws" && STORE_CLI_GIT_HOOKS_RC=1 bash .claude/bd-prime-hook.sh) 2>/dev/null)
+chk "under bd the checks are not run"                 "$(grep -c "bd's own hooks still run" <<<"$out")" 0
+printf 'cairn\n' > "$T/ws/.claude/store-cli"
+rm -rf "$T/ws/tools"
 out=$( (cd "$T/ws" && PATH="$T/bin:$PATH" bash .claude/bd-prime-hook.sh) 2>/dev/null)
 chk "cairn selected but missing or failing: loud, names cairn" "$(grep -c 'cairn export --include-memories failed' <<<"$out")" 1
 printf 'beads\n' > "$T/ws/.claude/store-cli"
