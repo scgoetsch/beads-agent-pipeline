@@ -4,9 +4,13 @@
 #     ./install.sh [TARGET_REPO]        # default: the current directory
 #     ./install.sh --check [TARGET]     # preflight only, changes nothing
 #     ./install.sh --dry-run [TARGET]   # print every action, change nothing
-#     ./install.sh --no-shell [TARGET]  # skip the one thing written outside the repo
 #     ./install.sh --with-concurrent [TARGET]  # also install the concurrent-sessions layer (see below)
 #     ./install.sh --with-pi [TARGET]   # also install project-local Pi session hooks (requires trust)
+#
+# THE STORE IS CAIRN (https://github.com/scgoetsch/cairn), 0.7.0 or later, and nothing else. This
+# release does not read bd. It REFUSES a target that still has a live bd store (.beads/ holding
+# embeddeddolt/ or dolt/) and no writable cairn store: move the store first (README, "Moving a repo
+# off bd"), then install. A green install is not a migrated store.
 #
 # THE CONCURRENT-SESSIONS LAYER IS OPT-IN because it is environment-dependent. It is only worth
 # anything if more than one agent session may run against the repo at once; for a single-session
@@ -17,39 +21,43 @@
 # "peer" collided with foreign-lab peer-review tooling that can sit beside this pipeline in the
 # same agent session (one word, two meanings, one context window).
 #
-# One piece of concurrency machinery ships either way: the flock in tools/dolt-guard.sh, which
-# stops two shells racing to start the Dolt server. It costs a single-session user nothing.
-#
 # IDEMPOTENT. Re-running is also how you repair a checkout whose config drifted: it reports
 # what it changed and what was already right.
 #
 # IT NEVER OVERWRITES YOUR CONTENT. An existing tools/ or docs/ file that differs from ours is left
 # in place and ours is written beside it as `.new`, with a line telling you; adopting it is a
 # manual `mv` (there is no upgrade path yet). An existing .claude/settings.json is MERGED: the
-# user hooks survive even on shared events; only bd's standalone prime registration is replaced.
-# Identical pipeline groups are deduplicated and a backup is kept.
-# An existing AGENTS.md is kept and nothing is written beside it -- it is meant to diverge.
+# user hooks survive even on shared events. Identical pipeline groups are deduplicated and a
+# backup is kept. An existing AGENTS.md is kept and nothing is written beside it -- it is meant to
+# diverge.
 #
-# WHAT IT TOUCHES OUTSIDE THE REPO: exactly one marker-managed block in ~/.bashrc that sources
-# tools/dolt-guard.sh -- one project per ~/.bashrc; a second install replaces it. The guard only
-# matters for a server-mode bd store; on bd 1.3's default embedded store it has nothing to do and
-# stays silent. Skip the block with --no-shell.
+# THE ONE EXCEPTION IS bd, IN A REPO THAT HAD IT. bd's managed blocks (`BEGIN/END BEADS
+# INTEGRATION`) are removed IN PLACE from every hook in .beads-hooks/, and hooks that run bd are
+# removed from .claude/settings.json, .claude/settings.local.json, .codex/hooks.json and
+# .cursor/hooks.json; a backup of each file is kept beside it. A `.new` beside a hook that still
+# runs bd would leave bd running on every commit. A hook file left with nothing but comments is
+# replaced by ours. A pipeline file from the bd era that you edited is kept, ours lands as .new,
+# and the installer says it still runs bd.
+#
+# NOTHING OUTSIDE THE REPO IS WRITTEN, except to take out what the bd-era installer put there: its
+# `# >>> bd dolt-guard >>>` block in ~/.bashrc, when that block sources THIS repo's
+# tools/dolt-guard.sh (backup kept). --no-shell is accepted and does nothing (the block is gone).
 
 set -uo pipefail
 
 SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PAYLOAD="$SRC/pipeline"
 
-MODE=install; DO_SHELL=1; WITH_CONCURRENT=0; WITH_PI=0; TARGET=""
+MODE=install; WITH_CONCURRENT=0; WITH_PI=0; TARGET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check)    MODE=check ;;
     --dry-run)  MODE=dryrun ;;
-    --no-shell) DO_SHELL=0 ;;
+    --no-shell) echo "note: --no-shell does nothing since 0.2.0 (the installer writes no ~/.bashrc block); accepted so old commands still run" >&2 ;;
     --with-concurrent) WITH_CONCURRENT=1 ;;
     --with-peer) WITH_CONCURRENT=1; echo "note: --with-peer is now --with-concurrent (accepted; update your command)" >&2 ;;
     --with-pi)   WITH_PI=1 ;;
-    -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,13p' "$0"; exit 0 ;;
     -*)         echo "unknown option: $1" >&2; exit 2 ;;
     *)          TARGET=$1 ;;
   esac
@@ -65,7 +73,7 @@ hdr()  { printf '\n\033[1m%s\033[0m\n' "$1"; }
 run()  { if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m %s\n' "$*"; else "$@"; fi; }
 
 # Is git running $TARGET/.beads-hooks? core.hooksPath may be the relative `.beads-hooks` we set
-# or the absolute path bd 1.3.0's `bd hooks install --shared` rewrites it to. Both run the same
+# or an absolute path (other tools rewrite it to one; the old tracker's hook installer did). Both run the same
 # file, so compare the directory it resolves to, not the string. A string compare said "NOT
 # wired" and rewrote the value on every re-run of the first fresh install we did.
 # One directory, two spellings: git reports C:/... where the shell says /c/... and /tmp is a
@@ -96,10 +104,10 @@ hooks_wired() {
   same_dir "$got" "$want"
 }
 
-# A file with bd's managed region removed. bd rewrites what is between its markers (the
-# `# --- BEGIN/END BEADS INTEGRATION ---` block in the pre-commit, the `<!-- ... -->` block it
-# appends to AGENTS.md), so byte-identity with our payload is the wrong test for either file.
-outside_bd() { sed '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d' "$1"; }
+# bd's managed region, as bd writes it: `# --- BEGIN/END BEADS INTEGRATION ... ---` in a git hook,
+# `<!-- BEGIN/END BEADS INTEGRATION ... -->` in AGENTS.md. This release removes it from hooks
+# and reports it in AGENTS.md; it never compares around it any more.
+BD_BLOCK='/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d'
 
 # ---------------------------------------------------------------- preflight --
 hdr "dependencies"
@@ -107,8 +115,23 @@ need() { # need <cmd> <why> <how>
   if command -v "$1" >/dev/null 2>&1; then say "$1 — $(command -v "$1")"; return 0; fi
   warn "$1 MISSING — $2"; say "    install: $3"; return 1
 }
+CAIRN_MIN=0.7.0
 need git    "everything here is git-scoped"            "your package manager" || true
-need bd     "the issue tracker and memory store"       "https://github.com/gastownhall/beads" || true
+# cairn 0.7.0 is the first that keeps the four tracked files in .cairn/, which every tool here reads.
+if need cairn "the issue tracker and memory store" \
+     "git clone https://github.com/scgoetsch/cairn && ln -s \"\$PWD/cairn/bin/cairn\" ~/.local/bin/cairn"; then
+  cv=$(cairn --version 2>/dev/null | head -1)
+  set -- $(printf '%s\n' "$cv" | sed -n 's/^cairn \([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2 \3/p')
+  if [ $# -ne 3 ]; then
+    warn "cairn --version said '${cv:-nothing}', not 'cairn X.Y.Z' — cannot tell whether it is $CAIRN_MIN or later"
+  elif [ "$1" -eq 0 ] && [ "$2" -lt 7 ]; then
+    warn "cairn is $1.$2.$3 — $CAIRN_MIN or later is required (it reads the tracked files in .cairn/)"
+    say "    update: git -C <your cairn clone> pull"
+  else
+    say "    $cv (>= $CAIRN_MIN)"
+  fi
+  set --
+fi
 need python3 "the PreToolUse guard parses hook JSON"   "your package manager" || true
 if [ "$WITH_PI" -eq 1 ]; then
   need pi "--with-pi only works when Pi runs and trusts the project extension" \
@@ -117,18 +140,12 @@ if [ "$WITH_PI" -eq 1 ]; then
     warn "pi CLI found but cannot run (check its Node runtime); extension will not fire"
   fi
 fi
-# No `need dolt`: bd manages its own Dolt server (`bd dolt start`) and nothing here calls a dolt
-# binary. Requiring one made this exit 1 -- and selftest.sh fail -- on the machine it shipped from.
 
 # Optional, and genuinely optional: the pipeline degrades in a defined way without each.
 opt() { if command -v "$1" >/dev/null 2>&1; then say "$1 — present"; else say "$1 — absent ($2)"; fi; }
-opt jq          "session-start falls back to the full bd prime dump"
+opt jq          "session-start falls back to the full cairn prime dump"
 opt rg          "only affects sweep_test.sh's demonstration of the bug"
 opt iconv       "sweep.sh cannot flag bad-UTF-8 files as unsearchable"
-opt bd-memgraph "no memory-graph guard — the pre-commit stanza self-skips"
-command -v bd-memgraph >/dev/null 2>&1 || {
-  say "    add it:  git clone https://github.com/scgoetsch/bd-memgraph"
-  say "             ln -sf \"\$PWD/bd-memgraph/bd-memgraph.py\" ~/.local/bin/bd-memgraph"; }
 
 # THE HARNESS IS A DEPENDENCY, AND IT IS NOT A BINARY TO PROBE FOR. The session hook scripts are
 # run BY the harness; this installer is normally invoked from a plain shell, so the presence or
@@ -152,7 +169,7 @@ else
 fi
 say "  Under agy, a Grok REPL, Cursor or a plain shell there are no session hooks."
 say "  Everything else installed here works anywhere: git guards in .beads-hooks/,"
-say "  every tool in tools/, the shell guard, and AGENTS.md itself."
+say "  every tool in tools/, and AGENTS.md itself."
 say "  Full matrix of what fires where: docs/ops/other-harnesses.md"
 
 [ -d "$PAYLOAD" ] || { warn "payload missing: $PAYLOAD"; exit 1; }
@@ -174,6 +191,50 @@ if [ "$TARGET" = "$SRC" ]; then
   exit 1
 fi
 
+# ------------------------------------------------------------ the store --
+# THIS RELEASE DOES NOT READ bd. Installed over a repo whose store is still bd's, its hooks would
+# prime from an empty cairn (or none) while every issue and memory sat in Dolt, and a later
+# `cairn init` there would start a second store beside the first. So: a live bd store (bd keeps
+# its Dolt database in .beads/embeddeddolt/, or .beads/dolt/ in server mode) with no WRITABLE
+# cairn store is refused, in every mode. A cairn shadow (`cairn shadow sync`) is not writable and
+# does not count. A worktree's .cairn/redirect names the main checkout's store.
+hdr "store"
+cairn_db=""
+if [ -f "$TARGET/.cairn/redirect" ]; then
+  cairn_db="$(head -1 "$TARGET/.cairn/redirect" | tr -d '\r')/cairn.db"
+elif [ -e "$TARGET/.cairn/cairn.db" ]; then
+  cairn_db="$TARGET/.cairn/cairn.db"
+fi
+cairn_writable() {  # 0 when $cairn_db is a writable cairn store (meta writable=1)
+  [ -n "$cairn_db" ] && [ -f "$cairn_db" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 0   # python3 is reported missing above; trust the file
+  python3 -I - "$cairn_db" <<'PY' 2>/dev/null
+import sqlite3, sys
+try:
+    c = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+    row = c.execute("SELECT value FROM meta WHERE key = 'writable'").fetchone()
+except Exception:
+    sys.exit(1)
+sys.exit(0 if row and row[0] == "1" else 1)
+PY
+}
+bd_live=""
+for d in embeddeddolt dolt; do [ -d "$TARGET/.beads/$d" ] && bd_live="$bd_live .beads/$d/"; done
+if cairn_writable; then
+  say "cairn store: $cairn_db"
+  [ -n "$bd_live" ] && say "bd's old store is still on disk ($bd_live) — nothing here reads it; delete it once the migration manifest has been read"
+elif [ -n "$bd_live" ]; then
+  warn "REFUSED: this repo's store is still bd's ($bd_live) and there is no writable cairn store (.cairn/cairn.db)."
+  say "    This release does not read bd: installing now would leave every issue and memory where no hook looks."
+  say "    Move the store first, in order, stopping at the first failure: README.md, \"Moving a repo off bd\""
+  say "    ($SRC/README.md). Then run this installer again. Nothing was changed."
+  exit 1
+elif [ -n "$cairn_db" ]; then
+  say "cairn: $cairn_db is not a writable store (a shadow, or unreadable) — create one with cairn init (see Next, below)"
+else
+  say "no cairn store yet — create it yourself so the prefix is your choice (see Next, below)"
+fi
+
 if [ "$MODE" = check ]; then
   if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE — git runs the shared .beads-hooks/"
   else say "core.hooksPath=${HOOKS_PATH_VALUE:-unset} — the shared pre-commit is NOT wired; install will set it"; fi
@@ -193,6 +254,11 @@ install_file() { # install_file <relpath> [mode]
     run cp -f "$src" "$dst.new"
     warn "$rel DIFFERS — yours kept, ours written to $rel.new"
     say "    compare: diff \"$dst\" \"$dst.new\""
+    # A bd-era copy of a pipeline file is not merely different: it reads .claude/store-cli and can
+    # still run bd (the session hooks, the pre-commit's bd-memgraph stanza). Say that by name.
+    if grep -qE '\.claude/store-cli|bd hooks run|bd-memgraph|dolt-guard\.sh' "$dst" 2>/dev/null; then
+      warn "$rel is the bd-era version and can still run bd — adopt ours unless you know why not:  mv -f \"$dst.new\" \"$dst\""
+    fi
     return 0
   fi
   run mkdir -p "$(dirname "$dst")"
@@ -200,6 +266,149 @@ install_file() { # install_file <relpath> [mode]
   [ -n "$mode" ] && run chmod "$mode" "$dst"
   did "$rel"
 }
+
+# ---------------------------------------------------------- leaving bd --
+# What a bd-era install (bd init, bd hooks install, bd setup <harness>, this installer before
+# 0.2.0) left in the repo that would keep running bd. The `.new` rule does not apply here: a
+# `.new` beside a hook that still runs bd leaves bd running, and a hook whose cairn stanza is
+# replaced while bd's block below it stays turns bd back on. So bd's parts are removed IN PLACE;
+# every file touched is first copied under the git dir (never committed, never run by git).
+hdr "leaving bd (what a bd-era install left here)"
+TS=$(date +%Y%m%dT%H%M%S)
+BACKUP="$GIT_COMMON/beads-agent-pipeline-backup/$TS"
+backup() {  # backup ABS_PATH -> a copy under $BACKUP at its repo-relative path
+  local rel=${1#"$TARGET"/}
+  mkdir -p "$BACKUP/$(dirname "$rel")" && cp -fp "$1" "$BACKUP/$rel"
+}
+bd_left=0
+# 1. bd's managed block in every git hook. A hook with nothing left but comments was bd's alone:
+#    ours replaces it where we ship one (post-merge, post-checkout, pre-commit), else it goes.
+for h in "$TARGET"/.beads-hooks/*; do
+  [ -f "$h" ] || continue
+  case ${h##*/} in *.new|*.bak*|*.sample) continue ;; esac
+  grep -q 'BEGIN BEADS INTEGRATION' "$h" || continue
+  bd_left=1; rel=.beads-hooks/${h##*/}
+  rest=$(sed "$BD_BLOCK" "$h")
+  only_comments=0
+  [ -z "$(printf '%s\n' "$rest" | grep -vE '^[[:space:]]*(#.*)?$')" ] && only_comments=1
+  if [ "$MODE" = dryrun ]; then
+    printf '  \033[36m[dry-run]\033[0m remove bd'"'"'s managed block from %s\n' "$rel"; continue
+  fi
+  backup "$h" || { warn "$rel: cannot back it up under $BACKUP — bd's block NOT removed"; continue; }
+  if [ "$only_comments" -eq 1 ] && [ -f "$PAYLOAD/$rel" ]; then
+    cat "$PAYLOAD/$rel" > "$h"
+    did "$rel held only bd's block — replaced by ours (backup under $BACKUP)"
+  elif [ "$only_comments" -eq 1 ]; then
+    rm -f "$h"
+    did "$rel held only bd's block — removed (backup under $BACKUP)"
+  else
+    printf '%s\n' "$rest" > "$h"     # > on the existing file keeps its mode
+    did "$rel — bd's managed block removed in place (backup under $BACKUP)"
+  fi
+done
+# 2. Harness hooks that run bd: `bd prime` (bd init / bd setup claude), `bd codex-hook`, `bd
+#    cursor-hook`, also in the store-cli-guarded form tools/store-cli-harness-hooks.sh wrote. An
+#    entry is bd's when its command's first word is bd; nothing else is touched.
+harness_out=$(cd "$TARGET" && python3 -I - "$MODE" "$BACKUP" .claude/settings.json .claude/settings.local.json \
+    .codex/hooks.json .cursor/hooks.json <<'PY' 2>&1
+import json, os, re, shutil, sys
+mode, backup = sys.argv[1], sys.argv[2]
+BD = re.compile(r"^\s*bd(\s|$)")
+GUARDED = re.compile(r"^\s*\[[^\]]*store-cli[^\]]*\]\s*\|\|\s*(.*)$", re.S)
+def is_bd(cmd):
+    if not isinstance(cmd, str): return False
+    m = GUARDED.match(cmd)
+    return bool(BD.match(m.group(1) if m else cmd))
+for path in sys.argv[3:]:
+    if not os.path.isfile(path): continue
+    raw = open(path, encoding="utf-8").read()
+    try:
+        doc = json.loads(raw)
+    except ValueError as exc:
+        print(f"WARN {path} is not JSON ({exc}); not read — check it for bd hooks yourself"); continue
+    hooks = doc.get("hooks") if isinstance(doc, dict) else None
+    if not isinstance(hooks, dict): continue
+    removed = []
+    for event in list(hooks):
+        groups = hooks[event]
+        if not isinstance(groups, list): continue
+        kept_groups = []
+        for group in groups:
+            if not isinstance(group, dict): kept_groups.append(group); continue
+            if isinstance(group.get("hooks"), list):          # Claude, Codex: groups of entries
+                entries = group["hooks"]
+                keep = [e for e in entries if not (isinstance(e, dict) and is_bd(e.get("command")))]
+                removed += [f"{event}: {e['command'].strip()}" for e in entries if e not in keep]
+                if keep: group["hooks"] = keep; kept_groups.append(group)
+                elif not entries: kept_groups.append(group)
+            elif is_bd(group.get("command")):                 # Cursor: entries directly
+                removed.append(f"{event}: {group['command'].strip()}")
+            else:
+                kept_groups.append(group)
+        if kept_groups: hooks[event] = kept_groups
+        else: del hooks[event]
+    if not removed: continue
+    if mode == "dryrun":
+        for what in removed: print(f"DRY {path} {what}")
+        continue
+    try:
+        os.makedirs(os.path.join(backup, os.path.dirname(path)), exist_ok=True)
+        shutil.copy2(path, os.path.join(backup, path))
+    except OSError as exc:
+        print(f"WARN {path}: cannot back it up under {backup} ({exc}); its bd hooks were NOT removed"); continue
+    for what in removed:
+        print(f"DID {path} {what}")
+    print(f"BACKUP {path}")
+    text = json.dumps(doc, indent=2, ensure_ascii=False) + ("\n" if raw.endswith("\n") else "")
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f: f.write(text)
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+    os.replace(tmp, path)
+PY
+) || true
+while IFS= read -r line; do
+  case $line in
+    "DID "*)    bd_left=1; did "removed a harness hook that runs bd — ${line#DID }" ;;
+    "DRY "*)    bd_left=1; printf '  \033[36m[dry-run]\033[0m remove the harness hook that runs bd — %s\n' "${line#DRY }" ;;
+    "BACKUP "*) say "    backup of ${line#BACKUP }: $BACKUP/${line#BACKUP }" ;;
+    "WARN "*)   warn "${line#WARN }" ;;
+    ?*)         warn "harness-hook cleanup: $line" ;;
+  esac
+done <<< "$harness_out"
+# 3. The ~/.bashrc block the bd-era installer wrote. One project per ~/.bashrc: it is removed only
+#    when it sources THIS repo's tools/dolt-guard.sh; another repo's block is that repo's.
+RC="${HOME:-}/.bashrc"; GB='# >>> bd dolt-guard >>>'; GE='# <<< bd dolt-guard <<<'
+esc() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
+if [ -n "${HOME:-}" ] && [ -f "$RC" ] && grep -qxF "$GB" "$RC"; then
+  rc_block=$(sed -n "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/p" "$RC")
+  if printf '%s\n' "$rc_block" | grep -qF "\"$TARGET/tools/dolt-guard.sh\""; then
+    bd_left=1
+    if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m remove the bd dolt-guard block from %s\n' "$RC"
+    else
+      cp -f "$RC" "$RC.bak.$TS" \
+        && sed "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/d" "$RC" > "$RC.bap.$$" && cat "$RC.bap.$$" > "$RC" && rm -f "$RC.bap.$$" \
+        && did "removed the bd dolt-guard block for this repo from $RC (backup: $RC.bak.$TS)" \
+        || warn "could not remove the bd dolt-guard block from $RC — remove the lines between '$GB' and '$GE' yourself"
+    fi
+  else
+    say "$RC has a bd dolt-guard block for ANOTHER repo — left alone (it is that repo's)"
+  fi
+fi
+# 4. Files the bd-era pipeline shipped that this one does not. Nothing here runs them any more;
+#    they are named, not deleted, because they are tracked files of yours now.
+stale=""
+for rel in .claude/store-cli tools/store-cli.sh tools/dolt-guard.sh tools/dolt-guard_test.sh \
+           tools/store-cli-git-hooks.sh tools/store-cli-git-hooks_test.sh \
+           tools/store-cli-harness-hooks.sh tools/store-cli-harness-hooks_test.sh \
+           tools/pre-commit-store-cli_test.sh; do
+  [ -e "$TARGET/$rel" ] && stale="$stale $rel"
+done
+if [ -n "$stale" ]; then
+  bd_left=1
+  say "bd-era files this release no longer ships (nothing runs them; remove them):"
+  say "    git rm -q --$stale"
+fi
+[ "$bd_left" -eq 0 ] && say "nothing of bd's found"
 
 hdr "session machinery (.claude/)"
 for f in bd-prime-hook.sh bd-prerun-hook.sh bd-stop-hook.sh; do install_file ".claude/$f" 755; done
@@ -220,36 +429,29 @@ elif cmp -s "$PAYLOAD/.claude/settings.json" "$SET"; then
   say ".claude/settings.json (already current)"
 elif command -v jq >/dev/null 2>&1; then
   # jq object multiplication REPLACES arrays, deleting unrelated hooks under the same event.
-  # Merge groups instead. Never identify ownership by a substring in an arbitrary command.
+  # Merge groups instead. Never identify ownership by a substring in an arbitrary command: a group
+  # is the pipeline's when it is EQUAL to one we ship now, or to one 0.1 shipped ($was: the same
+  # commands, whose missing-hook message said "bd session rules"), and only those are replaced.
+  # bd's own harness hooks were removed above ("leaving bd").
   merged=$(jq -s '
-    def bdprime: .type == "command" and
-      ((.command // "") | test("^bd prime( --hook-json)?$"));
-    .[1].hooks as $ours | .[0] |
+    .[1].hooks as $ours |
+    ([$ours[][] | .hooks |= map(.command |= sub("the pipeline.s session rules"; "bd session rules"))]) as $was |
+    .[0] |
     reduce ($ours | keys[]) as $event (. ;
-      .hooks[$event] = ((.hooks[$event] // []) |
-        map(if $event == "SessionStart" then
-          .hooks |= map(select(bdprime | not)) else . end) |
-        map(select((.hooks | length) > 0))) |
+      .hooks[$event] = ((.hooks[$event] // []) | map(select(. as $g | $was | index([$g]) | not))) |
       reduce $ours[$event][] as $group (. ;
-        if (.hooks[$event] | index($group)) == null then
+        if (.hooks[$event] | index([$group])) == null then
           .hooks[$event] += [$group] else . end))
   ' "$SET" "$PAYLOAD/.claude/settings.json" 2>/dev/null) || merged=""
   if [ -n "$merged" ] && [ "$merged" != "null" ]; then
     if [ "$(printf '%s' "$merged" | jq -S .)" = "$(jq -S . "$SET" 2>/dev/null)" ]; then
       say ".claude/settings.json (hooks already present)"
     else
-      had_bd_hook=$(jq '[.hooks.SessionStart[]?.hooks[]? |
-        select(.type == "command" and ((.command // "") | test("^bd prime( --hook-json)?$")))] | length' "$SET")
       run cp -f "$SET" "$SET.bak.$(date +%s)"
       if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m merge hooks into %s\n' "$SET"
       else printf '%s\n' "$merged" > "$SET"; fi
       did ".claude/settings.json — merged our hooks in (backup kept)"
       say "    preserved user hooks, including hooks on the same events"
-      if [ "${had_bd_hook:-0}" -gt 0 ]; then
-        say "    replaced bd's own SessionStart hook (bd prime). Ours runs bd prime itself, so nothing is"
-        say "    lost — but \`bd setup claude --check\` will report 'No hooks installed' from now on."
-        say "    That is expected; do not re-run bd setup to fix it."
-      fi
     fi
   else
     run cp -f "$PAYLOAD/.claude/settings.json" "$SET.new"
@@ -279,16 +481,16 @@ done < <(cd "$PAYLOAD" && find .claude/site-checks -type f)
 
 # The curation gate's stamp is written ONCE and never shipped as payload: it records when THIS
 # repo's store was last curated, so it must diverge per repo and must not come back as a .new.
-# Count from `bd memories` when bd is usable here; a store that does not exist yet is 0, which
-# is correct -- the first ten memories then ask for the first audit.
+# Count the memory rows of the tracked export, as the gate does; a store that does not exist yet
+# is 0, which is correct -- the first ten memories then ask for the first audit.
 hdr "memory curation stamp (.claude/memory-curation.txt)"
 CURATION_STAMP="$TARGET/.claude/memory-curation.txt"
 if [ -e "$CURATION_STAMP" ]; then
   say ".claude/memory-curation.txt — kept ($(head -1 "$CURATION_STAMP" | cut -f1,2 | tr '\t' ' '))"
 else
   stamp_count=0
-  if command -v bd >/dev/null 2>&1; then
-    stamp_count=$(cd "$TARGET" && bd memories 2>/dev/null | grep -cE '^  [a-z0-9]'); stamp_count=${stamp_count:-0}
+  if [ -f "$TARGET/.cairn/memories.jsonl" ]; then
+    stamp_count=$(grep -c '^{"_type":"memory"' "$TARGET/.cairn/memories.jsonl"); stamp_count=${stamp_count:-0}
   fi
   if [ "$MODE" = dryrun ]; then
     run "write .claude/memory-curation.txt: $(date +%Y-%m-%d) <TAB> $stamp_count"
@@ -312,35 +514,10 @@ while IFS= read -r rel; do
 done < <(cd "$PAYLOAD" && find docs -type f | sort)
 
 hdr "repo guards (.beads-hooks/)"
-# `bd hooks install --shared` rewrites the region between bd's own markers (v1.1.2 shipped,
-# v1.3.0 written on the first fresh install we ran), so byte-identity with our payload is the
-# wrong test after that step: it said DIFFERS, left a .new and failed every re-run. Compare what
-# is OUTSIDE bd's markers; inside them is bd's to manage, and the verify step below checks each
-# guard is still present by name.
-HK_DST="$TARGET/.beads-hooks/pre-commit"; HK_SRC="$PAYLOAD/.beads-hooks/pre-commit"
-if [ -e "$HK_DST" ] && ! cmp -s "$HK_SRC" "$HK_DST" \
-   && [ "$(outside_bd "$HK_SRC")" = "$(outside_bd "$HK_DST")" ]; then
-  say ".beads-hooks/pre-commit (current — differs only inside bd's own block, which bd manages)"
-  [ -e "$HK_DST.new" ] && run rm -f "$HK_DST.new" && say "    removed the stale .beads-hooks/pre-commit.new an earlier run left"
-else
-  install_file ".beads-hooks/pre-commit" 755
-fi
-# post-merge and post-checkout carry only the store-CLI stanza: under cairn they run `cairn sync`
-# after a pull or a checkout, which a repo bd never installed its hooks in had nowhere to run
-# (workspace-7m8.23). Written only where absent. One that is there is bd's (bd appends its block
-# below ours and keeps our lines) or the user's own, and its stanza is
-# tools/store-cli-git-hooks.sh's to keep current, never a .new.
-for h in post-merge post-checkout; do
-  dst="$TARGET/.beads-hooks/$h"
-  if [ ! -e "$dst" ]; then install_file ".beads-hooks/$h" 755; continue; fi
-  if grep -qF '# >>> store CLI: cairn stops here >>>' "$dst"; then
-    say ".beads-hooks/$h (present, with the store-CLI stanza; tools/store-cli-git-hooks.sh keeps it current)"
-  elif grep -q 'BEGIN BEADS INTEGRATION' "$dst"; then
-    say ".beads-hooks/$h (bd's; tools/store-cli-git-hooks.sh adds the store-CLI stanza before a move to cairn)"
-  else
-    say ".beads-hooks/$h (your own; under cairn it does not run \`cairn sync\` — add the stanza from tools/store-cli-git-hooks.sh)"
-  fi
-done
+# pre-commit runs `cairn check`, the two path guards and the export freshness check;
+# post-merge and post-checkout run `cairn sync`, which brings this clone's store up to the
+# exports a pull or a checkout brought in. bd's blocks were taken out above ("leaving bd").
+for h in pre-commit post-merge post-checkout; do install_file ".beads-hooks/$h" 755; done
 
 # ------------------------------------------------------------- agent docs --
 hdr "agent docs (AGENTS.md + CLAUDE.md)"
@@ -355,18 +532,20 @@ else
     | awk 'BEGIN{b=0} /^$/{b++; if(b>1) next} !/^$/{b=0} {print}' > "$AGENTS_RENDERED"
 fi
 trap 'rm -f "$AGENTS_RENDERED"' EXIT
-# AGENTS.md is the one payload file that is MEANT to diverge from ours: the user edits it, and
-# bd init appends its managed block. So this never drops an AGENTS.md.new beside it -- that was
+# AGENTS.md is the one payload file that is MEANT to diverge from ours: the user edits it. So this never drops an AGENTS.md.new beside it -- that was
 # re-offered on every re-run, read as "a truncated rewrite in progress" by the first outside
 # reader, and was a trap for whoever edited the wrong file next. Say which state it is in and
 # where our template lives; that is all the information the .new ever carried.
 if [ -e "$TARGET/AGENTS.md" ]; then
   if cmp -s "$AGENTS_RENDERED" "$TARGET/AGENTS.md"; then say "AGENTS.md (already current)"
-  elif [ "$(outside_bd "$AGENTS_RENDERED")" = "$(outside_bd "$TARGET/AGENTS.md")" ]; then
-    say "AGENTS.md (current — differs only inside bd's own block, which bd init appends)"
   else
     say "AGENTS.md is yours — kept. It differs from our template, which is the point."
     say "    our template: $PAYLOAD/AGENTS.md  (the concurrent-sessions section is stripped unless --with-concurrent)"
+  fi
+  # bd init appends a managed block telling agents to use bd. It is in YOUR file, so it is named,
+  # not removed: an agent that reads it runs bd, which here creates a store nobody reads.
+  if grep -q 'BEGIN BEADS INTEGRATION' "$TARGET/AGENTS.md" 2>/dev/null; then
+    warn "AGENTS.md still carries bd's managed block (<!-- BEGIN BEADS INTEGRATION --> ... END): it tells agents to use bd — delete it"
   fi
   if [ -e "$TARGET/AGENTS.md.new" ]; then
     run rm -f "$TARGET/AGENTS.md.new"
@@ -425,11 +604,12 @@ elif [ ! -e "$TARGET/CLAUDE.md" ]; then
   fi
 fi
 # --------------------------------------------------------------- git hooks --
-# Wired whether or not bd is present. Two of the pre-commit's stanzas (agent-cache paths,
-# agent-docs symlink) need no bd and are the whole point on a box without one; the two that do
-# need it self-skip. This used to sit inside the bd branch below, so a box without bd got the
-# hook file copied and reported with a green +, and nothing said that wiring it had been skipped
-# -- the git layer guarded nothing. Instance 12 in docs/ops/checks-narrower-than-what-they-check.md.
+# Wired whether or not cairn is present. Two of the pre-commit's stanzas (agent-cache paths,
+# agent-docs symlink) need no store and are the whole point on a box without one; the ones that do
+# need it self-skip. This once sat inside the store branch of the installer, so a box without the
+# tracker got the hook file copied and reported with a green +, and nothing said that wiring it had
+# been skipped -- the git layer guarded nothing. Instance 12 in
+# docs/ops/checks-narrower-than-what-they-check.md.
 hdr "git hooks"
 if hooks_wired; then say "core.hooksPath=$HOOKS_PATH_VALUE already runs .beads-hooks/"
 else
@@ -456,68 +636,28 @@ fi
 stale=$(ls "$GIT_COMMON/hooks" 2>/dev/null | grep -vc '\.sample$' || true)
 [ "${stale:-0}" -gt 0 ] && warn "$stale hook(s) in $GIT_COMMON/hooks — ignored in this worktree; review before deleting (siblings may use them)."
 
-# ------------------------------------------------------------------- beads --
-hdr "bd store"
-if command -v bd >/dev/null 2>&1; then
-  if [ -d "$TARGET/.beads" ]; then
-    say ".beads/ present"
-  else
-    say "no .beads/ yet — initialise it yourself so the prefix is your choice:"
-    say "    cd \"$TARGET\" && bd init --prefix <XX>"
-  fi
-  say "bd's own hooks: run  bd hooks install --shared  in the target (note --shared)"
-else
-  say "bd absent (reported under dependencies) — store setup skipped; the git hooks above are wired regardless"
-fi
-
-# -------------------------------------------------------------------- shell --
-hdr "shell guard (~/.bashrc)"
-GUARD_SRC="$TARGET/tools/dolt-guard.sh"
-GB='# >>> bd dolt-guard >>>'; GE='# <<< bd dolt-guard <<<'; RC="$HOME/.bashrc"
-if [ "$DO_SHELL" -eq 0 ]; then
-  say "skipped (--no-shell). Without it, a reboot leaves the Dolt server dead and bd writes"
-  say "  silently fail to land while reads still look fine. Source it yourself: . $GUARD_SRC"
-elif [ -z "${HOME:-}" ]; then warn "HOME unset — skipping"
-elif [ ! -f "$GUARD_SRC" ] && [ "$MODE" != dryrun ]; then warn "tools/dolt-guard.sh not installed — skipping"
-else
-  BLOCK="$GB
-# Restarts the beads Dolt server after a reboot; nothing else does.
-# Managed by beads-agent-pipeline's install.sh — edit tools/dolt-guard.sh, not here.
-[ -f \"$GUARD_SRC\" ] && . \"$GUARD_SRC\"
-$GE"
-  if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m add the dolt-guard block to %s\n' "$RC"
-  else
-    [ -f "$RC" ] || : > "$RC"
-    esc() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
-    cur_block=$(sed -n "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/p" "$RC" 2>/dev/null)
-    if [ "$cur_block" = "$BLOCK" ]; then say "dolt-guard already current in $RC"
-    else
-      cp "$RC" "$RC.bak.$(date +%s)" && say "backed up $RC"
-      # not `sed -i`: BSD sed needs an argument to -i, so the GNU spelling breaks on macOS
-      [ -n "$cur_block" ] && { sed "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/d" "$RC" > "$RC.bap.$$" && mv -f "$RC.bap.$$" "$RC"; }
-      printf '\n%s\n' "$BLOCK" >> "$RC"
-      did "dolt-guard installed in $RC — open a new shell, or: . $GUARD_SRC"
-    fi
-  fi
-fi
-
 # ------------------------------------------------------------------ verify --
 hdr "verify"
 # Which guards are actually in the shared pre-commit. The hook file ships with four stanzas:
-# bd's own marker-managed block, the memory-graph guard, the agent-cache path guard and the
-# agent-docs guard. `bd hooks
-# install --shared` rewrites only the region between ITS markers, so the other two should
-# survive -- but a clone missing a stanza is otherwise SILENTLY unguarded, which is the exact
-# failure this pipeline exists to prevent. Report presence per guard rather than assuming it.
+# the store check (`cairn check`), the agent-cache path guard, the agent-docs guard and the
+# export freshness guard. A clone missing a stanza is otherwise SILENTLY unguarded, which is the
+# exact failure this pipeline exists to prevent. Report presence per guard rather than assuming it.
 HK="$TARGET/.beads-hooks/pre-commit"
 if [ -f "$HK" ] && [ "$MODE" != dryrun ]; then
-  for marker in "BEADS INTEGRATION:bd's own hooks" \
-                "bd-memgraph check:memory-graph guard" \
+  for marker in ">>> store check >>>:store check (cairn check)" \
                 "agent-cache path guard:agent-cache path guard" \
-                "agent-docs symlink guard:agent-docs guard"; do
+                "agent-docs symlink guard:agent-docs guard" \
+                "export freshness guard:export freshness guard"; do
     pat=${marker%%:*}; name=${marker#*:}
     if grep -q "$pat" "$HK" 2>/dev/null; then say "$name present in .beads-hooks/pre-commit"
     else warn "$name MISSING from .beads-hooks/pre-commit — re-run this installer"; fi
+  done
+  # Nothing in a git hook may still call bd: that is the one thing "leaving bd" exists to stop.
+  for h in "$TARGET"/.beads-hooks/*; do
+    [ -f "$h" ] || continue
+    case ${h##*/} in *.new|*.bak*|*.sample) continue ;; esac
+    grep -qE 'bd hooks run|BEGIN BEADS INTEGRATION' "$h" \
+      && warn ".beads-hooks/${h##*/} still runs bd — remove bd's block from it"
   done
   # Presence in the file is a textual claim. Whether git RUNS the file is core.hooksPath, and
   # that was the piece this installer used to skip without saying so. Assert the wiring too.
@@ -534,19 +674,6 @@ if [ "$MODE" != dryrun ]; then
     warn "installed file(s) GITIGNORED in this repo — they will not reach any clone; add a \`!path\` re-include:"
     printf '%s\n' "$eaten" | sed 's/^/        /' >&2
   else say "no installed file is gitignored here"; fi
-fi
-# The memory-graph ledger only helps the next machine if it is in git. bd does not ignore it, but
-# a root .gitignore that excludes `.beads/` wholesale does -- and a `!` re-include under an
-# excluded directory has no effect (docs/ops/memory-and-the-graph.md has the working form).
-LEDGER=".beads/memgraph-ledger.json"
-if [ -f "$TARGET/$LEDGER" ]; then
-  if [ -n "$(git -C "$TARGET" ls-files --others --ignored --exclude-standard -- "$LEDGER" 2>/dev/null)" ]; then
-    warn "$LEDGER is GITIGNORED — the memory graph's history will not travel. Exclude .beads/* not .beads/, then re-include it (see docs/ops/memory-and-the-graph.md)"
-  elif [ -n "$(git -C "$TARGET" ls-files --others --exclude-standard -- "$LEDGER" 2>/dev/null)" ]; then
-    say "$LEDGER is untracked — git add it once; it is meant to be committed"
-  else
-    say "$LEDGER is tracked"
-  fi
 fi
 if [ "$MODE" = dryrun ]; then
   say "dry run — nothing was changed, so nothing to verify."
@@ -579,9 +706,12 @@ cat <<NEXT
 
 Next:
   cd "$TARGET"
-  bd init --prefix <XX>        # if you have no .beads/ yet
-  bd hooks install --shared    # --shared matters: without it git ignores them
-  tools/agent_docs_test.sh     # and the rest of the suite in AGENTS.md
+  cairn init -p <PREFIX>                 # if there is no cairn store yet; the prefix is yours to choose
+  tools/refresh-beads-exports.sh         # writes the four tracked files into .cairn/
+  git add .cairn/.gitignore .cairn/config.json .cairn/issues.jsonl .cairn/memories.jsonl \\
+          .cairn/allocator.json .cairn/events.jsonl
+  git commit -m "cairn store" -- .cairn/  # a store is not finished until another clone can cairn sync from it
+  tools/agent_docs_test.sh               # and the rest of the suite in AGENTS.md
 Then open AGENTS.md and make it yours.
 The concurrent-sessions layer is $( [ "$WITH_CONCURRENT" -eq 1 ] && echo INSTALLED || echo "NOT installed — add it with --with-concurrent if more than one session will run against this repo" ).
 Pi adapter is $( [ "$WITH_PI" -eq 1 ] && echo "COPIED — verify Pi project trust and run tools/pi-extension_test.sh" || echo "NOT installed — add it with --with-pi, then grant Pi project trust" ).
