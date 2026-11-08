@@ -530,7 +530,7 @@ chk "every changed hook was backed up under the git dir" \
 chk "the codex hook running bd is removed, the other kept"   "$(grep -c 'bd codex-hook' "$F/.codex/hooks.json"):$(grep -c codex-keep "$F/.codex/hooks.json")" "0:1"
 chk "the cursor hook running bd (store-cli-guarded) is removed, the other kept" "$(grep -c 'bd cursor-hook' "$F/.cursor/hooks.json"):$(grep -c cursor-keep "$F/.cursor/hooks.json")" "0:1"
 chk "  …and both files are still JSON" "$(python3 -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]; print("ok")' "$F/.codex/hooks.json" "$F/.cursor/hooks.json" 2>&1 | tr -d '\r')" ok
-chk "the ~/.bashrc block for THIS repo is removed, the rest kept" "$(grep -c 'dolt-guard' "$FH/.bashrc"):$(grep -c '^before=1$\|^after=1$' "$FH/.bashrc")" "0:2"
+chk "the ~/.bashrc block for THIS repo is removed, the rest kept" "$(grep -c 'dolt-guard' "$FH/.bashrc"):$(grep -c -e '^before=1$' -e '^after=1$' "$FH/.bashrc")" "0:2"
 chk "  …with a backup beside it"                             "$(ls "$FH"/.bashrc.bak.* 2>/dev/null | wc -l | tr -d ' ')" 1
 # While the bd-era pre-commit is the live copy, removing .claude/store-cli would turn bd back on:
 # the git rm must not be printed, and the order (adopt the .new first) must be.
@@ -666,7 +666,7 @@ if command -v cairn >/dev/null 2>&1; then
   chk "the sibling's .cairn/redirect names the main store" "$(cat "$M.side/.cairn/redirect" 2>/dev/null)" "$M/.cairn"
   chk "  …and the sibling got no database of its own"       "$([ -e "$M.side/.cairn/cairn.db" ] && echo stray || echo none)" none
   "$SRC/install.sh" "$M" >"$M/.git/wt2.log" 2>&1
-  grep -q "worktree $M.side shares this store" "$M/.git/wt2.log" && ok "  …a re-run says it is shared and writes nothing" \
+  grep -q "main.side shares this store" "$M/.git/wt2.log" && ok "  …a re-run says it is shared and writes nothing" \
     || bad "  …a re-run says it is shared and writes nothing"
   rm -rf "$(dirname "$M")" "$M.side"
 else

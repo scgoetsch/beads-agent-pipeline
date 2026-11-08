@@ -220,8 +220,13 @@ chk "  and it was committed"                      "$(commits)" 2
 chk "the check left nothing behind in .cairn/"    "$(leftover)" 0
 chmod -x "$R/tools/refresh-beads-exports.sh"
 cairn_rows "$I1" "$I2" "$I3" "$M1" "$M2"
-chk "script not executable: commit goes through"  "$(commit five)" 0
-chk "  but not silently"                          "$(said 'NOT compared')" 1
+# Git Bash keeps a .sh executable whatever chmod says, so there is no such state to test there.
+if [ -x "$R/tools/refresh-beads-exports.sh" ]; then
+  echo "  SKIP  script not executable: chmod -x does not take on this filesystem"
+else
+  chk "script not executable: commit goes through"  "$(commit five)" 0
+  chk "  but not silently"                          "$(said 'NOT compared')" 1
+fi
 chmod +x "$R/tools/refresh-beads-exports.sh"
 (cd "$R" && PATH=$STUBPATH ./tools/refresh-beads-exports.sh >/dev/null 2>&1 && git add .cairn/issues.jsonl .cairn/memories.jsonl .cairn/allocator.json)
 chk "after the printed fix: commit goes through"  "$(commit four)" 0

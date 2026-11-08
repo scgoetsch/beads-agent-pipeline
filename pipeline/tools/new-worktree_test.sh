@@ -25,7 +25,10 @@ out=$("$TOOL" "$T/side" 2>&1); rc=$?
 chk "create exits 0" "$rc" 0
 chk "says where the store is" "$(printf '%s' "$out" | grep -c 'redirect -> ')" 1
 chk "refusing an existing dir" "$("$TOOL" "$T/side" >/dev/null 2>&1; echo $?)" 1
-chk "redirect holds the main store's absolute path" "$(cat "$T/side/.cairn/redirect")" "$R/.cairn"
+# The path as git spells it (macOS: /private/var/..., Git Bash: C:/...), which is what the tool
+# writes and cairn reads; mktemp's spelling differs there (CI, 2026-11-08).
+RG=$(dirname "$(git -C "$R" rev-parse --path-format=absolute --git-common-dir)")
+chk "redirect holds the main store's absolute path" "$(cat "$T/side/.cairn/redirect")" "$RG/.cairn"
 chk "no stray database in the worktree" "$([ -e "$T/side/.cairn/cairn.db" ] && echo stray || echo none)" none
 chk "worktree sees the main issue" "$(cd "$T/side" && cairn list 2>/dev/null | grep -c main-issue)" 1
 (cd "$T/side" && cairn create --title=from-side --type=task --priority=4 --actor t --silent >/dev/null 2>&1)

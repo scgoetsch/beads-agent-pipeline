@@ -219,7 +219,9 @@ PAIRS="issues:$ISSUES memories:$MEMORIES"
     git show "$ref:$X/events.jsonl" > "$tmp/events.$ref" 2>/dev/null \
       || git show "$ref:.beads/events.jsonl" > "$tmp/events.$ref" 2>/dev/null || continue
     n=$(wc -c < "$tmp/events.$ref" | tr -d ' ')
-    if [ "$(wc -c < "$tmp/events.new" | tr -d ' ')" -lt "$n" ] || ! cmp -s -n "$n" "$tmp/events.$ref" "$tmp/events.new"; then
+    # head -c | cmp, not cmp -n (GNU): on macOS CI the cmp -n form read every append as dropped
+    # history (2026-11-08).
+    if [ "$(wc -c < "$tmp/events.new" | tr -d ' ')" -lt "$n" ] || ! head -c "$n" "$tmp/events.new" | cmp -s "$tmp/events.$ref" -; then
       echo "beads-exports: $X/events.jsonl would drop history $ref has ($(rows "$tmp/events.$ref") events there, $(rows "$tmp/events.new") here, not an append)." >&2
       echo "  A commit must extend the history git has, never rewrite it. If another clone's work came in, run cairn sync; if two clones wrote, there is no merge. Nothing was written." >&2
       exit 1
