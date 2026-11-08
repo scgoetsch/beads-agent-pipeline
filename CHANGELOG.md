@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0 — unreleased (not tagged)
+## v0.2.0 — 2026-11-08
 
 **The store is [cairn](https://github.com/scgoetsch/cairn) (0.7.0 or later), and only cairn. This
 release does not read bd.** Do not re-run the installer on a checkout whose store is still bd's
