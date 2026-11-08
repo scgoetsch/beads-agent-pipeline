@@ -142,7 +142,7 @@ echo "### an empty export is accepted only where there is nothing to lose"
 rm -f "$R/.cairn/memories.jsonl"
 cairn_rows "$I1" "$I2" "$I3"
 chk "no memories and no memories file -> 0"       "$(run)" 0
-chk "  and no empty memories file is created"     "$([ -e "$R/.cairn/memories.jsonl" ] && echo present || echo absent)" absent
+chk "  and the file is created, empty (a fresh store's first commit carries all four)" "$([ -e "$R/.cairn/memories.jsonl" ] && wc -l < "$R/.cairn/memories.jsonl" | tr -d ' ' || echo absent)" 0
 
 echo "### --check compares the working tree and never writes"
 cairn_rows "$I1" "$I2" "$I3" "$M1" "$M2"; run >/dev/null
@@ -170,7 +170,7 @@ cairn_rows "$I1" "$I2" "$I3" "$M1" "$M2"
 chk "only the issues file present, in sync -> 0"  "$(run --check)" 0
 cairn_rows "$I1" "$I2" "$M1" "$M2"
 chk "only the issues file present, stale -> 1"    "$(run --check)" 1
-chk "  the fix stages the file that exists"       "$(said 'git add .cairn/issues.jsonl .cairn/allocator.json$')" 1
+chk "  the fix stages the file that exists"       "$(said 'git add .cairn/issues.jsonl .cairn/allocator.json .cairn/events.jsonl$')" 1
 cairn_rows "$I1" "$I2" "$I3" "$M1" "$M2"
 mv -f "$T/hold/memories.jsonl" "$R/.cairn/"
 
@@ -207,7 +207,7 @@ commits() { git -C "$R" rev-list --count HEAD 2>/dev/null || echo 0; }
 cairn_rows "$I1" "$I2" "$M1" "$M2"
 # The stanza is the LAST thing in this hook, so its own status is the hook's. Written as
 # `[ $? -eq 1 ] && exit 1` it blocked every commit whose exports were current: the false test
-# became the hook's exit status (in the bd-era hook a block ran afterwards and hid it).
+# became the hook's exit status (in the 0.1-era hook a block ran afterwards and hid it).
 chk "exports current: commit goes through"        "$(commit one)" 0
 cairn_rows "$I1" "$I2" "$I3" "$M1" "$M2"
 chk "exports stale: commit is blocked"            "$(commit two)" 1

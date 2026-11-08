@@ -1,417 +1,114 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — unreleased (not tagged)
 
-- **Under cairn, bd's own hooks that still run bd are named at session start.** `bd hooks install
-  --shared` writes four git hooks that run `bd hooks run <hook>`, and `bd init` / `bd setup` write
-  harness hooks that run `bd prime`; under cairn each reads, syncs or pushes bd's frozen store, and
-  the prerun gate never sees a hook. `tools/store-cli-git-hooks.sh` and
-  `tools/store-cli-harness-hooks.sh` stop them, but only when someone runs them at the switch and
-  after every reinstall, and nothing said when nobody had (workspace-pg6h). The session-start hook
-  now runs both with `--check` under cairn and, when either finds an unguarded hook, says so at
-  the top of the payload with the tool to run. Under bd, or where the tools are absent, nothing runs.
-- **A repo bd never installed its hooks in also catches up after a pull.** The `cairn sync` stanza
-  lived only in bd's own post-merge and post-checkout, which a repo that started on cairn does not
-  have: after a pull its store stayed behind until the next session start (the safety nets held:
-  writes and the export refresh refuse while behind; workspace-7m8.23). The pipeline now ships
-  `.beads-hooks/post-merge` and `post-checkout` holding only the store-CLI stanza; the installer
-  writes them only where absent and never offers a `.new` for one that is there.
-  `bd hooks install --shared` (1.1.2, tested) appends its block below and keeps them;
-  `tools/store-cli-git-hooks.sh` now also keeps the stanza current in a hook without bd's block.
-  Not fixed, written down: a fresh clone runs no hook until `core.hooksPath` is set in it.
-- **Under cairn, a clone's store follows the exports git brings in.** A second clone has a cairn
-  store of its own, and nothing brought it up to another clone's pushed work: it listed finished
-  work as ready, and the export refresh would commit a revert of it (workspace-7m8.21). cairn
-  `d75b625` adds `cairn sync` and refuses writes while a store is behind or diverged. Here the
-  session-start hook runs `cairn sync` first and says at the top of the payload when it caught up
-  or refused; the store-CLI stanza `tools/store-cli-git-hooks.sh` puts into bd's git hooks runs it
-  in post-merge and post-checkout (never failing the git command), and the tool now replaces an
-  older stanza and leaves the pipeline's own pre-commit alone. AGENTS.md says so in "bd or cairn".
-- **The agent-harness hooks bd writes stop under cairn.** bd 1.3's `bd init` writes hooks that run
-  bd directly: a SessionStart `bd prime --hook-json` in `.claude/settings.json`, `bd codex-hook`
-  in `.codex/hooks.json`, `bd cursor-hook` in `.cursor/hooks.json`. After a move to cairn each of
-  them put bd's frozen store into the session as if it were current, and the prerun hook cannot
-  see them (it sees typed calls, not hooks; found on a bd 1.3.0 cutover, workspace-7m8.22). New
-  `tools/store-cli-harness-hooks.sh` prefixes every hook command whose first word is `bd` with a
-  test that skips it while `.claude/store-cli` says `cairn` and does nothing otherwise, so the
-  hooks follow the switch both ways; `--check` names the unguarded ones. Run it before the switch
-  and after any `bd init` or `bd setup`. New `tools/store-cli-harness-hooks_test.sh`.
-- **Under cairn the memory graph is the store's own, and agents are told how to work in either
-  store.** The pre-commit's memory-graph stanza runs `cairn check` where `.claude/store-cli` says
-  `cairn` (the same hard link errors, plus the store's own integrity: dangling dependencies, a
-  second parent, a `blocks` cycle) and no longer calls bd-memgraph or bd there: bd-memgraph reads
-  `bd memories --json` itself, which under cairn is the frozen store. A `cairn check` that cannot
-  run lets the commit through and says the store was NOT checked. cairn's `remember` now does
-  bd-memgraph's `evolve` admission check (cairn `815cce6`). Under bd nothing changes. AGENTS.md
-  gains "bd or cairn: `.claude/store-cli`" (under cairn, `bd <verb>` in this file means `cairn
-  <verb>`) and states the memory section for both stores; `docs/ops/memory-and-the-graph.md`
-  gains "The graph under cairn". `tools/agent_docs_test.sh` allowlists `.claude/store-cli`, which
-  is absent by design in a bd checkout (workspace-7m8.20).
-- **The hooks can run cairn instead of bd, per checkout.** A tracked `.claude/store-cli` (`bd` or
-  `cairn`; absent means bd) selects the store's CLI for the prime, prerun and stop hooks and the
-  pre-commit; there is no environment override, so a checkout's sessions and git hooks cannot
-  disagree. With the file present, the prerun hook blocks writes through the other name (a `bd
-  update` typed from habit after a move would land in a frozen store and vanish). Both names are
-  parsed on every install, so `cairn remember` without `--key` is refused and `cairn update
-  --claim` is recorded even where nobody opted in. The prime hook no longer runs cairn's prime
-  through bd's `## Persistent Memories`…`## Core Rules` filter, which with cairn's layout would
-  have deleted from the first memory heading to the end. While the file says `bd`, the prerun hook
-  lets cairn READ only (an allowlist of read verbs: a write verb nobody listed is blocked too; the
-  shadow mirrors bd, so its reads are current). While it says `cairn`, every bd call is blocked,
-  reads included: bd's store is frozen at the cutover and would answer from that day without
-  saying so (workspace-7m8.16). The message names the cairn verb that answers instead, or says
-  cairn has none; `# frozen-store-ok` in the command lets a read through on purpose, never a
-  write. New `tools/store-cli-git-hooks.sh` puts the same stop into bd's own four git hooks. New
-  `tools/pre-commit-store-cli_test.sh` and `tools/store-cli-git-hooks_test.sh`; the prerun, prime
-  and stop suites cover every mode.
-- **A claim the session record missed is still this session's.** The scripts gate and the stop
-  hook knew a session's claims only from ids typed literally in `bd update <id> --claim`, so
-  `bd update "$id" --claim` and `ready --claim` left the session's own work blocked as untracked
-  (workspace-aa20). Both now also accept an in-progress issue whose assignee is the session's own
-  actor, and only a session-scoped one (`<user>/<harness>/<id>`): a bare user name is shared by
-  every session and would make all of that user's issues "mine". The in-progress listings pass
-  `--limit 0`; both CLIs stop at 50 rows by default and say so only on stderr.
+**The store is [cairn](https://github.com/scgoetsch/cairn) (0.7.0 or later), and only cairn. This
+release does not read bd.** Do not re-run the installer on a checkout whose store is still bd's
+before the store has moved: the installer refuses one that has a live bd store and no writable
+cairn store, and the move is the numbered sequence in the README ("Moving a repo off bd"). A
+green install is not a migrated store. `v0.1.0` stays where it is as the bd release. The version
+is a minor bump because the interface is not stable yet: the hook names and the migration path
+are expected to change again (renames; a migration verb in cairn).
 
-- **The memory-curate stamp recipe counts through `/usr/bin/grep -a`.** `bd memories` truncates
-  each body by byte, so a split multibyte character makes the listing "binary". Claude Code's
-  interactive `grep` wrapper (ugrep `-I`) skips binary input and prints nothing, not 0, so the
-  stamp carried an empty count. The skill's metrics and stamp lines now bypass the wrapper. The
-  gate's fallback count gains `-a` as well; it runs as a script and gets the real grep, so this
-  is belt-and-braces there.
-- **A site check that exits nonzero without output is named, not read as health.** The
-  2026-10-06 rework of `emit_site_checks` kept the case where the time bound kills a check (exit
-  124) but dropped the general one, so a check that crashed in silence emitted nothing, which is
-  exactly what a healthy check emits. It now gets a block saying `<name> exited <rc> without a
-  verdict — treat it as NOT RUN`. Caught by a downstream workspace suite that still asserted the
-  old message; `bd-prime-hook_test.sh` now carries the case itself.
-- **`--with-peer` is now `--with-concurrent`.** The flag installs the concurrent-sessions layer
-  (`docs/ops/concurrent-sessions.md` and the matching `AGENTS.md` section), where "peer" is the
-  harness's word for another session. A project that also carries foreign-lab peer-review
-  tooling (a grok-peer or agy-peer subagent, `*_PEER_ACTIVE` guards, a "peer" policy section)
-  loaded both meanings into one context window. The old spelling is still accepted and prints a
-  note; the template markers are `concurrent:begin` / `concurrent:end`; the self-test covers
-  both spellings. Filed from the project that hit it (aigent-i9pu).
-- **Sessions get an identity in bd's audit trail.** Every bd write carried the bare git user.name
-  (188 of 188 audit rows on one store were one actor across at least five sessions), so the log
-  could not say which run did what. The SessionStart hook now exports
-  `BEADS_ACTOR=<git user.name>/claude/<8 hex of the session id>` through Claude Code's
-  `CLAUDE_ENV_FILE`, which every later Bash call and its children (git hooks, the exports refresh,
-  `bd dolt push`) inherit; the human stays first so a search for the name still hits every row.
-  Deliberate consequence: `bd update --claim` is compare-and-swap on the assignee, so a second
-  session is refused by name and takes over with `--assignee` first, which is logged; the
-  PreToolUse stop reminder now says so instead of calling `--claim` idempotent. Hosts without
-  `CLAUDE_ENV_FILE` are untouched; a failed export is named at the top of the payload;
-  `BD_PRIME_SESSION_ACTOR=0` opts out. Twelve suite cases, run before the jq branch so every box
-  runs them. Not covered: `bd note` carries no author at all (a bd limitation), and non-Claude
-  harnesses set nothing — a peer wrapper that may write bd should export its own actor.
-- **Last causes from the matrix after the previous batch** (macOS 134/1, Windows 128/7). A
-  native Windows jq ends each line with CR LF too, so the prime hook read a hot key back as
-  `key\r`, matched nothing, and emitted no hot body; every jq output it reads back is stripped,
-  and `memory-hot.txt` is read the same way for a file saved CR LF. `-ef` cannot equate two
-  spellings of one directory across MSYS mounts (`/tmp/…` against `/c/Users/…/Temp/…`, different
-  devices), so the hook's hooksPath check and the installer's `hooks_wired` fall back to
-  `cygpath -m` where it exists — the self-test's absolute-hooksPath case had the installer
-  rewriting a value it should have left alone. The dolt-guard suite's stub listeners run from `/`
-  (exec'd so the recorded pid is theirs) and cleanup retries the removal, since Windows will not
-  delete a directory a live process holds as its cwd and releases a killed one's handles a beat
-  later; the suite had leaked its scratch directory there. `agent_docs_test.sh` walks the tree in
-  Python instead of shelling out to `find`, which a native Windows Python resolved to System32's.
-  The Pi event suite's own prime stub formatted a `wc -l` count, padded on BSD, so its `PRIMED 1`
-  assertion failed on macOS; stripped. The directory comparison asks cygpath for the long name:
-  a hosted runner's %TEMP% is the 8.3 form (RUNNER~1), so one directory still had two spellings
-  in mixed form, and Windows paths compare case-insensitively. And a drive letter is absolute:
-  git on Windows reports a hooksPath it was handed as `/tmp/…` in the form MSYS converted the
-  argument to, `C:/Users/…`, which `/*` did not match, so the installer and the prime hook took a
-  wired absolute hooksPath for a relative one; the self-test compares that value canonically.
-- **The hooks read Python back without the CR a native Windows Python appends**, plus the
-  next causes the matrix measured after the previous batch. A native Windows Python ends every
-  stdout line with CR LF even into a pipe (the workflow's box line now shows it), so the prerun
-  hook read an empty session id as a lone CR and treated every call as session-scoped with no
-  claims — every `allows` case blocked — and the stop hook's rows and the prime hook's project
-  brief carried the CR too; all three strip it. The prime hook's `core.hooksPath` check compares
-  directories by inode (`-ef`), not spelling: git reports `C:/…` where the shell says `/c/…`, and
-  macOS has `/var` beside `/private/var`. The project brief runs unbounded where there is no
-  `timeout`, as the site checks already do. `tools/dolt-guard.sh` stamps its log with strftime,
-  not `date -Is`, which BSD date rejects. Its suite starts listeners without `setsid` where there
-  is none, keeps their pids in a file instead of `pgrep` (absent on MSYS), asserts exactly-once
-  starts and the lock only where `flock` exists, and builds its no-flock PATH from wrappers that
-  include `lsof` and `netstat` for the boxes that probe with them. `agent_docs_test.sh` strips the
-  CR from its Python output; `check-no-agent-cache-paths_test.sh` skips its tab-in-a-filename
-  case when git cannot stage the name, not only when the filesystem refuses it. The Pi extension
-  compares real paths: Node resolves a module's real path while the cwd it is handed may be the
-  logical spelling, so on macOS it had declared itself loaded outside its own project and run
-  nothing. `bd-prime-hook_test.sh` prints the payload head under a failing check.
-  `audit_wikilinks_test.sh` SKIPs, saying why, under a native Windows Python: its stub `bd` is a
-  shell script, and CreateProcess runs no shell script and finds only `bd.exe` on PATH — which is
-  what users have, so the script itself works there and only the fixture cannot.
-- **One file, two names, on a filesystem without symlinks.** Git Bash's `ln -s` copies the
-  target by default and reports success, so the first native Windows install produced two
-  independent files with no error. The installer now runs it with `MSYS=winsymlinks:nativestrict`
-  (a real link where Windows allows one, a failure otherwise) and on failure writes git's own
-  on-disk form of the link — `CLAUDE.md` holding the text `AGENTS.md` — staged as a symlink
-  (`update-index --cacheinfo 120000`), so the commit carries a real symlink and a clone with
-  symlinks gets one; a re-run recognises that state as linked. `tools/check-agent-docs-linked.sh`
-  accepts the pointer form when git agrees it is a link (index mode 120000, or
-  `core.symlinks=false`), its `--cached` snapshot no longer needs a symlink of its own, and its
-  messages say how to stage the pointer form. Its suite gains the pointer-file state (six cases)
-  and, on a box that cannot link at all, says so and runs that section alone; the self-test
-  forces the fallback (`BAP_INSTALL_NO_SYMLINKS=1`, `core.symlinks=false`) so a Linux box
-  exercises it too: pointer on disk, 120000 in the index, guard passes, commit passes, the
-  commit's tree carries a symlink, and a fresh clone has the real link. `docs/ops/agent-docs-symlink.md`
-  describes the form.
-- **The suites and the self-test hold on macOS and Git Bash where they held only on Linux**,
-  measured by the Actions matrix on 2026-10-06 and fixed at the cause. BSD `wc` pads its count,
-  so every `wc -l` / `wc -c` comparison in `selftest.sh`, `dolt-guard_test.sh`,
-  `audit_wikilinks_test.sh` and `bd-prime-hook_test.sh` strips it. `hook_portability_test.sh`
-  compares the relocated clone's path in canonical form (`pwd -P`, and `cygpath -m` under MSYS):
-  `mktemp` says `/var/…` on macOS and `/tmp/…` on Git Bash while the hooks resolve
-  `/private/var/…` and `/c/Users/…/Temp/…`; it also feeds `settings.json` to Python on stdin
-  rather than as a path inside `-c`, which a native Windows Python cannot open. The
-  memory-curation gate computes the day gap in shell arithmetic (civil date to day number,
-  checked against GNU date) instead of `date -d`, which BSD date lacks, so the gate runs on
-  macOS. `dolt-guard_test.sh` starts its listener without `setsid` where the box has none (stock
-  macOS, Git Bash) instead of dying at "could not bind test port". The four suites that built a
-  private PATH out of symlinks to tools write exec wrappers instead: MSYS `ln -s` copies a binary
-  away from its DLLs and the copy exits 127. `bd-prime-hook_test.sh` SKIPs, by name, the cases
-  that need a real `timeout` or a `chmod -x` that takes effect; `check-no-agent-cache-paths_test.sh`
-  SKIPs its tab-in-a-filename case where the filesystem refuses the name; `bd-prerun-hook_test.sh`
-  prints the hook's stderr under a failing case. `sweep.sh` now decides what grep will not search
-  by asking the scanner itself — the same binary, flags and locale, a pattern every line matches,
-  printed lines counted against the file's — instead of running iconv over the bytes: GNU grep on
-  glibc and ugrep suppress a line carrying a malformed byte under a UTF-8 locale (and exit 0
-  regardless), BSD grep and GNU grep on the MSYS runtime print it, so the iconv predicate
-  overclaimed "NOT SEARCHED" on every box of the second kind. `sweep_test.sh` measures that
-  before its binary-file case and SKIPs it, loudly and counted, where the box's grep has no such
-  hazard — as it already said it did where no UTF-8 locale exists, except that SKIP then went on
-  and ran the case anyway.
-- **The self-test runs in GitHub Actions on ubuntu, macos and windows.**
-  `.github/workflows/selftest.yml` runs `./selftest.sh` on every push: `ubuntu-latest` with bd and
-  without, `macos-latest` with bash from Homebrew (the stock `/bin/bash` is 3.2) and
-  `windows-latest` under Git Bash. bd is installed from the release archive the workflow names,
-  verified against the release's `checksums.txt`, into a directory of its own so the no-bd probe
-  can hide it; the official installer refuses Git Bash and floats to the current release. Each
-  job puts its box line, the RESULT line and every FAIL in the run summary, keeps the log, and
-  after a failure keeps the installer's output and every suite's full log. First run, 2026-10-06,
-  bd 1.3.1: Ubuntu 127 passed with bd and without; macOS 26 fails 20 and Windows Server 2025
-  fails 29, so those two jobs are continue-on-error until green. The failures sort into a few
-  causes — BSD `wc -l` pads its output and every `$(… | wc -l)` comparison reads the padding,
-  `mktemp -d` paths are compared against their physical spelling (`/private/var`,
-  `/c/Users/…/Temp`), the curation gate needs GNU `date -d`, the sweep's binary-file case fails
-  under BSD and MSYS grep, and on Windows MSYS `ln -s` copies, native Python cannot open MSYS
-  paths and the hook suites' bare PATH loses a directory the hooks need. The installer's exit 1
-  on both boxes is those causes once more: its verify step runs the portability suite (and the
-  agent-docs guard), and that exit cascades into six self-test assertions. The bd-prime-hook
-  suite has further cases on both boxes and the Pi event suite fails on macOS under Node 24, not
-  yet read. `.gitattributes` pins LF for every text file: Git for Windows ships
-  `core.autocrlf=true` in its system config (the runner's box line shows it), and a CRLF bash
-  script dies on its first line; the checkout there is `i/lf w/lf`.
-- **The self-test runs on a clean box.** `test/selftest-in-container.sh` builds two Ubuntu 24.04
-  images from `test/Dockerfile` — `bare` (git, python3, bash and nothing else the pipeline lists)
-  and `full` (bd from its official installer at the current release, jq, ripgrep, iproute2,
-  bd-memgraph) — and runs `./selftest.sh` inside each as a non-root user with the checkout
-  mounted read-only. The "bare-box branch must still pass" line had only ever been a claim; the
-  first run found two defects the host hid. `tools/sweep_test.sh`'s binary-file case depended
-  on the active locale: under C/POSIX a malformed UTF-8 byte is ordinary text, grep searches the
-  file, and three assertions inverted for a reason unrelated to the detector; the case now pins
-  C.UTF-8 and SKIPs loudly where no UTF-8 locale exists, and `sweep.sh`'s header says the
-  BINARY column follows the locale. `tools/dolt-guard.sh` had no probe at all on a box without
-  `ss`, `lsof` or `netstat` and said so every shell; on Linux it now reads `/proc/net/tcp`. The
-  first version of that probe let awk exit on its first match, which sends SIGPIPE to the writer
-  and under `set -o pipefail` reads a live listener as "not listening"; it now drains its input.
-  Its suite no longer needs `ss` itself (a connect probe), proves the kernel table is read in both
-  directions, and carries awk on the no-flock PATH. Bare: 117 passed; full with bd 1.3.1: 126 passed.
-- **The remaining tools, skills and shared docs are one file with an installed copy too.**
-  Same rule as the hooks: policy lives outside the file. `tools/agent_docs_test.sh` sources an
-  optional `tools/agent_docs_test.conf` for a repo's own exemptions (`ALLOW_EXTRA`) and path
-  anchors (`ROOTS_EXTRA`), so a repo with mounts, data-file conventions or extra top-level
-  directories no longer edits the test. `tools/sweep.sh` prunes `.pixi/`, `.venv/` and
-  `node_modules/` from repository discovery and says so in its header: conda/pixi installs carry
-  malformed `.git` test fixtures that turned a clean zero into false control failures; the suite
-  builds that fixture and requires the exclusion. Its real-tree hazard check asserts that a root
-  `rg` sees LESS THAN HALF of the corpus instead of "<5%", which was a count in disguise and went
-  red the month a root repo grew four subtrees. `tools/check-agent-docs-linked.sh --cached` now
-  refuses a staged DELETION of a previously tracked `CLAUDE.md` symlink, which silently unhooked
-  Claude Code; one new case. `tools/check-no-agent-cache-paths_test.sh` forces its `git rm
-  --cached` so a modified working copy cannot break the fixture. The `triage` skill reads an
-  optional project registry (a projects.tsv with a projects.py tool: active projects grouped,
-  one `project:` label per bead) and falls back to `bd ready` without one; the skills README says
-  the registry tool is not shipped. `docs/ops/other-harnesses.md` gains two sections from a
-  2026-10-05 inventory: Grok runs the Claude hooks but cannot block through them (stdout
-  discarded, `toolInput` not `tool_input`, exit 2 required), and bd is the only memory store
-  for every CLI, with the Grok memory-v2 case and its off switches.
-- **The installed hooks and the shipped ones are one file again.** A workspace that had carried
-  the pipeline for a month had diverged from it by 68, 168 and 20 lines in the three session hooks,
-  and every later fix had to be ported by hand in one direction or the other. Three changes make
-  the copies byte-identical, with policy outside the files:
-  - The scripts gate's directory pattern `SCRIPT_DIRS_RE` is read from `.claude/bd-prerun.conf`
-    (sourced, tracked) or `BD_SCRIPT_DIRS_RE` in the environment, and an EMPTY value turns the gate
-    off, bd call included. Editing the hook to drop the rule was the one way to fork it. Thirteen
-    new cases in `tools/bd-prerun-hook_test.sh` (both knobs, precedence, the other guards
-    unaffected, another directory name); the portability and Pi suites pin the gate on, since a
-    clone's conf may turn it off.
-  - The SessionStart hook knows about an optional project registry: with a `projects.tsv` and a
-    `tools/projects.py` in the repo it prints a per-active-project brief under the rules and words
-    rules 1 and 2 for project-scoped work; without the registry it is unchanged. A registry
-    without the tool, or a tool that fails, is said out loud. Nine new cases in
-    `tools/bd-prime-hook_test.sh`. The two files are not part of the payload yet.
-  - The NOT FOUND messages in `.claude/settings.json` and the Pi adapter now say "restore the
-    tracked script or re-run the installer", which is right in a clone that tracks its hooks and
-    in a fresh install alike; the Pi suite asserts the wording.
-- **A memory curation gate ships as the first site check.** bd has no consolidation cadence: a
-  store curated once on 2026-09-18 grew for weeks with nothing prompting the next audit, which
-  the comparison with an agent CLI whose consolidation runs automatically made plain
-  (2026-10-06). `.claude/site-checks/memory-curation-gate.sh` prints one line at session start
-  once the store is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt`
-  (`BD_CURATION_MAX_DAYS` / `BD_CURATION_MAX_NEW`); it counts from a tracked
-  `.beads/memories.jsonl` when one exists, else from `bd memories`, and says so when it cannot
-  count. The installer writes the stamp once (today, current count) and never overwrites it; the
-  `memory-curate` skill ends every mode, audit included, by rewriting it, replacing its old
-  advice to wrap `audit` in `/loop`. `tools/memory-curation-gate_test.sh`: 35 checks, including
-  the no-export branch through a stub `bd` and every loud path. The self-test asserts the stamp.
-- **`dolt-guard.sh` no longer leaks its lock into the server it starts.** The guard ran
-  `bd dolt start` with its `flock` descriptor still open, so the daemonised `dolt sql-server`
-  inherited it and held the lock for its whole life. A shell already waiting on the lock (two
-  shells opening together at boot, or parallel tool calls) burned the full 30 s and then logged
-  `FAILED: timed out waiting for another shell to start dolt` while the server was up — a false
-  alarm from the guard whose job is to make that line trustworthy. The descriptor is now closed
-  for the child only. Seen on 2026-10-02 after a WSL restart. Four new checks in the race case of
-  `tools/dolt-guard_test.sh` (every racer returns 0, none says FAILED, the losers are released
-  promptly, the lock is free afterwards); all four fail on the old guard, and the suite drops
-  from about 33 s to 5 s because it had been sitting through the same timeout.
-- Two silent paths in the SessionStart hook's site checks are named. A check that the 20 s bound
-  killed had usually printed nothing yet, and `timeout`'s exit 124 went to the discarded stderr, so
-  the kill read as a healthy check; the payload now says KILLED, before any partial output, so the
-  size cap cannot drop the note. A script in `site-checks/` without its executable bit was skipped
-  by `[ -x ] || continue` with no line saying so; it is now reported as NOT RUN with the chmod to
-  run. `BD_PRIME_CHECK_TIMEOUT` (default 20) sets the bound. Found by the 2026-09-30 review of a
-  check that runs `cairn` (both reviewers); nine new suite cases.
-- **An index too large for the budget is omitted, not sliced; the trim alarm is for real loss.**
-  On a 385-memory store the bounded index listed the alphabetical first 85 keys — about 4 KB that
-  told the reader almost nothing and crowded out the HOT tier. It is now replaced by one explicit
-  `INDEX OMITTED` line with the count and a pointer to `bd memories` search. The loud
-  `PAYLOAD TRIMMED` banner now fires only when a HOT body is dropped; an omitted index or bd
-  context is expected on a large store and gets at most one quiet line. On that store the payload
-  went from 9.7 KB with 5 of 12 HOT bodies and an alarm every session to 8.2 KB with all 6 of a
-  trimmed list and no alarm. Three new cases in `tools/bd-prime-hook_test.sh`.
-- **Session-scoped stop reminder and scripts gate.** Claude Code's Stop and Pi's `agent_settled`
-  fire after EVERY turn, and the bd store is shared by every session on a machine, all claiming as
-  the same actor. The stop hook therefore repeated every in-progress issue in the store after each
-  turn, and the untracked-scripts gate was licensed by any session's (often stale) claim, so it
-  could never fire. `bd-prerun-hook.sh` now records each session's `bd update <id> --claim` (or
-  `--status in_progress`) under the hook payload's `session_id` in `.git/bd-session-claims/`; the
-  scripts gate needs an issue THIS session claimed, and `bd-stop-hook.sh`, given a session id,
-  reports only that session's claimed in-progress issues -- at a turn end (`Stop`) only when the
-  set changes, at `SessionEnd` always. Without a session id both keep the old global behaviour.
-  The Pi adapter sends Pi's session id, treats `agent_settled` as a turn end and
-  `session_shutdown` (quit/new) as the close. A new Pi regression test drives the real hooks over
-  a store full of other sessions' work.
-- **PreToolUse no longer fails open on text it cannot tokenize.** An unbalanced quote (an
-  apostrophe in an unquoted heredoc body is the everyday case) made the tokenizer raise and the
-  hook exit 0, switching off the pkill guard, memory admission and the scripts gate at once.
-  Heredoc bodies that feed data are now removed before any check (shell-fed bodies are kept and
-  checked); text that still cannot be tokenized is judged by the line-based checks; and the
-  memory gate identifies `bd remember` calls by tokens, so quoted prose in other commands no
-  longer trips it while `env`/`bash -c`/`$(...)`-wrapped calls no longer escape it.
+### What breaks, for a bd user who pulls this and re-runs `install.sh`
 
-- Opt-in `--with-pi` installs a trusted project-local Pi extension. It reuses the Claude hook
-  scripts for startup and compaction priming, model Bash and `!` command guards, Dolt startup,
-  and settled-run reminders; cached priming is injected per run without re-running bd. Broken
-  pretool scripts fail open **with a visible warning**, rather than taking Pi's default
-  throw-to-block path. No user Pi extensions or settings are overwritten.
-- `tools/pi-extension_test.sh` exercises the actual TypeScript handler with event fixtures;
-  `tools/pi-extension_smoke.sh` proves a real trusted Pi CLI invocation blocks bare `pkill` while
-  a harmless stub prevents accidental execution. Untrusted project extensions cannot warn from
-  inside the skipped extension; the AGENTS template and docs state the trust gate explicitly.
+- The install requires `cairn` on PATH; `bd`, `dolt` and `bd-memgraph` are no longer used.
+- A store that is still bd's is refused, and nothing is installed, until it has moved.
+- The session hooks, git hooks and tools read cairn only. A `.claude/store-cli` is ignored, and a
+  bd-era hook you edited is kept with ours beside it as `.new`; until you adopt it, it can still
+  run bd (the installer names each such file).
+- `bd dolt push` is gone from session completion. Two machines share the store through git (the
+  four files in `.cairn/`) and `cairn sync`; two clones that both wrote are refused, with no
+  merge.
+- The ~/.bashrc dolt-guard block is removed (only the one for the target repo); `--no-shell`
+  does nothing and is accepted with a note.
+- CI installs cairn instead of bd; the no-bd job and the bd version input are gone.
+- There is no switch back inside the pipeline: rolling back is checking out `v0.1.0` and bd's
+  store, which the move leaves on disk.
 
-Second review, rechecked against a08c20d (WS-ispx). Regression tests were added first and failed
-against the previous implementation; the fixes cover:
+### Changed
 
-- Git-layer guards inspect staged blobs/modes, not working copies. The symlink guard has an
-  explicit `--cached` mode for pre-commit; manual checks retain their working-tree behavior.
-  Tests commit conflicting staged/working versions in both directions, including missing files.
-- Settings merges preserve user hooks on shared events and inside mixed groups, plus prompt
-  hooks and matchers. Only the exact standalone bd prime SessionStart registration is removed.
-  The earlier replacement was warned about, but the warning came after user hooks were removed.
-- Sweep discovery is unlimited by default. Explicit depth limits return 2 and cannot certify
-  absence; discovery errors are surfaced. The size cap includes equality, with cap−1/cap/cap+1
-  regression cases.
-- Dolt lock-open failures now warn and return nonzero without attempting an unlocked start.
-- PreToolUse tokenizes literal commands, recognizes common wrappers, interpreter options and
-  quoted paths, and rejects zero age filters and pkill's `-o` (oldest). It remains a heuristic,
-  not a shell sandbox; it never evaluates the command it checks.
-- A normal-path bd prime failure is announced near the top of the budgeted session payload,
-  even when the preceding export succeeded. Failed partial context is not emitted as valid.
-- The installer accepts worktrees and submodules. Linked-worktree hooks use worktree-local
-  config, preserving sibling hooks; tests include a bare parent and a submodule.
-- Test scratch files are isolated and cleaned: the sweep suite no longer overwrites its EXIT
-  trap, the prime suite never removes global /tmp names, and selftest checks every suite for leaks.
-  The installer also uses mktemp for its rendered template. Without jq, selftest explicitly skips
-  the settings-merge cases and still exercises the hook's fallback.
+- **Session hooks, cairn only** (`bd-prime-hook.sh`, `bd-prerun-hook.sh`, `bd-stop-hook.sh`,
+  names kept this release). Gone: the `.claude/store-cli` switch, every bd branch, the
+  frozen-store gate and its `# frozen-store-ok` escape, the bd-to-cairn verb map, and the session
+  start's check of the store-cli tools. Kept: the bare `pkill`/`killall` gate, the keyless and
+  handoff-shaped `cairn remember` gate, the untracked-scripts gate, per-session claim recording,
+  the stop reminder, the prime budget, hot tier, key index and the `BEADS_ACTOR` export. The prime
+  hook runs `cairn sync` first, and says at the top of the payload (fallbacks included) when
+  cairn is not on PATH or the repo has no `.cairn/` yet. No typed-`bd` guard: bd run in the repo
+  is the user's own tool, and makes a store cairn never reads.
+- **Git hooks.** `pre-commit`: `cairn check` when `.cairn/` exists (marker `store check`), the
+  agent-cache path guard, the agent-docs guard, the export freshness guard; no bd block.
+  `post-merge` and `post-checkout`: `cairn sync` where `.cairn/` exists, never failing git.
+- **The installer** requires cairn ≥ 0.7.0 (`cairn --version`), refuses a live bd store with no
+  writable cairn store (in install, `--check` and `--dry-run`), and, in a repo that had bd:
+  removes bd's `BEGIN/END BEADS INTEGRATION` blocks **in place** from every hook in
+  `.beads-hooks/` (a hook left with only comments is replaced by ours or removed); removes hook
+  entries that run bd from `.claude/settings.json`, `.claude/settings.local.json`,
+  `.codex/hooks.json` and `.cursor/hooks.json`; removes the dolt-guard block from `~/.bashrc` only
+  when it sources this repo's guard; names bd-era files it no longer ships and the old tracker's
+  exports left in `.beads/` (cairn refuses exports split between `.beads/` and `.cairn/`); writes
+  `.cairn/redirect` in sibling worktrees that have neither a redirect nor a store. Every file it
+  edits is backed up under `<git common dir>/beads-agent-pipeline-backup/<timestamp>/`
+  (`~/.bashrc` beside itself). The settings merge replaces the pipeline's own 0.1 hook groups
+  instead of adding the new ones beside them. Next steps print `cairn init -p <PREFIX>`, the
+  export refresh and the first commit of `.cairn/`.
+- **Tools upstreamed from the workspace this came from, cairn only:**
+  `tools/refresh-beads-exports.sh` (the four tracked files in `.cairn/`: current, stale, could not
+  run; refuses a store that is behind or diverged from them, or a history that is not an append;
+  writes a missing file even when empty, so a fresh store's first commit carries all four) and
+  `tools/new-worktree.sh` (a second working tree that shares the store through `.cairn/redirect`),
+  each with its suite.
+- **Skills and the curation gate.** `memory-curate` is cairn-native; `audit_wikilinks.py` reads
+  the issue prefix from `.cairn/config.json`; `triage` uses cairn's verbs; the curation gate
+  counts `.cairn/memories.jsonl`.
+- **Agent docs.** The `AGENTS.md` template is cairn-native (the store and its tracked exports,
+  session identity, the issue tracker), with no managed block. `check-agent-docs-linked.sh` keeps
+  the symlink and pointer-file checks and names an old `BEGIN BEADS INTEGRATION` block instead of
+  measuring it; `agent_docs_test.sh` allows `.cairn/`.
+- **Pi adapter** no longer calls the dolt guard at session start.
+- **docs/ops/**: the store halves are rewritten for cairn (concurrency on a SQLite store, the
+  graph cairn keeps, what fires where); the defect catalogue keeps its history.
+- **The self-test** proves a cairn-only install (no hook runs `bd hooks run`, carries a BEGIN
+  BEADS block or reads `.claude/store-cli`), the refusal, the in-place removal on a bd-era
+  fixture, and hides cairn from PATH for the required-command branch. CI and the container image
+  install cairn from github.com/scgoetsch/cairn at a pinned commit (cairn has no release tags yet).
 
-Validated on Linux/WSL2, bash 5.2, git 2.43, Python 3.12, bd 1.1.2 using temporary repos and stub
-stores. This is suite coverage, not a new signed-in Claude Code or macOS/native Windows run.
+### Removed
 
-- The SessionStart hook now fits the host. Claude Code keeps only a 2,000-byte preview of any
-  one hook command's output above 10,000 bytes and files the rest (measured 2026-09-22 with
-  synthetic hooks; the JSON `additionalContext` form is capped the same; anthropics/claude-code
-  #70460). The hook emitted rules, then the 4.8 KB bd context, then the hot tier, then the
-  index, and a real store with three hot keys produced 15.9 KB: the model got the banner and
-  nothing after it, while every line of the run read as success. The hook now builds every
-  section first and assembles them against `BD_PRIME_BUDGET` (default 10000; `0` = no cap):
-  rules, site checks and the index always ship; the index comes before the hot bodies; hot
-  bodies are kept in list order while they fit and the rest are NAMED at the top for
-  `bd recall`; the bd context is the first thing dropped; the full-dump fallback is cut the
-  same way with a line 2 saying so. `tools/bd-prime-hook_test.sh` gains a budget section
-  (28 cases; 17 fail against the previous hook, the rest pin what must not change). Hot bodies
-  are also ranked in the order of `memory-hot.txt` now: the list was deduplicated with jq's
-  `unique`, which sorts, so the budget kept whichever key came first in the alphabet. From the
-  peer review of this change: each site check's output is cut at 1,500 bytes with the cut marked,
-  so a chatty check cannot push the rules past the cap; every payload ends with an end marker a
-  reader can look for; `install.sh` measures the real payload in its verify step. Not adopted
-  (recorded for whoever needs more than ~8 KB of hot bodies): splitting the payload across
-  several hook commands, since the cap is per command — it multiplies the budget at the cost of
-  running `bd export` per slice, a longer `settings.json` the installer must merge, and an
-  unmeasured possibility of a cap on the sum. PreCompact runs the same hook and is assumed to
-  have the same cap; it was not measured separately. The README, `docs/ops/memory-and-the-graph.md`
-  (its "~39 KB" figure was wrong), the template `AGENTS.md`, the `memory-curate` skill and the
-  runbook's section-7 sentinel say so.
+`tools/dolt-guard.sh`, `tools/store-cli-git-hooks.sh`, `tools/store-cli-harness-hooks.sh` (each
+with its test), `tools/pre-commit-store-cli_test.sh`, the `~/.bashrc` block, the bd-memgraph
+pre-commit stanza and optional dependency, the memgraph-ledger check, and the bd sections of the
+README and the root runbook.
 
-From the 2026-09-22 line-by-line inspection (agy, reviewed by grok-peer, each finding verified
-against c37eced before it was fixed). Each fix ships with a check that fails on the previous code.
+### Also since v0.1.0, and still true
 
-- The Stop hook's reminder counted lines containing `●` — bd's priority bullet on every row and its
-  BLOCKED glyph in the legend under every non-empty listing — so one in-progress issue read
-  "You have 2 in-progress issue(s)". Both hooks now count issue rows (`bd --json list`, or the `◐`
-  rows without jq); the PreToolUse suite's fixture is bd's real output shape, and
-  `tools/bd-stop-hook_test.sh` is new.
-- `check-agent-docs-linked.sh` returned success for a regular `CLAUDE.md` with no `AGENTS.md`
-  beside it (the state where every non-Claude harness finds nothing), and capped bd's block at a
-  fixed 70 lines that would have blocked every commit the day bd's template grew. It now fails
-  the lone regular file, and asks `bd setup --print` how long bd's block is (floor 56, plus slack).
-- `check-no-agent-cache-paths.sh`'s code ratchet stopped at scripting languages — a cache path
-  added to `main.go` or `src/lib.rs` committed clean — and its regex knew neither
-  `/var/home/<user>` (ostree) nor macOS's `$TMPDIR` (`/var/folders/…/T/claude-<uid>/`). Compiled
-  languages, TeX/Typst/AsciiDoc/Rmd/qmd documents, and both path forms are covered.
-- The SessionStart hook skipped every site check in silence on a box without `timeout`: the
-  "command not found" went to a discarded stderr. It now runs them unbounded and says so at the top
-  of the payload, and a check's stderr reaches the payload too.
-- macOS: `sweep.sh` probes for GNU `xargs -r` instead of assuming it (BSD xargs rejected the flag
-  and every sweep died); `dolt-guard.sh` falls back from `ss` to `lsof` and `netstat` and says so
-  when none exists, and proceeds without `flock` instead of reporting a timeout that never
-  happened. Still untested there; see "Known limitations".
-- `audit_wikilinks.py` is executable, in the repo and as installed (skill and site-check scripts
-  get 755); the template `AGENTS.md` names all four hook events and the `scripts/` gate;
-  `agent_docs_test.sh` cases are numbered in the order they run.
+The work between 0.1.0 and the move, condensed; the full record of each is in git history.
 
-- The SessionStart hook's suite no longer refuses to run without `jq`; it tests the hook's
-  fallback banner instead, which is the behaviour on that box, and a nested run with `jq` hidden
-  keeps that branch honest. `./selftest.sh` used to fail on a box the README calls supported.
-- README: a reader following the quickstart is now told what to install first and what to run
-  after; "Known limitations" and "What it touches, and how to remove it" sections; the requirements
-  table lists `rg`, `ss` and `timeout` and describes the four hook events; "any git repo" no longer
-  claimed; stale wording on how the session hooks are verified; "Verify it" says what the self-test
-  actually proves; three lines re-wrapped.
-- `install.sh --check` names the four hook events instead of "three hooks".
+- Sessions get an identity in the store's audit trail: `BEADS_ACTOR=<git user.name>/claude/<8>`
+  through `CLAUDE_ENV_FILE`, and `--claim` is compare-and-swap on it. A claim the session record
+  missed (an id in a variable, `ready --claim`) still counts when the assignee is the session's
+  own session-scoped actor; in-progress listings pass `--limit 0`.
+- The stop reminder and the scripts gate are session-scoped (Claude Code's Stop and Pi's
+  `agent_settled` fire every turn); the reminder speaks only when the set changes.
+- The SessionStart hook fits the host: `BD_PRIME_BUDGET` (default 10,000 bytes), omitted hot
+  bodies named, an index too large for the budget replaced by one INDEX OMITTED line, every
+  fallback named on its first line.
+- Site checks: a check that exits nonzero without output, one killed at the bound, and one without
+  its executable bit are each named, never read as health. The memory curation gate ships as the
+  first site check.
+- PreToolUse tokenizes literal commands, unwraps common wrappers, drops data heredocs, and judges
+  text it cannot tokenize line by line instead of failing open.
+- `--with-peer` is `--with-concurrent` (the old spelling is accepted with a note). `--with-pi`
+  installs an opt-in, trusted project-local Pi adapter that reuses the hook scripts.
+- The self-test runs in GitHub Actions on ubuntu, macos and windows, and on a clean Ubuntu in
+  Docker; the causes the matrix found (BSD `wc` padding, two spellings of one directory, GNU-only
+  `date` flags, the CR LF a native Windows Python and jq append, a Git Bash `ln -s` that copies,
+  binaries that lose their DLLs) are fixed. `CLAUDE.md` works on a filesystem without symlinks as
+  git's own pointer file, staged as a link.
+- Git-layer guards inspect the index, not the working copy; the settings merge preserves user
+  hooks on shared events and in mixed groups; worktrees and submodules install with their own
+  config; sweep discovery is unlimited by default.
 
 ## v0.1.0 — 2026-09-22
 

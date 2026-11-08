@@ -2,10 +2,15 @@
 
 [![self-test](https://github.com/scgoetsch/beads-agent-pipeline/actions/workflows/selftest.yml/badge.svg)](https://github.com/scgoetsch/beads-agent-pipeline/actions/workflows/selftest.yml)
 
-Session machinery for coding agents, built around [beads](https://github.com/gastownhall/beads)
-(`bd`). One command installs it into a git repo: the agent gets its rules, its issue queue and
-its durable memory at session start, and the repo gets guards that fail **loudly** instead of
-silently.
+Session machinery for coding agents, built around [cairn](https://github.com/scgoetsch/cairn), an
+agent-facing issue tracker and memory store with the verbs of beads. One command installs it into
+a git repo: the agent gets its rules, its issue queue and its durable memory at session start, and
+the repo gets guards that fail **loudly** instead of silently.
+
+> **0.2.0 does not read bd.** If your repo has the 0.1 pipeline on bd: **do not re-run the
+> installer on that checkout before the store has moved** — follow
+> [Moving a repo off bd](#moving-a-repo-off-bd) first (the installer refuses a repo whose store is
+> still bd's). **A green install is not a migrated store.** `v0.1.0` remains the bd release.
 
 ```bash
 git clone https://github.com/scgoetsch/beads-agent-pipeline
@@ -13,24 +18,23 @@ cd /path/to/your-project
 /path/to/beads-agent-pipeline/install.sh
 ```
 
-You need `git`, `python3` and [`bd`](https://github.com/gastownhall/beads) first (the table under
-[Requirements](#requirements) has the rest), and the install is not finished until you have run
-the three lines under [After installing](#after-installing) — `bd init`, `bd hooks install
---shared`, the suite. If you would rather hand the whole thing to an agent, see
-[the runbook](#letting-an-agent-install-it--the-runbook). Releases are tagged; the changes in
-each are in [CHANGELOG.md](CHANGELOG.md). Problems go to
+You need `git`, `python3` and [`cairn`](https://github.com/scgoetsch/cairn) 0.7.0 or later first
+(the table under [Requirements](#requirements) has the rest), and the install is not finished
+until you have run the lines under [After installing](#after-installing) — `cairn init`, the
+export refresh, the first commit of `.cairn/`, the suite. If you would rather hand the whole thing
+to an agent, see [the runbook](#letting-an-agent-install-it--the-runbook). Releases are tagged; the
+changes in each are in [CHANGELOG.md](CHANGELOG.md). Problems go to
 [the issue tracker](https://github.com/scgoetsch/beads-agent-pipeline/issues), with the command
 and its output.
 
 Existing tool and documentation files are not overwritten: ours lands beside a differing file as
 `.new`. An existing `settings.json` is merged with a backup: user hooks survive, including on the
-same events, and only bd's standalone `bd prime` SessionStart registration is replaced. An existing `AGENTS.md` is kept and nothing is written
-beside it — it is meant to diverge from the template, and the log says where the template is.
-`--check` inspects, `--dry-run` prints every action, `--no-shell` skips the one thing written
-outside the repo: a marker-managed block in `~/.bashrc` that sources `tools/dolt-guard.sh` — one
-project per `.bashrc`, and a no-op on an embedded bd store (see the guard below). Re-running
-repairs a checkout whose config drifted; a tool that changed upstream lands as `.new` for you to
-adopt.
+same events. An existing `AGENTS.md` is kept and nothing is written beside it — it is meant to
+diverge from the template, and the log says where the template is. `--check` inspects,
+`--dry-run` prints every action. Nothing outside the repo is written. Re-running repairs a
+checkout whose config drifted; a tool that changed upstream lands as `.new` for you to adopt. In a
+repo that had the 0.1 pipeline, the old tracker's hooks are the exception: they are removed in
+place (see [the migration](#moving-a-repo-off-bd), step 7).
 
 **`--with-pi` is opt-in**: it installs a project-local Pi extension that reuses the Claude hook
 scripts for session priming, command guards, compaction refresh and settled reminders. Pi must
@@ -42,15 +46,13 @@ enforcement layer.
 **`--with-concurrent` is opt-in** (`--with-peer` until 2026-10-11; the old spelling is still
 accepted with a note, and was renamed because "peer" collided with foreign-lab peer-review
 tooling that can sit beside this pipeline in one session), because running several agent
-sessions against one repo is an
-environment question, not a default. Without it the concurrency doc is not installed and the
-matching section is stripped from `AGENTS.md`, so nothing cites a file that is not there — a
-single-session user carries none of it in a session payload that hosts already truncate. With it,
-you get the SET-not-append race rules, `bd dolt push` serialisation, and the rule that bit us:
-**establish which repo a peer is in before sending it repo-specific instructions**, because a peer
-listing does not report a peer's working directory and an issue-prefix does not imply a separate
-store. One piece of concurrency machinery ships either way — the `flock` in `tools/dolt-guard.sh`
-that stops two shells racing to start the Dolt server, which costs a single-session user nothing.
+sessions against one repo is an environment question, not a default. Without it the concurrency
+doc is not installed and the matching section is stripped from `AGENTS.md`, so nothing cites a
+file that is not there — a single-session user carries none of it in a session payload that hosts
+already truncate. With it, you get the SET-not-append race rules, one working tree per session
+(`tools/new-worktree.sh`), and the rule that bit us: **establish which repo a peer is in before
+sending it repo-specific instructions**, because a peer listing does not report a peer's working
+directory and an issue-prefix does not imply a separate store.
 
 ## The idea
 
@@ -66,7 +68,8 @@ cannot pass its own suite.
 ## What you get
 
 **Session machinery** (`.claude/`) — three hook scripts on four Claude Code events. SessionStart
-emits the session rules, the bd context, your hot memories in full and an index of the rest, and
+runs `cairn sync`, then emits the session rules, your hot memories in full, an index of the rest
+and cairn's context, and
 PreCompact emits the same again before a context compaction; PreToolUse is the guard below; Stop
 warns about in-progress issues at session end. Each resolves the repo root from **its own file
 location**, never a literal path, and `tools/hook_portability_test.sh` relocates them to a
@@ -83,34 +86,36 @@ not want, and it is one line to turn off:
   positive; `pkill -o` (oldest) is not an age filter. Literal `env`/`sudo`/`command` wrappers are
   handled. This is an accident-prevention heuristic, not a shell sandbox: aliases, variable-built
   commands and arbitrary shell programs are not comprehensively analyzed.
-- **Memory writes that are really session state.** `bd remember` without `--key`, or a body that
-  is structurally a handoff memo, is refused with a pointer to `bd note` instead. The test is
+- **Memory writes that are really session state.** `cairn remember` without `--key`, or a body
+  that is structurally a handoff memo, is refused with a pointer to `cairn note` instead (cairn's
+  own `remember` adds a near-duplicate check on top). The test is
   structural, not lexical — an earlier vocabulary-based version blocked the memory that documented
   the rule while a rephrase walked straight through.
-- **Running a script under `scripts/` with no bd issue `in_progress`.** Untracked analysis runs
-  are how reproducibility gaps start, so the hook asks for a claimed issue first. It fails open
-  if bd is unavailable. The directory pattern is the knob `SCRIPT_DIRS_RE`: set it in
+- **Running a script under `scripts/` with no issue `in_progress` claimed by this session.**
+  Untracked analysis runs are how reproducibility gaps start, so the hook asks for a claimed issue
+  first. It fails open if cairn is unavailable. The directory pattern is the knob `SCRIPT_DIRS_RE`: set it in
   `.claude/bd-prerun.conf` (a one-line, tracked file the hook sources) or in the environment as
   `BD_SCRIPT_DIRS_RE`; an empty value turns the gate off, and the hook file itself stays identical
   to the one shipped here.
 
-**An optional project registry.** A repo that keeps one bd store for several projects can add a
+**An optional project registry.** A repo that keeps one store for several projects can add a
 `projects.tsv` (one row per project, active or inactive) and a `tools/projects.py` beside it; the
-SessionStart hook then opens with a per-active-project brief instead of "run `bd ready` NOW", and
+SessionStart hook then opens with a per-active-project brief instead of "run `cairn ready` NOW", and
 rule 2 asks for a `project:<name>` label on every issue. Neither file ships here yet; without the
 registry nothing changes, and a registry without the tool is reported, not skipped.
 
-**The SessionStart hook** (cached at Pi `session_start` when opted in) replaces bd's raw
-`bd prime` dump (76 KB on a 40-memory store) with, in this order, the rules, a key-only index of
-the store (replaced by an explicit INDEX OMITTED line if its keys alone exceed the host budget), the memories listed in
-`.claude/memory-hot.txt` while space permits, and the bd context. The hot list ships empty, and empty means
-"index only", not "unconfigured". If the hook has to fall back to the full dump — no `jq`, no
-export — it says so on its first line rather than looking like the tiered output.
-It also gives the session an identity in bd's audit trail: where the host provides
-`CLAUDE_ENV_FILE` (Claude Code does), it exports `BEADS_ACTOR=<git user.name>/claude/<8 chars of
-the session id>`, so `created_by`, claim assignees, comment authors and the field-change rows of
-`.beads/interactions.jsonl` name the run, not just the human. One consequence is deliberate:
-`bd update --claim` is compare-and-swap on the assignee, so a second session is refused by name
+**The SessionStart hook** (cached at Pi `session_start` when opted in) first runs `cairn sync`,
+which brings this clone's store up to the exports a pull brought in (or builds it in a fresh
+clone; a refusal is said at the top). Then, in this order: the rules, a key-only index of the
+store (replaced by an explicit INDEX OMITTED line if its keys alone exceed the host budget), the
+memories listed in `.claude/memory-hot.txt` while space permits, and cairn's context. The hot list
+ships empty, and empty means "index only", not "unconfigured". If the hook has to fall back to the
+full `cairn prime` dump — no `jq`, no export — it says so on its first line rather than looking
+like the tiered output. It also gives the session an identity in the store's audit trail: where
+the host provides `CLAUDE_ENV_FILE` (Claude Code does), it exports `BEADS_ACTOR=<git
+user.name>/claude/<8 chars of the session id>`, so `created_by`, claim assignees, comment authors
+and every event of the history name the run, not just the human. One consequence is deliberate:
+`cairn update --claim` is compare-and-swap on the assignee, so a second session is refused by name
 and takes an issue over with `--assignee` first (logged). `BD_PRIME_SESSION_ACTOR=0` opts out; a
 failed export is named at the top of the payload.
 
@@ -121,11 +126,11 @@ any one SessionStart hook command's output above 10,000 bytes and writes the res
 states the same numbers and no setting to raise them). A 15.9 KB tiered payload lost its hot
 tier and its index that way while every line of it read as success. So the hook budgets:
 `BD_PRIME_BUDGET` (default 10000; `0` lifts the cap on a host that has none) bounds what it
-emits, hot bodies that do not fit are named at the top instead of shipped (`bd recall <key>`
+emits, hot bodies that do not fit are named at the top instead of shipped (`cairn recall <key>`
 fetches one), and an index too large for the remaining budget is replaced by one INDEX OMITTED line with
-the count (`bd memories <keyword>` searches the store directly). A loud PAYLOAD TRIMMED banner
-means a HOT body was dropped; an omitted index or bd context alone is expected, not an alarm. The bd
-context is the first thing dropped, and the full-dump fallback is cut with a line saying so.
+the count (`cairn memories <keyword>` searches the store directly). A loud PAYLOAD TRIMMED banner
+means a HOT body was dropped; an omitted index or store context alone is expected, not an alarm. The
+store's context is the first thing dropped, and the full-dump fallback is cut with a line saying so.
 A listed index can use up to 4 KB of the host allowance; keep the hot list to essential guards.
 
 **`tools/sweep.sh`** — corpus-wide search with a **positive control per repo**. It lifts real lines
@@ -147,15 +152,23 @@ only, a ratchet rather than a flag day. Both inspect the **index**, not the work
 symlink guard likewise uses `--cached` on commit, so partial staging cannot hide a bad artifact;
 its manual invocation still checks the working tree.
 
-**`tools/dolt-guard.sh`** — restarts bd's Dolt server after a reboot. Without it, `bd` reads keep
-working while writes silently fail to land, which is the worst possible shape for a data store.
-It applies to a server-mode store only: bd 1.3's default is an embedded, in-process store with no
-server (`bd dolt status` says so), and there the guard has nothing to guard and stays silent.
+**`tools/refresh-beads-exports.sh`** — the four files git carries of the store
+(`.cairn/issues.jsonl`, `memories.jsonl`, `allocator.json`, `events.jsonl`; the database itself is
+git-ignored), refreshed from cairn. The pre-commit runs it with `--cached` and refuses a commit
+whose staged exports differ from the store, or whose history is not an append to HEAD's; a cairn
+that cannot run is "not compared", said on stderr, and the commit goes through. It refuses to
+write over the files from a store that is behind them or has diverged (another clone's work came
+in: `cairn sync` first; two clones wrote: there is no merge). The pre-commit also runs `cairn
+check`, and `post-merge` / `post-checkout` run `cairn sync`.
+
+**`tools/new-worktree.sh`** — a second working tree that shares this checkout's store through an
+untracked `.cairn/redirect`, written before the checkout so the post-checkout sync cannot build a
+stray store there.
 
 **Skills** — `memory-curate` (audit, dedupe and tier the memory store) and `triage` (surface and
 plan the top ready issue, read-only, without claiming it). Both are **inert until you invoke
 them** — a skill is a prompt, not a hook — so they install by default and cost nothing at runtime,
-and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumptions (bd initialised;
+and `rm -rf .claude/skills/<name>` removes one cleanly. They do carry assumptions (a cairn store;
 `/loop` and `/schedule` are harness features, not requirements; `triage` mentions a maker/checker
 verifier that is yours to define), all written down in `.claude/skills/README.md`.
 
@@ -166,7 +179,7 @@ repo's installed copies can stay byte-identical with this payload, so a later fi
 than a merge.
 
 **A curation gate** — `.claude/site-checks/memory-curation-gate.sh`, the one site check that
-ships. bd has no consolidation cadence of its own, so this prints one line at session start once
+ships. The store has no consolidation cadence of its own, so this prints one line at session start once
 the store is 30 days or 10 memories past the last curation (`BD_CURATION_MAX_DAYS` /
 `BD_CURATION_MAX_NEW`), naming the numbers and the skill to run. The installer writes the stamp it
 reads, `.claude/memory-curation.txt`, once; `memory-curate` rewrites it after every run. A stamp or
@@ -189,9 +202,10 @@ here is built against, with the diagnostic question to ask of your own checks.
 ## Letting an agent install it — the runbook
 
 `AGENTS.md` in this directory (and `CLAUDE.md`, a symlink to it) is a runbook an agent follows top
-to bottom on a machine that has never seen bd: install the prerequisites, self-test the pipeline,
-install it into a project, initialise bd, prove every guard through `git commit`, exercise the
-session hooks, and report in a fixed shape. Eight phases; the first seven end in a gate, the
+to bottom on a machine that has never seen cairn: install the prerequisites, self-test the pipeline,
+install it into a project, create the store and commit what git carries of it, prove every guard
+through `git commit`, rebuild the store in a second clone, exercise the session hooks, and report
+in a fixed shape. Eight phases; the first seven end in a gate, the
 eighth is the report. It is the procedure that was run by hand on the first fresh box, and running
 it as written is what found most of the bugs in this repository's history — so it is also the
 acceptance test for a new platform.
@@ -217,7 +231,7 @@ non-login shells ssh gives it, which the runbook also says. Anything that needs 
 prerequisites are already there, or run those two lines yourself first.
 
 **Permissions.** Interactive is the default and the right choice the first time: the run asks you
-to approve two `curl | bash` installs (bd's and Claude Code's) and an `apt-get`. An unattended run
+to approve a `git clone` of cairn, a `curl | bash` install of Claude Code and an `apt-get`. An unattended run
 needs your harness's unattended permission mode, which grants the agent a full shell — read the
 runbook once before you grant that, so you know what it will do with it.
 
@@ -244,71 +258,67 @@ found a bug, not a shortcut.
 
 Installs into throwaway git repos and, there: runs every shipped guard's suite; proves the
 git-layer guards through real `git commit`s (a cache path refused, a broken symlink refused, the
-whole payload committing clean under its own hooks); installs with `bd` hidden from PATH and
-checks the hooks are wired anyway; re-runs after what `bd init` and `bd hooks install --shared`
-do and requires a no-op; checks it never clobbers your files, names any installed file your
-`.gitignore` would eat, reports the memory-graph ledger's state, and writes nothing under
-`--dry-run` or `--check`. The opt-in Pi install runs an event suite through its TypeScript
-handler when Node ≥22.19 is present (otherwise explicitly SKIP); a real Pi smoke is still
-needed to prove the extension loads and intercepts a model tool call. Nothing outside the temp
-directories is touched. It needs the same things the pipeline needs; without `jq` the
-SessionStart suite tests the fallback instead of the tiering and says so.
+whole payload committing clean under its own hooks); proves that no installed hook runs the old
+tracker; installs with `cairn` hidden from PATH and checks the hooks are wired anyway; proves the
+refusal of a repo whose store has not moved, and the in-place removal of the old tracker's blocks on
+a 0.1-era fixture
+(under a scratch `HOME` for the `~/.bashrc` part); requires a re-run to be a no-op; checks it never
+clobbers your files, names any installed file your `.gitignore` would eat, and writes nothing
+under `--dry-run` or `--check`. The opt-in Pi install runs an event suite through its TypeScript
+handler when Node ≥22.19 is present (otherwise explicitly SKIP); a real Pi smoke is still needed to
+prove the extension loads and intercepts a model tool call. Nothing outside the temp directories
+is touched. It needs the same things the pipeline needs; without `jq` the SessionStart suite tests
+the fallback instead of the tiering and says so, and the probes that need a real cairn store say
+SKIP without cairn.
 
 **On a clean box, in Docker:**
 
 ```bash
-test/selftest-in-container.sh          # bare (git + python3 only), then full (+ bd, jq, rg, ss, bd-memgraph)
+test/selftest-in-container.sh          # bare (git + python3 only), then full (+ cairn, jq, rg)
 test/selftest-in-container.sh bare     # one target; --build-only skips the run
 ```
 
 `test/Dockerfile` builds two Ubuntu 24.04 images: `bare` has nothing the pipeline lists beyond
 git, python3 and bash, so the installer's "required command absent" exit and every optional
-fallback get exercised; `full` adds bd from its official installer (the current release, not the
-one on your box), jq, ripgrep, iproute2 and bd-memgraph. Each run mounts this checkout read-only,
-copies it inside, and runs `./selftest.sh` there as a non-root user. The first run of this harness
-found two real defects the host had hidden: the sweep's binary-file case depends on a UTF-8 locale
-a container does not have, and the Dolt guard had no listener probe at all on a box without
-`ss`, `lsof` or `netstat`.
+fallback get exercised; `full` adds cairn (a clone at the commit the workflow pins), jq and
+ripgrep. Each run mounts this checkout read-only, copies it inside, and runs `./selftest.sh` there
+as a non-root user. The first run of this harness found real defects the host had hidden, among
+them a sweep binary-file case that depends on a UTF-8 locale a container does not have.
 
 **On every push, in GitHub Actions** (`.github/workflows/selftest.yml`): the same `./selftest.sh`
-on `ubuntu-latest` with bd and without it, on `macos-latest` (bash from Homebrew, since the stock
-`/bin/bash` is 3.2) and on `windows-latest` (Git Bash). bd comes from the release archive the
-workflow names, verified against that release's `checksums.txt`, into a directory of its own so
-the no-bd probe can hide it; the official installer refuses Git Bash and floats to the current
-release. Each job writes its box line, the RESULT line and every FAIL to the run summary and keeps
-the log as an artifact; after a failure it also keeps the installer's own output and every suite's
-full log, since the self-test shows only a failing suite's last 35 lines. All four jobs are gates.
-The first measurement (2026-10-06, bd 1.3.1) was Ubuntu 127/127, macOS 107 passed / 20 failed and
-Windows 98 / 29; five batches later every job passes all 135 checks, and the CHANGELOG lists each
-cause as it was measured — BSD `wc` padding, two spellings of one directory, GNU-only `date`
-flags, the CR LF a native Windows Python and jq append, a Git Bash `ln -s` that copies, symlinked
-binaries that lose their DLLs, and what each box's grep calls binary. Three suites SKIP a case by
-name where the box cannot build it (a real `timeout`, a `chmod -x` that takes effect, a tab in a
-filename), and `audit_wikilinks_test.sh` SKIPs whole under a native Windows Python, which cannot
-run its shell stub for bd.
+on `ubuntu-latest`, on `macos-latest` (bash from Homebrew, since the stock `/bin/bash` is 3.2) and
+on `windows-latest` (Git Bash). cairn comes from github.com/scgoetsch/cairn at the commit the
+workflow pins (`CAIRN_REF`; cairn has no release tags yet), into a directory of its own so the
+self-test's no-cairn probe can hide it. Each job writes its box line, the RESULT line and every
+FAIL to the run summary and keeps the log as an artifact; after a failure it also keeps the
+installer's own output and every suite's full log, since the self-test shows only a failing
+suite's last 35 lines. All three jobs are gates. The causes the matrix found on the 0.1 pipeline —
+BSD `wc` padding, two spellings of one directory, GNU-only `date` flags, the CR LF a native
+Windows Python and jq append, a Git Bash `ln -s` that copies, symlinked binaries that lose their
+DLLs, and what each box's grep calls binary — are each in the CHANGELOG. Three suites SKIP a case
+by name where the box cannot build it (a real `timeout`, a `chmod -x` that takes effect, a tab in
+a filename), and `audit_wikilinks_test.sh` SKIPs whole under a native Windows Python, which cannot
+run its shell stub for cairn.
 
 ## Requirements
 
-**Tested on:** Ubuntu 26.04 (bash 5, GNU coreutils/findutils/sed), with bd 1.1.2 and 1.3.0. The
-self-test also passes on Linux/WSL2 (bash 5.2, git 2.43, Python 3.12, bd 1.1.2). The opt-in Pi
-adapter was exercised with a real trusted Pi CLI 0.87.1 (`@earendil-works/pi-coding-agent`) on
-Linux/WSL2, plus an event suite. This is not a fresh signed-in Claude Code run. **macOS 26 and
-native Windows (Server 2025, Git Bash) pass the same self-test in the Actions matrix** (see
-*Verify it*); on macOS you will want bash from Homebrew. Run `./selftest.sh` first on any other
-platform and file what fails.
+**Tested on:** Linux (Ubuntu, bash 5, GNU coreutils/findutils/sed) with cairn 0.7.0, by
+`./selftest.sh`. The 0.1 pipeline passed the same self-test on macOS 26 and native Windows (Server
+2025, Git Bash) in the Actions matrix, and its opt-in Pi adapter was exercised with a real trusted
+Pi CLI 0.87.1 on Linux/WSL2; 0.2.0's matrix runs are what the workflow badge shows. This is not a
+fresh signed-in Claude Code run. On macOS you will want bash from Homebrew. Run `./selftest.sh`
+first on any other platform and file what fails.
 
 | | | |
 | --- | --- | --- |
 | [Claude Code](https://claude.com/claude-code) | needed **for Claude session hooks only** | `.claude/settings.json` wires three scripts on four Claude events; these do not load under Pi. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `pipeline/docs/ops/other-harnesses.md` has the matrix. |
 | [Pi](https://github.com/badlogic/pi-mono) (Node ≥22.19) | required **only with `--with-pi`** | The optional project extension calls those same scripts through Pi's event API. Project trust is required; `--no-approve` or `--no-extensions` skips the adapter. Do not infer guard coverage from `AGENTS.md` alone. |
-| `git`, `python3` | required | everything is git-scoped; the PreToolUse guard parses hook JSON |
-| [`bd`](https://github.com/gastownhall/beads) | required | the issue tracker and memory store. bd manages its own Dolt: 1.3's default is an embedded, in-process store, and a server mode exists (`bd dolt start`). No separate `dolt` binary is needed and nothing here calls one |
-| `jq` | optional | without it, session start falls back to the full `bd prime` dump |
+| `git`, `python3` (3.9+) | required | everything is git-scoped; the PreToolUse guard parses hook JSON; cairn is stdlib-only Python |
+| [`cairn`](https://github.com/scgoetsch/cairn) 0.7.0+ | required | the issue tracker and memory store: a SQLite database in `.cairn/`, git-ignored, plus four tracked files beside it. Install: `git clone https://github.com/scgoetsch/cairn && ln -s "$PWD/cairn/bin/cairn" ~/.local/bin/cairn`. 0.7.0 is the first that keeps the tracked files in `.cairn/`; the installer checks `cairn --version` |
+| `jq` | optional | without it, session start falls back to the full `cairn prime` dump |
 | `iconv` | optional | without it, `sweep.sh` cannot flag bad-UTF-8 files as unsearchable |
 | `rg` | optional | only `sweep_test.sh`'s demonstration of the bare-grep hazard uses it; the sweep itself does not |
-| `ss` | optional | `dolt-guard.sh`'s listener probe, server-mode stores only; it falls back to `lsof`, then `netstat`, then the kernel's own `/proc/net/tcp` on Linux, and says so when none is present. Embedded stores never reach it |
 | `timeout` | optional | bounds each `.claude/site-checks/` script at session start; without it (stock macOS) the checks run unbounded, the session payload says so, and a hung check can stall session start |
-| [`bd-memgraph`](https://github.com/scgoetsch/bd-memgraph) | optional | typed `[[wikilinks]]` over your memories, plus a pre-commit graph guard. One python3 file, no dependencies: clone it and symlink `bd-memgraph.py` onto your PATH. Without it the shipped pre-commit stanza self-skips and nothing else changes. |
 
 `install.sh --check` reports what is present. It states the Claude harness rather than probing
 for it: a `claude` on PATH does not prove session hooks fire. With `--with-pi` it checks for the
@@ -329,12 +339,12 @@ hand.
 
 ## What this is not
 
-- **Not a bd replacement or fork.** bd is unmodified; this is configuration, hooks and guards
-  around it.
+- **Not a tracker.** cairn is the store; this is configuration, hooks and guards around it.
 - **Not tied to one agent harness — but be precise about it.** The default session hooks are
   Claude Code's `settings.json` format. Pi needs the opt-in trusted project extension; agy, a Grok
-  REPL and Cursor run neither. Everything at the git layer (`.beads-hooks/pre-commit`: memory graph, agent-cache paths, agent-docs symlink, bd's
-  own hooks), every tool, the shell guard and `AGENTS.md` itself work anywhere. That split is
+  REPL and Cursor run neither. Everything at the git layer (`.beads-hooks/pre-commit`: `cairn
+  check`, agent-cache paths, agent-docs symlink, export freshness; `post-merge`/`post-checkout`:
+  `cairn sync`), every tool and `AGENTS.md` itself work anywhere. That split is
   deliberate: a session hook binds one harness, `git commit` binds all of them, so anything that
   must not escape the repo is enforced there. Full matrix of what fires where, and how to prime a
   session by hand: `docs/ops/other-harnesses.md`.
@@ -345,86 +355,96 @@ hand.
 ## After installing
 
 ```bash
-bd init --prefix <XX>        # choose your own issue prefix
-bd hooks install --shared    # --shared matters: without it git ignores them
-tools/agent_docs_test.sh     # then the rest of the suite listed in AGENTS.md
+cairn init -p <PREFIX>                 # if there is no cairn store yet; the prefix is yours to choose
+tools/refresh-beads-exports.sh         # writes the four tracked files into .cairn/
+git add .cairn/.gitignore .cairn/config.json .cairn/issues.jsonl .cairn/memories.jsonl \
+        .cairn/allocator.json .cairn/events.jsonl
+git commit -m "cairn store" -- .cairn/
+tools/agent_docs_test.sh               # then the rest of the suite listed in AGENTS.md
 ```
 
-Then open `AGENTS.md` and make it yours. It is a starting point, not a fixed file.
+A store is not finished until another clone can `cairn sync` from it: git carries
+`.cairn/config.json` and the four files, never the database. Then open `AGENTS.md` and make it
+yours. It is a starting point, not a fixed file.
 
-What current bd (1.3) does at that point, measured on a fresh box, so none of it surprises you:
-`bd init` appends its own managed block to `AGENTS.md`, adds its SessionStart hook to
-`.claude/settings.json`, and **makes a commit** carrying those two files (the rest of what was
-installed stays for you to commit). `bd hooks install --shared` rewrites its own stanza in
-`.beads-hooks/pre-commit` and sets `core.hooksPath` to an absolute path; both are fine, and
-re-running the installer leaves both alone. Our SessionStart hook runs `bd prime` itself, so the
-installer replaces bd's; after that `bd setup claude --check` reports "No hooks installed", which
-is expected — re-running `bd setup claude` would only re-add a duplicate.
+Every clone runs `git config core.hooksPath .beads-hooks` once (or the installer, which sets it):
+it is local config and no clone inherits it, so until then nothing in `.beads-hooks/` runs and
+only the session-start hook syncs the store.
 
-## Using cairn instead of bd
+## Moving a repo off bd
 
-[cairn](https://github.com/scgoetsch/cairn) is an agent-native replacement for bd's store that
-keeps bd's verbs and flags. The hooks here run either. Which one is a per-checkout decision in one
-tracked file:
+For a repo that has the 0.1 pipeline and its store in bd. **Store first, hooks second; in this
+order, stopping at the first failure.** The installer refuses step 7 until steps 1–6 have made a
+writable cairn store (`cairn init` writes `.cairn/cairn.db`), so it cannot be run out of order by
+accident — but a green install proves only the install, not the move.
 
-```bash
-tools/store-cli-git-hooks.sh       # bd's own git hooks must stop under cairn too (see below)
-tools/store-cli-harness-hooks.sh   # …and the Claude/Codex/Cursor hooks bd init writes (see below)
-echo cairn > .claude/store-cli     # commit it; `bd` switches back
-```
+1. **Freeze writers**: no other session, no `bd dolt push`, no other clone writing.
+2. **`bd export --all`** (to a file outside the tree, e.g. `bd export --all -o /tmp/bd.jsonl`).
+3. **`cairn seed-from-dolt .beads --dolt <dolt>`** (every id ever issued, deleted ones too), on a
+   copy, `-o seed.json`. A seed not read from Dolt can reissue deleted ids.
+4. **`cairn history-from-dolt`** against that export (plus `.beads/interactions.jsonl` when
+   present); keep the manifest:
+   `cairn history-from-dolt .beads --dolt <dolt> --interactions .beads/interactions.jsonl --export /tmp/bd.jsonl -o history.jsonl --manifest manifest.json`.
+   **If it fails, stop**: an `init` without `--events` is a content migration that silently drops
+   the history.
+5. **`cairn init -p <prefix> --from <export> --seed <seed> --events <history>`** (plus `--ledger
+   .beads/memgraph-ledger.json`, `--hot`, when present); require its byte-identical or
+   equal-content line.
+6. **`cairn check`; write the four files under `.cairn/`** (`tools/refresh-beads-exports.sh`, once
+   the pipeline's tools are there, or `cairn export` by hand); **commit them with `config.json`
+   and `.gitignore`.** Not in the design, found while implementing it: bd's own `issues.jsonl`
+   (and any `memories.jsonl`) is usually tracked in `.beads/`, and cairn refuses exports split
+   between `.beads/` and `.cairn/` (`cairn sync`: "the tracked exports are split"). Remove them
+   from `.beads/` in the same commit: `git rm -q --cached .beads/issues.jsonl` (git history keeps
+   them; the installer and the export refresh both name any that are left).
+7. **Only then install the cairn-only pipeline** (`install.sh`). It removes bd's managed blocks
+   from every git hook in `.beads-hooks/` in place, bd's harness entries (`bd prime` in
+   `.claude/settings.json` and `settings.local.json`, the Codex and Cursor hooks), and the
+   `~/.bashrc` block for this repo; writes `.cairn/redirect` in sibling worktrees; backs up each
+   file it edits under `.git/beads-agent-pipeline-backup/<timestamp>/`. A bd-era pipeline file you
+   edited keeps your copy and gets ours as `.new` — **adopt the `.new` of every session hook and
+   git hook the installer names as bd-era**, or bd keeps running there. Then delete what it lists
+   as no longer shipped (`.claude/store-cli`, `tools/dolt-guard.sh`, the `store-cli-*` tools) and
+   bd's managed block in `AGENTS.md` if it names one.
+8. **Leave `.beads/` on disk until a person has read the manifest**; other clones need cairn
+   0.7.0+ and `cairn sync`.
 
-| `.claude/store-cli` | Runs | Blocked by the prerun hook |
-|---|---|---|
-| absent (every install that never opted in) | `bd` | nothing |
-| `bd` | `bd` | writes through `cairn` (its reads pass: the shadow mirrors bd) |
-| `cairn` | `cairn` | every `bd` call, `bd dolt push` included; `# frozen-store-ok` in the command lets a read through |
+cairn's own README has the reference for each verb ("Moving a bd store over", "Migrating from
+other bd versions"). A one-verb migration may replace this list later.
 
-There is no environment override on purpose: every session, harness and git hook of the checkout
-must agree, or one of them writes a store the others have left. Under `cairn`, bd's store is frozen
-at the cutover and nothing syncs it, so a `bd show` would answer from that day as if it were now
-and say nothing: reads are blocked like writes, and the message names the cairn verb that answers
-instead, or says cairn has none (bd's `search`, `label`, `history`, `supersede`, `link`, `rename`,
-`stale`, `orphans`, `lint`, `doctor`, `human`, `formula`/`mol` were not carried over). `bd --version`
-and `bd <verb> --help` touch no store and pass. The prerun hook parses both names in any mode (a
-keyless `cairn remember` is refused like a keyless `bd remember`; a `cairn update --claim` is
-recorded). With `cairn`, the prime hook prints the rules with `cairn`, takes the
-workflow context from `cairn prime` up to its first memory heading and tiers the memories from
-`cairn export`, and the pre-commit runs `cairn check` and stops before bd's managed block. bd writes four more git hooks itself (`post-checkout`, `post-merge`,
-`pre-push`, `prepare-commit-msg`, by `bd hooks install --shared`); `tools/store-cli-git-hooks.sh`
-puts the same stop in each, and must run again after any `bd hooks install`. bd 1.3's `bd init`
-and `bd setup` also write agent-harness hooks that run bd directly (`bd prime --hook-json` in
-`.claude/settings.json`, `bd codex-hook` in `.codex/hooks.json`, `bd cursor-hook` in
-`.cursor/hooks.json`); `tools/store-cli-harness-hooks.sh` prefixes each with a test that skips it
-under cairn, and must run again after any `bd init` or `bd setup`. Under cairn the post-merge and
-post-checkout stanzas, and the session-start hook, also run `cairn sync`, which brings a clone's
-store up to the exports a pull brought in (cairn README, "More than one clone"). For a repo bd
-never installed its hooks in, the pipeline ships `post-merge` and `post-checkout` holding only that
-stanza (written only where absent; bd appends its block below them). `core.hooksPath` is per-clone
-config: a fresh clone runs none of these hooks until the installer has run in it, and until then
-only the session-start hook syncs. The installer never
-writes `.claude/store-cli`. Moving a store over (and back) is cairn's job: see its README,
-"Moving a bd store over".
+### What breaks
 
-Without the file nothing is write-blocked and bd runs as before, but three things changed for
-every install: a keyless `cairn remember` is refused and a `cairn update --claim` is recorded
-(the parser knows both names); the scripts gate and the stop hook also count an in-progress issue
-whose assignee is the session's own session-scoped actor (a claim made as `bd update "$id"
---claim` was invisible before); and the in-progress listings pass `--limit 0`.
+For a bd user who pulls 0.2.0 and re-runs `install.sh`:
+
+- **The install requires cairn**, and refuses a repo whose store is still bd's; nothing is
+  installed until the store has moved.
+- **Their store is still bd**, and nothing here reads it. Adopted `.new` hooks do not read it
+  either; an un-adopted bd-era hook can still run bd.
+- **`bd dolt push` is gone from session completion.** Two machines share the store through git of
+  the four files and `cairn sync`, and two clones that both wrote are refused, with no merge:
+  decide which machine writes.
+- **CI as written fails**: it installed bd, and the pipeline now needs cairn.
+- **There is no switch back inside the pipeline.** `.claude/store-cli` is ignored; going back is
+  checking out `v0.1.0` and the bd store the move left on disk.
+- **`bd` itself still works if it is on PATH** — it is the user's own tool, and nothing here blocks
+  it. Run in this repo, it reads and writes a bd store that cairn never reads.
 
 ## Known limitations
 
-- **No upgrade path.** The installer never overwrites a file you have. When a shipped tool changes
-  upstream, re-running the installer lands it as `tools/<name>.new` with a `DIFFERS` line; diff it,
-  `mv -f` it into place, `chmod 755`. Tracked; a hash manifest is the likely fix.
-- **One project per `~/.bashrc`.** The shell-guard block names one `tools/dolt-guard.sh`; a second
-  install replaces it. Irrelevant on an embedded store, where the guard is a no-op anyway.
-- **Platform coverage is what the Actions matrix runs: Ubuntu 24.04 (with bd and without),
-  macOS 26 and Windows Server 2025 under Git Bash, plus WSL2 and the Docker self-test on a bare
-  Ubuntu.** Not covered: a Windows box that cannot create symlinks (the runner can; the installer's
-  pointer-file fallback is exercised on Linux instead), PowerShell or cmd as the shell, and zsh.
-  `tools/dolt-guard.sh` is bash: it finds its repo through `BASH_SOURCE` and
-  uses `{fd}` redirections (bash ≥ 4.1), so it is inert under zsh and will not parse in macOS's
-  `/bin/bash` 3.2; the installer writes only `~/.bashrc`.
+- **No upgrade path.** The installer never overwrites a file you have (the old tracker's managed
+  blocks aside, in a repo that had the 0.1 pipeline). When a shipped tool changes upstream, re-running the installer lands it as
+  `tools/<name>.new` with a `DIFFERS` line; diff it, `mv -f` it into place, `chmod 755`. Tracked; a
+  hash manifest is the likely fix.
+- **The names are still beads'.** `bd-prime-hook.sh`, `bd-prerun-hook.sh`, `bd-stop-hook.sh`,
+  `.beads-hooks/`, `.pi/extensions/beads-pipeline.ts`, `BEADS_ACTOR`, the `BD_*` knobs,
+  `.git/bd-session-claims/` and `tools/refresh-beads-exports.sh` keep their names in this release:
+  renaming them is a settings-merge and `core.hooksPath` migration of its own, for a later one.
+- **cairn is pinned by commit, not version.** cairn has no release tags yet; CI and the container
+  name a commit, and the installer checks only `cairn --version` ≥ 0.7.0.
+- **Platform coverage is what the Actions matrix runs: Ubuntu 24.04, macOS and Windows Server 2025
+  under Git Bash, plus the Docker self-test on a bare Ubuntu.** Not covered: a Windows box that
+  cannot create symlinks (the runner can; the installer's pointer-file fallback is exercised on
+  Linux instead), PowerShell or cmd as the shell, and zsh.
 - **This repository does not run its own git-layer guards on its own commits** — `core.hooksPath`
   is not set here. The self-test proves the installed payload commits clean under the guards; the
   root files (`README.md`, `AGENTS.md`, `selftest.sh`) are checked only by a manual sweep.
@@ -433,13 +453,17 @@ whose assignee is the session's own session-scoped actor (a claim made as `bd up
 
 Inside the target repo: `.claude/` (three hook scripts, `memory-hot.txt`, `settings.json` merged
 with a backup at `settings.json.bak.<epoch>`, `skills/`, `site-checks/`), optional `.pi/extensions/`
-(with `--with-pi` only), `tools/`, `docs/ops/`, `.beads-hooks/pre-commit`, `AGENTS.md` (only if absent) and the `CLAUDE.md` symlink, plus
-`core.hooksPath` in git config. Linked worktrees are supported: the installer enables
+(with `--with-pi` only), `tools/`, `docs/ops/`, `.beads-hooks/` (`pre-commit`, `post-merge`,
+`post-checkout`), `AGENTS.md` (only if absent) and the `CLAUDE.md` symlink, plus `core.hooksPath`
+in git config. In a repo that had the 0.1 pipeline: the old tracker's blocks and harness hooks are removed in place, each
+edited file backed up under `.git/beads-agent-pipeline-backup/<timestamp>/`, and sibling worktrees
+get an untracked `.cairn/redirect`. Linked worktrees are supported: the installer enables
 `extensions.worktreeConfig` when needed, migrates the main checkout's `core.bare`/`core.worktree`
-values to its `config.worktree`, and sets the target's hooks path with `--worktree`, leaving sibling
-hook settings alone. Submodules use their own config. Outside it: the one `~/.bashrc` block.
-For a linked worktree use `git config --worktree --unset core.hooksPath` when removing it.
-To remove everything:
+values to its `config.worktree`, and sets the target's hooks path with `--worktree`, leaving
+sibling hook settings alone. Submodules use their own config. Outside the repo: nothing, except
+that the old `~/.bashrc` dolt-guard block for this repo, if one is there, is removed (backup
+beside it). For a linked worktree use `git config --worktree --unset core.hooksPath` when removing
+it. To remove everything:
 
 ```bash
 git config --unset core.hooksPath          # or point it back where it was
@@ -449,11 +473,10 @@ rm -f .pi/extensions/beads-pipeline.ts  # only if you opted in; leave other Pi e
 # the OLDEST backup (epoch suffix, so it sorts first) is your pre-install settings.json, if any
 cp -f "$(ls .claude/settings.json.bak.* | sort | sed -n 1p)" .claude/settings.json \
   && rm -f .claude/settings.json.bak.*
-sed -i.bak '/# >>> bd dolt-guard >>>/,/# <<< bd dolt-guard <<</d' ~/.bashrc
 ```
 
-`AGENTS.md` and `CLAUDE.md` are yours by then; keep or delete as you like. `bd` and its store are
-untouched by any of this.
+`AGENTS.md` and `CLAUDE.md` are yours by then; keep or delete as you like. `cairn` and its store
+(`.cairn/`) are untouched by any of this.
 
 ## License
 

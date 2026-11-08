@@ -25,7 +25,8 @@
 # Everything else happens in a scratch directory OUTSIDE the tree: a run that is killed outright
 # must not leave a copy of the store inside the tree for the next `git add` to pick up.
 # An export with no rows never replaces a file that has rows: that is what a broken CLI looks like,
-# not what a store looks like. To accept a genuinely empty export, delete the file first.
+# not what a store looks like. To accept a genuinely empty export, delete the file first. A file
+# that does not exist is written, empty or not, so a fresh store's first commit carries all four.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
@@ -262,7 +263,10 @@ for pair in $PAIRS; do
   fi
   enforced="$enforced $file"
 
-  if cmp -s "$fresh" "$have"; then
+  # A file that does not exist yet is written in write mode even when the export is empty: a
+  # fresh store's first commit must carry all four, or another clone has nothing to `cairn sync`
+  # from (it refuses a checkout with no issues.jsonl).
+  if cmp -s "$fresh" "$have" && { [ "$mode" != write ] || [ -e "$file" ]; }; then
     [ "$mode" = write ] && echo "beads-exports: $file is current ($(rows "$fresh") rows)"
     continue
   fi

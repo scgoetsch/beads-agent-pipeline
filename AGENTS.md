@@ -1,22 +1,27 @@
 # Agent runbook — set this pipeline up on a fresh box, and prove it
 
 This file is for an agent (Claude Code, Codex, agy, a Grok REPL) or a human landing on a machine
-that has never seen `bd` or this pipeline, with the job "install it into a project and show that it
-works". It is not the template that gets installed — that is `pipeline/AGENTS.md`. `CLAUDE.md` in
-this directory is a symlink to this file, so every harness reads the same runbook.
+that has never seen `cairn` or this pipeline, with the job "install it into a project and show that
+it works". It is not the template that gets installed — that is `pipeline/AGENTS.md`. `CLAUDE.md`
+in this directory is a symlink to this file, so every harness reads the same runbook.
+
+**This runbook is for a project with no store yet, or one already on cairn.** A project whose
+store is still the old tracker's is not installed into: the installer refuses it, and the move
+comes first (README.md, "Moving a repo off bd"). A green install is not a migrated store.
 
 Follow it top to bottom. **Every phase ends with a gate.** A gate that fails means stop and report
 what you saw; it does not mean find another way through. The whole point of this pipeline is that
 guards fail loudly, and an agent that works around a loud failure has defeated it.
 
-Measured, end to end, on 2026-09-22: Ubuntu Server 26.04.1, bd 1.3.0, Claude Code 2.1.278,
-bd-memgraph at HEAD. Version numbers below are what that run produced; yours may be newer.
+Measured end to end on the 0.1 runbook on 2026-09-22 (Ubuntu Server 26.04.1, Claude Code 2.1.278).
+The cairn phases below were measured on 2026-11-08 with cairn 0.7.0 (`./selftest.sh` and a
+throwaway project); version numbers are what those runs produced, yours may be newer.
 
 ## 0. Ground rules for the run
 
 - **One writer per tree.** If another session is working in the target project, do not touch it.
   Use a project directory of your own.
-- **Non-login shells may not have `~/.local/bin` on PATH**, and that is where `bd` and `claude`
+- **Non-login shells may not have `~/.local/bin` on PATH**, and that is where `cairn` and `claude`
   land. Start every shell you open with `export PATH="$HOME/.local/bin:$PATH"`.
 - **Non-interactive flags everywhere**: `apt-get -y`, `cp -f`, `ssh -o BatchMode=yes`. A prompt
   you cannot answer looks like a hang.
@@ -29,31 +34,22 @@ bd-memgraph at HEAD. Version numbers below are what that run produced; yours may
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 command -v git python3 jq iconv || sudo apt-get install -y git python3 jq   # iconv ships with glibc
+python3 --version                                # 3.9 or later: cairn is stdlib-only Python
 
-# bd — the official installer. Downloads the latest release, verifies its checksum.
-curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
-bd --version                                     # e.g. "bd version 1.3.0"
-
-# bd-memgraph — typed [[wikilinks]] over memories and a pre-commit graph guard. The pipeline
-# works without it (its stanza self-skips), but this runbook installs the full environment.
-git clone https://github.com/scgoetsch/bd-memgraph ~/bd-memgraph
-ln -sf ~/bd-memgraph/bd-memgraph.py ~/.local/bin/bd-memgraph
-bd-memgraph --help | head -1                     # "usage: bd-memgraph ..."
+# cairn — a clone and a symlink; nothing to pip install. 0.7.0 or later.
+git clone https://github.com/scgoetsch/cairn ~/cairn
+mkdir -p ~/.local/bin && ln -sf ~/cairn/bin/cairn ~/.local/bin/cairn
+cairn --version                                  # e.g. "cairn 0.7.0"
 
 # Claude Code — the default three session hooks fire only inside it. Pi support is opt-in.
 curl -fsSL https://claude.ai/install.sh | bash
 claude doctor                                    # must end "No installation issues found."
 ```
 
-The bd installer may print `~/.local/bin is not in your PATH` when run from a non-login shell. On
-Ubuntu, `~/.profile` adds it at the next login once the directory exists; the `export` above covers
-the current shell.
-
-**Gate 1:** `bash -lc 'command -v bd claude bd-memgraph'` prints three paths. The runbook installs
-all three by default; only `bd` is required by the pipeline itself. If the instruction you were
-given said to skip Claude Code or bd-memgraph, the gate is the paths that remain — and the report
-in section 8 must say which were skipped, because later gates change: without bd-memgraph the
-memory-graph stanza self-skips, and without Claude Code section 7 has nothing to run.
+**Gate 1:** `bash -lc 'command -v cairn claude'` prints two paths and `cairn --version` is 0.7.0
+or later. Only `cairn` (with `git` and `python3`) is required by the pipeline itself. If the
+instruction you were given said to skip Claude Code, the gate is the path that remains — and the
+report in section 8 must say so, because section 7 then has nothing to run.
 
 ## 2. Clone the pipeline and run its own self-test first
 
@@ -63,24 +59,25 @@ cd ~/beads-agent-pipeline && ./selftest.sh
 ```
 
 `test/selftest-in-container.sh` runs the same self-test on a clean Ubuntu in Docker, with and
-without bd, when the box has Docker; prefer it when the box already carries everything, since a
+without cairn, when the box has Docker; prefer it when the box already carries everything, since a
 box that has every tool cannot show you what a bare one does. The same self-test runs in GitHub
-Actions on every push (`.github/workflows/selftest.yml`): Ubuntu with bd and without, macOS and
-Windows, each box's RESULT line in the run summary. All four jobs are gates; a box the matrix
-does not have (PowerShell, a Windows box that cannot make symlinks) is yours to run it on.
+Actions on every push (`.github/workflows/selftest.yml`): Ubuntu, macOS and Windows, each box's
+RESULT line in the run summary. All three jobs are gates; a box the matrix does not have
+(PowerShell, a Windows box that cannot make symlinks) is yours to run it on.
 
 The self-test installs into throwaway repos under `mktemp` and touches nothing else. It runs every
-shipped guard, checks idempotence, and proves through `git commit` that the git-layer guard fires.
-On a box **without** bd it still runs, takes its bare-box branch, and must still pass.
+shipped guard, checks idempotence, proves through `git commit` that the git-layer guard fires, and
+proves the installer refuses a repo whose store is still the old tracker's. With cairn hidden from
+PATH it still runs that branch, and must still pass.
 
-**Gate 2:** the last line is `RESULT: N passed, 0 failed` — N grows with every release; `0 failed` is
-the gate. If anything
-fails, stop: the pipeline is broken on this platform and installing it proves nothing.
+**Gate 2:** the last line is `RESULT: N passed, 0 failed` — N grows with every release; `0 failed`
+is the gate. If anything fails, stop: the pipeline is broken on this platform and installing it
+proves nothing.
 
 ## 3. Install into a project
 
 The target is the directory you were told to install into. If it is already a git repo, skip the
-four lines that create one below and start at `--check`; the installer keeps whatever is there
+three lines that create one below and start at `--check`; the installer keeps whatever is there
 (an existing `AGENTS.md` is never touched — the template lands only where there is none). If it
 does not exist yet, create it. Either way, not a tree another session is working in:
 
@@ -94,46 +91,37 @@ printf '# fresh\n' > README.md && git add README.md && git commit -qm init
 ```
 
 Read the install output, do not just check its exit code. The `verify` block at the end must show
-`core.hooksPath=... — git runs that file`, `no installed file is gitignored here`, `agent-docs
-symlink guard passes` and `hook portability suite passes`. Anything marked `!` needs a decision
-before you go on.
+the four pre-commit guards present, `core.hooksPath=... — git runs that file`, `no installed file
+is gitignored here`, `agent-docs symlink guard passes` and `hook portability suite passes`.
+Anything marked `!` needs a decision before you go on. A line beginning `REFUSED:` means the
+project's store is still the old tracker's: stop, and report it.
 
-The installer also adds a block to `~/.bashrc` that sources `tools/dolt-guard.sh` — one project per
-`.bashrc`; a second install replaces it. Pass `--no-shell` if that is not wanted. For a Pi
-project, pass `--with-pi`, then explicitly approve the project in Pi and run the installed
-`tools/pi-extension_test.sh` plus the live smoke in `pipeline/docs/ops/pi-adapter.md`.
-The default install does **not** load the Pi adapter; reading `AGENTS.md` in Pi is no proof that
-the tool-call guard runs. The rest of this runbook measures the default Claude path.
+The installer writes nothing outside the project. For a Pi project, pass `--with-pi`, then
+explicitly approve the project in Pi and run the installed `tools/pi-extension_test.sh` plus the
+live smoke in `pipeline/docs/ops/pi-adapter.md`. The default install does **not** load the Pi
+adapter; reading `AGENTS.md` in Pi is no proof that the tool-call guard runs. The rest of this
+runbook measures the default Claude path.
 
 **Gate 3:** exit 0; `git -C ~/proj/fresh config core.hooksPath` resolves to `.beads-hooks`;
 `ls -la ~/proj/fresh/CLAUDE.md` shows `CLAUDE.md -> AGENTS.md`.
 
-## 4. Initialise bd, then re-run the installer
+## 4. Create the store, commit what git carries of it, then re-run the installer
 
 ```bash
 cd ~/proj/fresh
-bd init --prefix FT                 # your own prefix
-bd hooks install --shared           # --shared matters; without it git ignores the hooks
-~/beads-agent-pipeline/install.sh ~/proj/fresh     # re-run once: takes back settings.json
-~/beads-agent-pipeline/install.sh ~/proj/fresh     # re-run again: must be a no-op
+cairn init -p ft                     # your own prefix
+tools/refresh-beads-exports.sh       # writes the four tracked files into .cairn/
+git add .cairn/.gitignore .cairn/config.json .cairn/issues.jsonl .cairn/memories.jsonl \
+        .cairn/allocator.json .cairn/events.jsonl
+git commit -qm "cairn store" -- .cairn/; echo "exit $?"      # exit 0; the pre-commit runs cairn check
+~/beads-agent-pipeline/install.sh ~/proj/fresh               # re-run: must be a no-op
 ```
 
-What current bd (1.3) does here, so none of it reads as a problem:
+A store is not finished until another clone can `cairn sync` from it: the database
+(`.cairn/cairn.db`) is git-ignored, and those four files plus `config.json` are what git carries.
 
-- `bd init` **makes a commit** of its own, carrying `AGENTS.md` (with bd's managed block appended)
-  and `.claude/settings.json`. It also writes `.agents/`, `.codex/`, `.cursor/` integration files.
-- `bd hooks install --shared` rewrites its own stanza in `.beads-hooks/pre-commit` to its version
-  and sets `core.hooksPath` to an **absolute** path. Both are fine; the installer compares the
-  resolved directory and the file outside bd's markers, and leaves both alone.
-- `bd init` registers bd's own `bd prime` SessionStart hook in `.claude/settings.json`. The
-  **first** re-run replaces it with ours (ours runs `bd prime` itself) and says so:
-  `+ .claude/settings.json — merged our hooks in` and `replaced bd's own SessionStart hook`. That
-  is one change, not a problem, and exit 0. After it, `bd setup claude --check` reports "No hooks
-  installed" — expected; do not run `bd setup claude` to "fix" it, that re-adds the duplicate.
-
-**Gate 4:** the first re-run exits 0 with exactly that one `+` line. User hooks must survive, even
-on shared events; a `!` line means attention is needed, not permission to discard those hooks. Then the **second** re-run prints `nothing to do — this checkout was
-already set up.` and exits 0.
+**Gate 4:** the commit exits 0 and `git show --stat HEAD` lists the six `.cairn/` files; the re-run
+prints `nothing to do — this checkout was already set up.` and exits 0.
 
 ## 5. Prove the guards through git — not by running the scripts
 
@@ -144,7 +132,7 @@ cd ~/proj/fresh
 for s in tools/*_test.sh; do printf '%-42s' "$s"; ./$s >/tmp/suite.log 2>&1 && echo PASS || { echo FAIL; tail -15 /tmp/suite.log; }; done
 ```
 
-Then the three commits that matter. Do them in this order and check `git log` after each:
+Then the four commits that matter. Do them in this order and check `git log` after each:
 
 ```bash
 # 5a. A document carrying an agent-cache path MUST be refused. (Built from $HOME so that this
@@ -158,30 +146,33 @@ rm CLAUDE.md && cp AGENTS.md CLAUDE.md
 git add CLAUDE.md && git commit -qm "must be refused"; echo "exit $?"   # exit 1, "staged CLAUDE.md is a REGULAR FILE"
 rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md && git add CLAUDE.md
 
-# 5c. The whole installed payload MUST commit under its own guards.
+# 5c. A store write without its exports MUST be refused.
+cairn create --title="runbook probe" --type=task -p 4 --silent
+git commit -qm "must be refused" --allow-empty; echo "exit $?"         # exit 1, "issues.jsonl is STALE"
+tools/refresh-beads-exports.sh && git add .cairn/issues.jsonl .cairn/memories.jsonl .cairn/allocator.json .cairn/events.jsonl
+
+# 5d. The whole installed payload MUST commit under its own guards.
 git add -A && git commit -qm "pipeline installed"; echo "exit $?"      # exit 0
 ```
 
-5c is the one that catches pipeline bugs: a template example spelled out in full, or a test suite
-holding the literal it tests with, was once refused by the very guard it ships with. If 5c fails,
+5d is the one that catches pipeline bugs: a template example spelled out in full, or a test suite
+holding the literal it tests with, was once refused by the very guard it ships with. If 5d fails,
 that is a bug in this repository — report it with the guard's message; do not bypass it.
 
-**Gate 5:** every suite PASS; 5a and 5b exit 1 with `git log` unchanged; 5c exits 0.
+**Gate 5:** every suite PASS; 5a, 5b and 5c exit 1 with `git log` unchanged; 5d exits 0.
 
-## 6. bd works, and a new shell is quiet
+## 6. The store works, and another clone rebuilds it from git
 
 ```bash
-bd remember --key runbook-probe "probe $(date -Is)" && bd recall runbook-probe && bd forget runbook-probe
-bd dolt status                                    # bd 1.3 default: "embedded (in-process, no server)"
-bash -ic 'cd ~/proj/fresh; echo shell-ok' 2>&1 | grep -v "job control"
+cairn remember --key runbook-probe "probe $(date -Is) about tools/sweep.sh" && cairn recall runbook-probe && cairn forget runbook-probe
+tools/refresh-beads-exports.sh && git commit -qm "probe" -- .cairn/
+git clone -q ~/proj/fresh /tmp/fresh-clone && cd /tmp/fresh-clone && git config core.hooksPath .beads-hooks
+cairn sync && cairn list --all | grep -c 'runbook probe'               # "Synced ...", then 1
+cd ~/proj/fresh && rm -rf /tmp/fresh-clone
 ```
 
-The third line must print `shell-ok` and **nothing from `dolt-guard:`**. On an embedded store there
-is no server to guard and the guard stays silent; a `FAILED to start dolt server` line here is a
-bug (it was one, fixed 2026-09-22). Note `bash -ic`, not `bash -lc`: Ubuntu's `~/.bashrc` returns
-at its first line for non-interactive shells, so `-lc` proves nothing about the guard.
-
-**Gate 6:** the round trip prints the probe back; the shell prints only `shell-ok`.
+**Gate 6:** the round trip prints the probe back; the clone's `cairn sync` builds a store and the
+issue created in 5c is in it.
 
 ## 7. Session hooks — what can and cannot be verified without a signed-in Claude Code
 
@@ -191,7 +182,7 @@ the git layer above is what covers you. Without signing in you can still run eac
 
 ```bash
 bash .claude/bd-prime-hook.sh | head -3          # "# 🚨 MANDATORY SESSION RULES ..." — and no "bd-prime-hook:" fallback banner
-bash .claude/bd-prime-hook.sh | wc -c            # single-digit KB on a small store; the raw `bd prime` dump is what it replaces
+bash .claude/bd-prime-hook.sh | wc -c            # single-digit KB on a small store
 jq -nc '{tool_name:"Bash",tool_input:{command:"pkill -f x"}}' | bash .claude/bd-prerun-hook.sh; echo "exit $?"   # exit 2
 jq -nc '{tool_name:"Bash",tool_input:{command:"ls"}}'        | bash .claude/bd-prerun-hook.sh; echo "exit $?"   # exit 0
 bash .claude/bd-stop-hook.sh; echo "exit $?"     # exit 0
@@ -201,19 +192,19 @@ If you can sign in, prove the hook fires without an interactive session — a se
 print-mode run, and a question only the hook's output can answer:
 
 ```bash
-bd remember --key runbook-sentinel-7731 "the session-hook probe" >/dev/null
+cairn remember --key runbook-sentinel-7731 "the session-hook probe" >/dev/null
 claude -p 'Answer with exactly two lines and nothing else. Line 1: the first line of any SessionStart hook output you received at the start of this session, verbatim (or the words NO HOOK OUTPUT). Line 2: the memory key containing 7731 as listed in that hook output (or NOT LISTED).'
-bd forget runbook-sentinel-7731 >/dev/null
+cairn forget runbook-sentinel-7731 >/dev/null
 ```
 
-Measured 2026-09-22 with Claude Code 2.1.278: line 1 is `SessionStart:startup hook success: # 🚨
-MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨` and line 2 is `runbook-sentinel-7731`. If line 1
-is the raw `bd prime` dump instead, the merge in phase 4 did not take —
-`jq '.hooks.SessionStart' .claude/settings.json` should name `bd-prime-hook.sh`. If line 1 is
-right and line 2 is `NOT LISTED`, the host cut the payload: Claude Code keeps only a 2,000-byte
-preview of a hook output above 10,000 bytes, and the hook trims itself to `BD_PRIME_BUDGET`
-(default 10000) to stay under that — `bash .claude/bd-prime-hook.sh | wc -c` says how big it
-is, and a first line reading `PAYLOAD TRIMMED` says what it dropped.
+Measured 2026-09-22 with Claude Code 2.1.278 (on the 0.1 pipeline): line 1 is
+`SessionStart:startup hook success: # 🚨 MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨` and
+line 2 is `runbook-sentinel-7731`. If line 1 is `cairn prime`'s own layout instead, the settings
+merge did not take — `jq '.hooks.SessionStart' .claude/settings.json` should name
+`bd-prime-hook.sh`. If line 1 is right and line 2 is `NOT LISTED`, the host cut the payload:
+Claude Code keeps only a 2,000-byte preview of a hook output above 10,000 bytes, and the hook trims
+itself to `BD_PRIME_BUDGET` (default 10000) to stay under that — `bash .claude/bd-prime-hook.sh |
+wc -c` says how big it is, and a first line reading `PAYLOAD TRIMMED` says what it dropped.
 
 **Gate 7:** the by-hand runs match the comments above.
 
@@ -222,24 +213,26 @@ is, and a first line reading `PAYLOAD TRIMMED` says what it dropped.
 Report in this shape — numbers, not adjectives:
 
 ```
-box: <os, kernel>   bd <ver>   claude <ver or "not installed">   bd-memgraph <yes/no>
+box: <os, kernel>   cairn <ver>   claude <ver or "not installed">
 pipeline: <commit>  selftest: RESULT: N passed, 0 failed
-project: <path>     install: exit 0, <n> change(s); re-run after bd init: nothing to do
+project: <path>     install: exit 0, <n> change(s); re-run after cairn init: nothing to do
 suites in project:  <k>/<k> PASS
-git proofs:         5a refused / 5b refused / 5c committed
-shell:              quiet (embedded)  |  session hooks: by hand OK / fired in Claude Code (if signed in)
+git proofs:         5a refused / 5b refused / 5c refused / 5d committed
+store:              round trip OK / clone synced  |  session hooks: by hand OK / fired in Claude Code (if signed in)
 deviations:         <every gate that did not match, verbatim output>
 ```
 
 Anything that deviated is either a platform difference worth recording or a bug in this
 repository. File it at https://github.com/scgoetsch/beads-agent-pipeline/issues with the exact
-command and its output. The bugs this runbook now warns about — the guard refusing its own
-template, the shell guard crying wolf on an embedded store, the hooks not being wired without bd —
-were all found by exactly this procedure on a fresh box.
+command and its output. The bugs this runbook warns about — the guard refusing its own template,
+the hooks not being wired without the store CLI — were found by exactly this procedure on a fresh
+box.
 
 ## Updating a project later
 
 The installer never overwrites a file you already have. When you pull a newer pipeline and re-run
 it, a changed tool lands as `tools/<name>.new` with a `DIFFERS` line; diff it, then `mv -f` it into
 place and `chmod 755`. There is no automatic upgrade path yet. `AGENTS.md` is yours and is never
-offered as `.new`; the template is `pipeline/AGENTS.md` in the pipeline checkout.
+offered as `.new`; the template is `pipeline/AGENTS.md` in the pipeline checkout. A project that
+had the 0.1 pipeline (on the old tracker) follows README.md, "Moving a repo off bd", before it
+re-runs the installer.
