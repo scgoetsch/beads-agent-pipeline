@@ -235,9 +235,10 @@ elif [ -e "$TARGET/.cairn/cairn.db" ]; then
 elif [ -n "$MAIN" ] && [ "$MAIN" != "$TARGET" ] && [ -e "$MAIN/.cairn/cairn.db" ]; then
   cairn_db="$MAIN/.cairn/cairn.db"; NEED_REDIRECT=1   # written below, before anything runs cairn sync here
 fi
-cairn_writable() {  # 0 when $cairn_db is a writable cairn store (meta writable=1)
-  [ -n "$cairn_db" ] && [ -f "$cairn_db" ] || return 1
-  python3 -I - "$cairn_db" <<'PY' 2>/dev/null
+cairn_writable() {  # [PATH] -> 0 when PATH (default $cairn_db) is a writable cairn store (meta writable=1)
+  local db=${1:-$cairn_db}
+  [ -n "$db" ] && [ -f "$db" ] || return 1
+  python3 -I - "$db" <<'PY' 2>/dev/null
 import sqlite3, sys
 try:
     c = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
@@ -247,6 +248,21 @@ except Exception:
 sys.exit(0 if row and row[0] == "1" else 1)
 PY
 }
+# A worktree with a database of its own while the main checkout holds the writable store: that is
+# a second store (a `git worktree add` whose post-checkout `cairn sync` ran before any redirect
+# existed), and its writes never reach the main checkout. Refuse, naming the fix; and a database
+# here that is not writable (a shadow) must not hide the main checkout's writable store.
+if [ -n "$MAIN" ] && [ "$MAIN" != "$TARGET" ] && [ ! -f "$TARGET/.cairn/redirect" ] \
+   && [ -e "$TARGET/.cairn/cairn.db" ] && cairn_writable "$MAIN/.cairn/cairn.db"; then
+  if cairn_writable "$TARGET/.cairn/cairn.db"; then
+    warn "REFUSED: this worktree has a cairn store of its own ($TARGET/.cairn/cairn.db) while the main checkout holds the store ($MAIN/.cairn/cairn.db)."
+    say "    Writes here never reach the main checkout. Move it aside (mv -f \"$TARGET\"/.cairn/cairn.db* <somewhere>), then run this installer again:"
+    say "    it writes .cairn/redirect so this worktree shares the main checkout's store. Nothing was changed."
+    exit 1
+  fi
+  say "this worktree's .cairn/cairn.db is not a writable store; the main checkout's is: using that"
+  cairn_db="$MAIN/.cairn/cairn.db"; NEED_REDIRECT=1
+fi
 bd_live=""
 for d in embeddeddolt dolt; do [ -d "$TARGET/.beads/$d" ] && bd_live="$bd_live .beads/$d/"; done
 if [ -n "$MAIN" ] && [ "$MAIN" != "$TARGET" ]; then
@@ -268,7 +284,7 @@ else
   say "no cairn store yet — create it yourself so the prefix is your choice (see Next, below)"
 fi
 
-if [ "$NEED_REDIRECT" -eq 1 ] && [ -e "$TARGET/.cairn/cairn.db" ]; then NEED_REDIRECT=0; fi
+if [ "$NEED_REDIRECT" -eq 1 ] && cairn_writable "$TARGET/.cairn/cairn.db"; then NEED_REDIRECT=0; fi
 if [ "$NEED_REDIRECT" -eq 1 ]; then
   say "this worktree has no .cairn/redirect yet; the install writes one naming $MAIN/.cairn first"
 fi

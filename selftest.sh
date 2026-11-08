@@ -575,6 +575,22 @@ if command -v cairn >/dev/null 2>&1; then
   "$SRC/install.sh" "$M/side" >"$M/wt2.log" 2>&1
   chk "a worktree install after the move writes its redirect to the main store" "$(cat "$M/side/.cairn/redirect" 2>/dev/null)" "$MM/.cairn"
   chk "  …and no database of its own was built" "$([ -e "$M/side/.cairn/cairn.db" ] && echo stray || echo none)" none
+  # A worktree that already built a store of its own (a plain worktree add whose post-checkout
+  # cairn sync ran before any redirect) is refused, not kept as a second store.
+  git -C "$MM" worktree add -q "$M/stray" -b stray 2>/dev/null
+  (cd "$M/stray" && cairn init -p zz -q) >/dev/null 2>&1
+  "$SRC/install.sh" "$M/stray" >"$M/wt3.log" 2>&1; wrc=$?
+  chk "a worktree with a writable store of its own beside the main checkout's is refused" "$wrc" 1
+  grep -q "has a cairn store of its own" "$M/wt3.log" && ok "  …saying it is a second store" || bad "  …saying it is a second store"
+  chk "  …and no redirect is written over it" "$([ -f "$M/stray/.cairn/redirect" ] && echo written || echo none)" none
+  # A database there that is NOT writable (a shadow) does not hide the main checkout's store.
+  git -C "$MM" worktree add -q "$M/shadow" -b shadow 2>/dev/null
+  mkdir -p "$M/shadow/.cairn"
+  python3 -I -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE meta(key TEXT, value TEXT)"); c.execute("INSERT INTO meta VALUES (?, ?)", ("writable", "0")); c.commit()' "$M/shadow/.cairn/cairn.db"
+  mkdir -p "$MM/.beads/embeddeddolt"           # the old Dolt store the move leaves until the manifest is read
+  "$SRC/install.sh" "$M/shadow" >"$M/wt4.log" 2>&1; wrc=$?
+  chk "a shadow database in a worktree does not hide the main checkout's store (installs)" "$wrc" 0
+  chk "  …and the worktree gets its redirect" "$(cat "$M/shadow/.cairn/redirect" 2>/dev/null)" "$MM/.cairn"
   rm -rf "$M"
 else
   echo "  SKIP the worktree install after the move: cairn not on PATH"
