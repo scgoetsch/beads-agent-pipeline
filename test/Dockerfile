@@ -1,15 +1,15 @@
 # Clean boxes for ./selftest.sh. Two targets:
-#   bare  git + python3 + bash and nothing else the pipeline lists: no bd, jq, rg, ss.
+#   bare  git + python3 + bash and nothing else the pipeline lists: no cairn, jq, rg.
 #         Exercises the installer's "required command absent" exit and every optional fallback.
-#   full  bare + bd (official installer, latest release) + jq + ripgrep + iproute2 + bd-memgraph.
-#         Exercises bd init, the hooks, the memory-graph stanza and the whole suite.
+#   full  bare + cairn (github.com/scgoetsch/cairn at CAIRN_REF) + jq + ripgrep.
+#         Exercises cairn init, the hooks, the store stanza and the whole suite.
 # Built and run by test/selftest-in-container.sh; nothing here is installed anywhere.
 FROM ubuntu:24.04 AS bare
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git python3 ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
-# The installer writes ~/.bashrc and the suites write under $HOME; a non-root user is the real case.
+# The suites write under $HOME; a non-root user is the real case.
 RUN useradd -m -s /bin/bash tester
 USER tester
 WORKDIR /home/tester
@@ -21,16 +21,15 @@ RUN git config --global user.email tester@example.invalid \
 FROM bare AS full
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends jq ripgrep iproute2 \
+ && apt-get install -y --no-install-recommends jq ripgrep \
  && rm -rf /var/lib/apt/lists/*
 USER tester
-# bd: the official installer, as the README tells a new user to run it. BD_VERSION pins a release
-# when the installer honours it; otherwise latest.
-ARG BD_VERSION=
-RUN curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | BD_VERSION="$BD_VERSION" bash \
- && bd --version
-# bd-memgraph: optional; one python file plus a symlink on PATH.
-ARG MEMGRAPH_REPO=https://github.com/scgoetsch/bd-memgraph
-RUN git clone --depth 1 "$MEMGRAPH_REPO" /home/tester/bd-memgraph \
- && ln -s /home/tester/bd-memgraph/bd-memgraph.py /home/tester/.local/bin/bd-memgraph \
- && bd-memgraph --help >/dev/null
+# cairn: a clone at a pinned commit (cairn has no release tags yet) and a symlink of bin/cairn,
+# as its README installs it. Keep CAIRN_REF in step with .github/workflows/selftest.yml.
+ARG CAIRN_REF=5aec6b002e60cd05abddeb281beb6faa6faec3ce
+RUN git init -q /home/tester/cairn \
+ && git -C /home/tester/cairn fetch -q --depth 1 https://github.com/scgoetsch/cairn "$CAIRN_REF" \
+ && git -C /home/tester/cairn checkout -q FETCH_HEAD \
+ && mkdir -p /home/tester/.local/bin \
+ && ln -s /home/tester/cairn/bin/cairn /home/tester/.local/bin/cairn \
+ && cairn --version

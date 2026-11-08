@@ -2,8 +2,10 @@
 # selftest.sh — prove the pipeline installs clean into a FRESH repo and that every guard it
 # ships passes there. This is the claim the README makes, tested rather than asserted.
 #
-# Safe: it installs into a mktemp git repo and passes --no-shell, so nothing outside that
-# directory is touched. Run it before every release.
+# Safe: it installs into mktemp git repos. The installer writes nothing outside the target except
+# to remove its old ~/.bashrc block for THAT target, which a fresh mktemp target never has; the
+# one probe that exercises that removal runs with HOME pointed at a scratch directory. Run it
+# before every release.
 set -uo pipefail
 SRC=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # Git Bash's `ln -s` COPIES by default; this makes it a real symlink or a failure, which is what
@@ -38,14 +40,14 @@ printf '\n\033[1m### install into a fresh git repo\033[0m\n'
 git -C "$T" init -q
 git -C "$T" config user.email selftest@example.com
 git -C "$T" config user.name  selftest
-"$SRC/install.sh" --no-shell "$T" >"$T/.install.log" 2>&1; rc=$?
+"$SRC/install.sh" "$T" >"$T/.install.log" 2>&1; rc=$?
 # The exit code depends on the box. The installer exits 1 whenever a required command is
 # missing, and that is right: a missing dependency must be loud. So the suite has to know which
 # of them THIS box lacks, expect the matching exit code, check each is named, and pin the count
 # -- an unrelated warning would change the count and fail here instead of hiding behind an
 # expected 1. Asserting 0 unconditionally assumed a fully equipped box, which is how this suite
 # passed on the machine it came from and failed on the first bare one.
-REQUIRED="git bd python3"             # keep in step with need() in install.sh
+REQUIRED="git cairn python3"          # keep in step with need() in install.sh
 missing=0; absent=""
 for d in $REQUIRED; do
   command -v "$d" >/dev/null 2>&1 || { missing=$((missing+1)); absent="$absent $d"; }
@@ -65,7 +67,8 @@ grep -q 'AGENTS.md' "$T/.install.log" && ok "installer reports what it did" || b
 
 printf '\n\033[1m### the payload is actually there\033[0m\n'
 for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-prerun-hook.sh \
-         .claude/bd-stop-hook.sh .beads-hooks/pre-commit .beads-hooks/post-merge .beads-hooks/post-checkout tools/sweep.sh tools/dolt-guard.sh \
+         .claude/bd-stop-hook.sh .beads-hooks/pre-commit .beads-hooks/post-merge .beads-hooks/post-checkout tools/sweep.sh \
+         tools/refresh-beads-exports.sh tools/new-worktree.sh \
          docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
          .claude/skills/README.md tools/check-no-agent-cache-paths.sh \
          tools/check-agent-docs-linked_test.sh .claude/site-checks/memory-curation-gate.sh \
@@ -86,31 +89,38 @@ linked_to_agents "$T" && ok "CLAUDE.md is the link to AGENTS.md (a symlink, or i
   || bad "skill scripts are executable"
 chk "core.hooksPath set" "$(git -C "$T" config core.hooksPath)" ".beads-hooks"
 
-printf '\n\033[1m### the shipped pre-commit carries all four stanzas\033[0m\n'
+printf '\n\033[1m### the shipped pre-commit carries all four stanzas, and nothing of bd\033[0m\n'
 # The hook is one file with four independent guards. Dropping one leaves the repo SILENTLY
 # unguarded, so assert each by name rather than trusting that the file copied.
-for m in 'BEADS INTEGRATION' 'bd-memgraph check' 'agent-cache path guard' 'agent-docs symlink guard' \
-         '>>> store CLI >>>' 'store CLI: cairn stops here'; do
+for m in '>>> store check >>>' 'agent-cache path guard' 'agent-docs symlink guard' 'export freshness guard'; do
   grep -q "$m" "$T/.beads-hooks/pre-commit" && ok "pre-commit stanza: $m" \
     || bad "pre-commit stanza: $m"
 done
-# Opting in to cairn is a commit the repo makes, never something an install does: a reinstall on an
-# install that never opted in must leave it on bd.
-[ ! -e "$T/.claude/store-cli" ] && ok "no .claude/store-cli after install (the store stays bd's until opted in)" \
-  || bad "the installer wrote .claude/store-cli"
-# The memory-graph stanza must self-skip when the optional tool is absent, or installing the
-# pipeline without bd-memgraph would block every commit.
-grep -q 'command -v bd-memgraph' "$T/.beads-hooks/pre-commit" \
-  && ok "memory-graph stanza self-skips when bd-memgraph is absent" \
-  || bad "memory-graph stanza self-skips when bd-memgraph is absent"
+# This release does not read bd. Nothing installed may call it or carry its managed block.
+chk "no installed hook runs \`bd hooks run\`" \
+    "$(cat "$T"/.beads-hooks/* "$T"/.claude/*.sh | grep -c 'bd hooks run' | tr -d ' ')" 0
+chk "no installed hook carries a BEGIN BEADS block" \
+    "$(cat "$T"/.beads-hooks/* "$T"/.claude/*.sh | grep -c 'BEGIN BEADS' | tr -d ' ')" 0
+chk "no installed hook reads .claude/store-cli" \
+    "$(cat "$T"/.beads-hooks/* "$T"/.claude/*.sh | grep -c '\.claude/store-cli' | tr -d ' ')" 0
+[ ! -e "$T/.claude/store-cli" ] && ok "no .claude/store-cli written" || bad "the installer wrote .claude/store-cli"
+chk "no store-cli or dolt-guard tool installed" \
+    "$(ls "$T"/tools/store-cli* "$T"/tools/dolt-guard* 2>/dev/null | wc -l | tr -d ' ')" 0
+# The store stanza must self-skip without cairn or a store, or installing before `cairn init`
+# would block every commit.
+grep -q 'command -v cairn >/dev/null 2>&1 && \[ -d .cairn \]' "$T/.beads-hooks/pre-commit" \
+  && ok "store stanza self-skips without cairn or .cairn/" \
+  || bad "store stanza self-skips without cairn or .cairn/"
+grep -q 'note: --no-shell does nothing' "$T/.install.log" && bad "no --no-shell note without the flag" \
+  || ok "no --no-shell note without the flag"
 
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
          tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/bd-stop-hook_test.sh \
-         tools/dolt-guard_test.sh tools/agent_docs_test.sh \
+         tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
          tools/audit_wikilinks_test.sh tools/memory-curation-gate_test.sh \
-         tools/pre-commit-store-cli_test.sh tools/store-cli-git-hooks_test.sh; do
+         tools/refresh-beads-exports_test.sh tools/new-worktree_test.sh; do
   suite_tmp=$(mktemp -d)
   if (cd "$T" && TMPDIR="$suite_tmp" ./$s) >"$T/.suite.log" 2>&1; then ok "$s"
   else bad "$s"; tail -35 "$T/.suite.log" | sed 's/^/        /'; fi
@@ -125,7 +135,7 @@ printf '\n\033[1m### the git-layer guard blocks a real commit (this is what cove
 # through git rather than by calling the script directly.
 G=$(mktemp -d); git -C "$G" init -q
 git -C "$G" config user.email t@example.com; git -C "$G" config user.name t
-"$SRC/install.sh" --no-shell "$G" >/dev/null 2>&1
+"$SRC/install.sh" "$G" >/dev/null 2>&1
 printf 'see ![f](%s)\n' "$BADP" > "$G/report.md"
 git -C "$G" add report.md
 git -C "$G" commit -qm "should be blocked" >/dev/null 2>&1
@@ -166,35 +176,37 @@ git -C "$G" commit -qm "clean index despite dirty working copies" >"$G/.proof.lo
 chk "clean staged document and link pass despite dirty working copies" "$?" "0"
 rm -rf "$G"
 
-printf '\n\033[1m### ...and it is wired even when bd is not on the box\033[0m\n'
-# On an equipped machine the block above cannot tell whether hook wiring depends on bd: bd is
-# there, so the hooks get wired either way. The bug this guards against (instance 12 in
-# docs/ops/checks-narrower-than-what-they-check.md) only showed on a box WITHOUT bd. Hide bd
-# from PATH and prove the install still wires the hook and the hook still fires. If hiding bd
-# would also hide git or python3, say so loudly rather than pass by omission.
+printf '\n\033[1m### ...and it is wired even when cairn is not on the box\033[0m\n'
+# On an equipped machine the block above cannot tell whether hook wiring depends on the store
+# CLI: it is there, so the hooks get wired either way. The bug this guards against (instance 12
+# in docs/ops/checks-narrower-than-what-they-check.md) only showed on a box WITHOUT the tracker.
+# Hide cairn from PATH and prove the install still wires the hook and the hook still fires. If
+# hiding it would also hide git or python3, say so loudly rather than pass by omission.
 H=$(mktemp -d); git -C "$H" init -q
 git -C "$H" config user.email t@example.com; git -C "$H" config user.name t
 bare_path=""; oldifs=$IFS; IFS=:
-for p in $PATH; do [ -x "$p/bd" ] || bare_path="${bare_path:+$bare_path:}$p"; done
+for p in $PATH; do [ -x "$p/cairn" ] || bare_path="${bare_path:+$bare_path:}$p"; done
 IFS=$oldifs
 if PATH="$bare_path" command -v git >/dev/null 2>&1 && PATH="$bare_path" command -v python3 >/dev/null 2>&1; then
-  PATH="$bare_path" command -v bd >/dev/null 2>&1 && bad "bd hidden from PATH" || ok "bd hidden from PATH"
-  PATH="$bare_path" "$SRC/install.sh" --no-shell "$H" >"$H/.log" 2>&1
-  chk "no-bd: installer exits 1"                 "$?" "1"
-  chk "no-bd: core.hooksPath set anyway"         "$(git -C "$H" config core.hooksPath)" ".beads-hooks"
-  grep -q 'core.hooksPath=.beads-hooks' "$H/.log" && ok "no-bd: installer verifies the wiring, not just the file" \
-    || bad "no-bd: installer verifies the wiring, not just the file"
+  PATH="$bare_path" command -v cairn >/dev/null 2>&1 && bad "cairn hidden from PATH" || ok "cairn hidden from PATH"
+  PATH="$bare_path" "$SRC/install.sh" "$H" >"$H/.log" 2>&1
+  chk "no-cairn: installer exits 1"              "$?" "1"
+  grep -q ' cairn MISSING — ' "$H/.log" && ok "no-cairn: installer names cairn as missing" || bad "no-cairn: installer names cairn as missing"
+  chk "no-cairn: core.hooksPath set anyway"      "$(git -C "$H" config core.hooksPath)" ".beads-hooks"
+  grep -q 'core.hooksPath=.beads-hooks' "$H/.log" && ok "no-cairn: installer verifies the wiring, not just the file" \
+    || bad "no-cairn: installer verifies the wiring, not just the file"
   printf 'see ![f](%s)\n' "$BADP" > "$H/report.md"
   git -C "$H" add report.md
   PATH="$bare_path" git -C "$H" commit -qm "should be blocked" >/dev/null 2>&1
-  chk "no-bd: commit carrying a cache path is rejected" "$(git -C "$H" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "0"
+  chk "no-cairn: commit carrying a cache path is rejected" "$(git -C "$H" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "0"
   printf 'see ![f](results/p.png)\n' > "$H/report.md"
   git -C "$H" add report.md
   PATH="$bare_path" git -C "$H" commit -qm "clean" >/dev/null 2>&1
-  chk "no-bd: a clean commit still succeeds"     "$(git -C "$H" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "1"
+  chk "no-cairn: a clean commit still succeeds"  "$(git -C "$H" log --oneline 2>/dev/null | wc -l | tr -d ' ')" "1"
 else
-  bad "no-bd probe could not run: hiding bd from PATH also hides git or python3 — move bd to its own directory"
+  bad "no-cairn probe could not run: hiding cairn from PATH also hides git or python3 — move cairn to its own directory"
 fi
+rm -rf "$H"
 rm -rf "$H"
 
 printf '\n\033[1m### the peer layer is opt-in and self-consistent\033[0m\n'
@@ -210,7 +222,7 @@ grep -q 'concurrent-sessions.md' "$T/AGENTS.md" && bad "default: AGENTS.md cites
   || ok "default: AGENTS.md cites no missing doc"
 
 P=$(mktemp -d); git -C "$P" init -q
-"$SRC/install.sh" --no-shell --with-concurrent "$P" >/dev/null 2>&1
+"$SRC/install.sh" --with-concurrent "$P" >/dev/null 2>&1
 [ -f "$P/docs/ops/concurrent-sessions.md" ] && ok "--with-concurrent: concurrency doc installed" \
   || bad "--with-concurrent: concurrency doc installed"
 grep -q '^## Concurrent sessions' "$P/AGENTS.md" && ok "--with-concurrent: concurrency section present" \
@@ -219,7 +231,7 @@ grep -q 'concurrent:begin\|concurrent:end' "$P/AGENTS.md" && bad "--with-concurr
   || ok "--with-concurrent: no marker comments leak"
 if (cd "$P" && ./tools/agent_docs_test.sh) >"$P/.suite.log" 2>&1; then ok "--with-concurrent: agent_docs_test passes"
 else bad "--with-concurrent: agent_docs_test passes"; sed -n '1,20p' "$P/.suite.log" | sed 's/^/        /'; fi
-"$SRC/install.sh" --no-shell --with-peer "$P" >"$P/.alias.log" 2>&1
+"$SRC/install.sh" --with-peer "$P" >"$P/.alias.log" 2>&1
 grep -q -- '--with-peer is now --with-concurrent' "$P/.alias.log" && ok "--with-peer: deprecated alias still accepted, with a note" \
   || bad "--with-peer: deprecated alias still accepted, with a note"
 rm -rf "$P"
@@ -230,7 +242,7 @@ printf '\n\033[1m### the Pi adapter is opt-in and does not overwrite user files\
 Q=$(mktemp -d); git -C "$Q" init -q
 mkdir -p "$Q/.pi/extensions"; printf 'my own extension\n' > "$Q/.pi/extensions/local.ts"
 printf '{"extensions":["./my.ts"]}\n' > "$Q/.pi/settings.json"
-"$SRC/install.sh" --no-shell --with-pi "$Q" >"$Q/.install.log" 2>&1; pi_rc=$?
+"$SRC/install.sh" --with-pi "$Q" >"$Q/.install.log" 2>&1; pi_rc=$?
 pi_missing=0; { command -v pi >/dev/null 2>&1 && pi --version >/dev/null 2>&1; } || pi_missing=1
 chk "--with-pi: installer exit matches dependencies" "$pi_rc" "$((missing > 0 || pi_missing > 0))"
 [ -f "$Q/.pi/extensions/beads-pipeline.ts" ] && ok "--with-pi: adapter installed" || bad "--with-pi: adapter installed"
@@ -241,10 +253,10 @@ if (cd "$Q" && ./tools/pi-extension_test.sh) >"$Q/.suite.log" 2>&1; then
   if grep -q '^SKIP' "$Q/.suite.log"; then echo "  SKIP Pi event suite: $(head -1 "$Q/.suite.log")"
   else ok "Pi adapter event suite passes in the installed clone"; fi
 else bad "Pi adapter event suite passes in the installed clone"; tail -30 "$Q/.suite.log" | sed 's/^/        /'; fi
-"$SRC/install.sh" --no-shell --with-pi "$Q" >"$Q/.rerun.log" 2>&1
+"$SRC/install.sh" --with-pi "$Q" >"$Q/.rerun.log" 2>&1
 grep -q 'nothing to do' "$Q/.rerun.log" && ok "--with-pi: second install is a no-op" || bad "--with-pi: second install is a no-op"
 printf 'custom guard\n' > "$Q/.pi/extensions/beads-pipeline.ts"
-"$SRC/install.sh" --no-shell --with-pi "$Q" >"$Q/.custom.log" 2>&1
+"$SRC/install.sh" --with-pi "$Q" >"$Q/.custom.log" 2>&1
 chk "--with-pi: modified adapter preserved" "$(cat "$Q/.pi/extensions/beads-pipeline.ts")" "custom guard"
 cmp -s "$SRC/pipeline/.pi/extensions/beads-pipeline.ts" "$Q/.pi/extensions/beads-pipeline.ts.new" \
   && ok "--with-pi: replacement staged as .new" || bad "--with-pi: replacement staged as .new"
@@ -255,7 +267,7 @@ printf '\n\033[1m### the CLAUDE.md symlink, and every way it breaks\033[0m\n'
 # is `dangling`: [ -e ] follows the link and is FALSE for a broken one, so the guard used to exit
 # 0 on exactly the state it exists to catch.
 S=$(mktemp -d); git -C "$S" init -q
-"$SRC/install.sh" --no-shell "$S" >"$S/.log" 2>&1
+"$SRC/install.sh" "$S" >"$S/.log" 2>&1
 linked_to_agents "$S" && ok "install creates CLAUDE.md as the link to AGENTS.md" || bad "install creates CLAUDE.md as the link to AGENTS.md"
 # The four states (linked / regular file / wrong target / dangling) are asserted by the guard's
 # OWN suite, tools/check-agent-docs-linked_test.sh, which the loop above runs inside this very
@@ -263,7 +275,7 @@ linked_to_agents "$S" && ok "install creates CLAUDE.md as the link to AGENTS.md"
 # and that the installer refuses to overwrite a regular file. Two places asserting one thing is
 # how the two drift apart.
 rm -f "$S/CLAUDE.md"; printf 'stale copy\n' > "$S/CLAUDE.md"
-"$SRC/install.sh" --no-shell "$S" >"$S/.log2" 2>&1
+"$SRC/install.sh" "$S" >"$S/.log2" 2>&1
 chk "installer keeps an existing regular CLAUDE.md" "$(cat "$S/CLAUDE.md")" "stale copy"
 grep -q 'REGULAR FILE' "$S/.log2" && ok "installer says why it refused" || bad "installer says why it refused"
 rm -rf "$S"
@@ -277,7 +289,7 @@ printf '\n\033[1m### no symlinks on the target filesystem: a pointer file that c
 N=$(mktemp -d); git -C "$N" init -q
 git -C "$N" config user.email t@example.com; git -C "$N" config user.name t
 git -C "$N" config core.symlinks false
-BAP_INSTALL_NO_SYMLINKS=1 "$SRC/install.sh" --no-shell "$N" >"$N/.log" 2>&1
+BAP_INSTALL_NO_SYMLINKS=1 "$SRC/install.sh" "$N" >"$N/.log" 2>&1
 [ -L "$N/CLAUDE.md" ] && bad "no-symlink install: CLAUDE.md is a regular pointer file" || ok "no-symlink install: CLAUDE.md is a regular pointer file"
 chk "no-symlink install: it holds exactly the target's name" "$(cat "$N/CLAUDE.md")" "AGENTS.md"
 chk "no-symlink install: the index holds it as a symlink" "$(git -C "$N" ls-files --stage -- CLAUDE.md | cut -c1-6)" "120000"
@@ -291,58 +303,46 @@ chk "no-symlink install: the commit carries a symlink" "$(git -C "$N" ls-tree HE
 git clone -q "$N" "$N.clone" 2>/dev/null
 [ -L "$N.clone/CLAUDE.md" ] && [ "$(readlink "$N.clone/CLAUDE.md")" = AGENTS.md ] \
   && ok "no-symlink install: a clone on a box with symlinks gets the real link" || bad "no-symlink install: a clone on a box with symlinks gets the real link"
-BAP_INSTALL_NO_SYMLINKS=1 "$SRC/install.sh" --no-shell "$N" >"$N/.log2" 2>&1
+BAP_INSTALL_NO_SYMLINKS=1 "$SRC/install.sh" "$N" >"$N/.log2" 2>&1
 grep -q 'nothing to do' "$N/.log2" && ok "no-symlink install: the re-run is a no-op" \
   || { bad "no-symlink install: the re-run is a no-op"; grep -E '^\s+[+!]' "$N/.log2" | sed 's/^/        /'; }
 rm -rf "$N" "$N.clone"
 
 printf '\n\033[1m### re-running changes nothing (idempotence)\033[0m\n'
-"$SRC/install.sh" --no-shell "$T" >"$T/.install2.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.install2.log" 2>&1
 grep -q 'nothing to do' "$T/.install2.log" && ok "second run is a no-op" \
   || { bad "second run is a no-op"; grep -E '^\s+\+' "$T/.install2.log" | sed 's/^/        /'; }
 
-# ...and it stays one after what `bd init` + `bd hooks install --shared` (bd 1.3.0) do to a
-# checkout: core.hooksPath rewritten to an ABSOLUTE path, and bd's stanza in the pre-commit
-# rewritten to its own version. Neither is drift to "repair". On the first fresh install both
-# made every re-run report a change, leave a .new, warn that no guard fires, and exit 1.
+# ...and it stays one after core.hooksPath is rewritten to an ABSOLUTE path (other tools do;
+# the old tracker's hook installer did). That is not drift to "repair": on the first fresh install
+# it made every re-run report a change, warn that no guard fires, and exit 1.
 git -C "$T" config core.hooksPath "$T/.beads-hooks"
-sed 's/BEADS INTEGRATION v1\.1\.2/BEADS INTEGRATION v9.9.9/' "$T/.beads-hooks/pre-commit" > "$T/.pc" \
-  && cat "$T/.pc" > "$T/.beads-hooks/pre-commit"   # not sed -i: BSD sed spells it differently
-"$SRC/install.sh" --no-shell "$T" >"$T/.install3.log" 2>&1
-grep -q 'nothing to do' "$T/.install3.log" && ok "still a no-op after bd rewrote hooksPath and its own stanza" \
-  || { bad "still a no-op after bd rewrote hooksPath and its own stanza"; grep -E '^\s+[+!]' "$T/.install3.log" | sed 's/^/        /'; }
+"$SRC/install.sh" "$T" >"$T/.install3.log" 2>&1
+grep -q 'nothing to do' "$T/.install3.log" && ok "still a no-op after hooksPath went absolute" \
+  || { bad "still a no-op after hooksPath went absolute"; grep -E '^\s+[+!]' "$T/.install3.log" | sed 's/^/        /'; }
 chk "the absolute hooksPath is left alone" "$(canon_dir "$(git -C "$T" config core.hooksPath)")" "$(canon_dir "$T/.beads-hooks")"
-[ -e "$T/.beads-hooks/pre-commit.new" ] && bad "no pre-commit.new left behind" || ok "no pre-commit.new left behind"
 grep -q 'NONE of them fires' "$T/.install3.log" && bad "verify does not cry wolf on the absolute path" \
   || ok "verify does not cry wolf on the absolute path"
 git -C "$T" config core.hooksPath .beads-hooks
-# bd hooks install --shared on top of the shipped post-merge appends its block and keeps ours: a
-# re-run must neither offer a .new nor count it as a change (workspace-7m8.23).
-printf '\n# --- BEGIN BEADS INTEGRATION v1.1.2 ---\nbd hooks run post-merge "$@"\n# --- END BEADS INTEGRATION v1.1.2 ---\n' >> "$T/.beads-hooks/post-merge"
-"$SRC/install.sh" --no-shell "$T" >"$T/.install4.log" 2>&1
-grep -q 'nothing to do' "$T/.install4.log" && ok "still a no-op after bd appended its block to post-merge" \
-  || { bad "still a no-op after bd appended its block to post-merge"; grep -E '^\s+[+!]' "$T/.install4.log" | sed 's/^/        /'; }
-[ -e "$T/.beads-hooks/post-merge.new" ] && bad "no post-merge.new left behind" || ok "no post-merge.new left behind"
 
-# bd init (1.3) also registers its own `bd prime` SessionStart hook in .claude/settings.json.
-# The next installer run replaces it with ours -- the designed outcome, since ours runs bd prime
-# -- and must SAY so without counting it as a problem. User hooks, including hooks sharing an
-# event or a group with bd, must survive. Only the standalone bd prime registration is replaced.
+# The old tracker's own harness hooks (its `bd init` registers `bd prime` at SessionStart) read a
+# store this release does not have. The installer removes them, says so, and keeps every hook of
+# the user's, including hooks sharing an event or a group with them.
 if command -v jq >/dev/null 2>&1; then
 jq '.hooks.SessionStart = [{"matcher":"","hooks":[{"type":"command","command":"bd prime --hook-json"}]}]'  \
   "$T/.claude/settings.json" > "$T/.settings.bdinit" && cp -f "$T/.settings.bdinit" "$T/.claude/settings.json"
-"$SRC/install.sh" --no-shell "$T" >"$T/.install4.log" 2>&1; rc4=$?
-grep -q "replaced bd's own SessionStart hook" "$T/.install4.log" && ok "bd's own SessionStart hook is replaced, and said so" \
-  || bad "bd's own SessionStart hook is replaced, and said so"
-grep -q 'REPLACED .* of yours' "$T/.install4.log" && bad "replacing only bd's hook is not a problem" \
-  || ok "replacing only bd's hook is not a problem"
-if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then chk "...and the re-run after bd init exits 0" "$rc4" "0"; fi
+"$SRC/install.sh" "$T" >"$T/.install4.log" 2>&1; rc4=$?
+grep -q "removed a harness hook that runs bd — .claude/settings.json SessionStart: bd prime --hook-json" "$T/.install4.log" \
+  && ok "the old tracker's SessionStart hook is removed, and said so" \
+  || bad "the old tracker's SessionStart hook is removed, and said so"
+chk "  …and nothing left anywhere in settings.json runs it" "$(jq '[.. | .command? // empty | select(test("^\\s*bd(\\s|$)"))] | length' "$T/.claude/settings.json")" 0
+[ "$missing" -eq 0 ] && chk "...and the re-run exits 0" "$rc4" "0"
 chk "our SessionStart hook is back" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$T/.claude/settings.json" | grep -c 'bd-prime-hook.sh')" "1"
-"$SRC/install.sh" --no-shell "$T" >"$T/.install5.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.install5.log" 2>&1
 grep -q 'nothing to do' "$T/.install5.log" && ok "and the run after that is a no-op" || bad "and the run after that is a no-op"
 jq '.hooks.PreToolUse += [{"matcher":"","hooks":[{"type":"command","command":"echo mine"}]}]' \
   "$T/.claude/settings.json" > "$T/.settings.user" && cp -f "$T/.settings.user" "$T/.claude/settings.json"
-"$SRC/install.sh" --no-shell "$T" >"$T/.install6.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.install6.log" 2>&1
 chk "user PreToolUse command survives the merge" "$(jq '[.hooks.PreToolUse[].hooks[] | select(.command == "echo mine")] | length' "$T/.claude/settings.json")" "1"
 # Mixed groups, prompt hooks, and commands merely mentioning bd prime are user-owned.
 jq '.hooks.SessionStart = [{"matcher":"startup","hooks":[
@@ -351,22 +351,27 @@ jq '.hooks.SessionStart = [{"matcher":"startup","hooks":[
       {"type":"prompt","prompt":"retain this prompt"}]}]' \
   "$T/.claude/settings.json" > "$T/.settings.mixedgroup"
 cp -f "$T/.settings.mixedgroup" "$T/.claude/settings.json"
-"$SRC/install.sh" --no-shell "$T" >"$T/.mixedgroup.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.mixedgroup.log" 2>&1
 chk "mixed group retains its matcher and non-bd hooks" "$(jq '[.hooks.SessionStart[] | select(.matcher == "startup") | .hooks[]] | length' "$T/.claude/settings.json")" "2"
 cp -f "$T/.claude/settings.json" "$T/.settings.before-rerun"
-"$SRC/install.sh" --no-shell "$T" >/dev/null 2>&1
+"$SRC/install.sh" "$T" >/dev/null 2>&1
 cmp -s "$T/.settings.before-rerun" "$T/.claude/settings.json" && ok "merged user hooks are idempotent" || bad "merged user hooks are idempotent"
-# A hook under an event we do NOT define (Notification here) is preserved by the merge and must
-# not be counted as replaced: with bd's hook back in SessionStart and a Notification hook of the
-# user's, the re-run must report bd's replacement only, keep the Notification hook, and exit 0.
+# A hook under an event we do NOT define (Notification here) is preserved by the merge.
 jq '.hooks.Notification = [{"matcher":"","hooks":[{"type":"command","command":"notify-send done"}]}]
     | .hooks.SessionStart = [{"matcher":"","hooks":[{"type":"command","command":"bd prime --hook-json"}]}]' \
   "$T/.claude/settings.json" > "$T/.settings.mixed" && cp -f "$T/.settings.mixed" "$T/.claude/settings.json"
-"$SRC/install.sh" --no-shell "$T" >"$T/.install7.log" 2>&1; rc7=$?
-grep -q 'REPLACED .* of yours' "$T/.install7.log" && bad "a hook under an untouched event is not counted as replaced" \
-  || ok "a hook under an untouched event is not counted as replaced"
+"$SRC/install.sh" "$T" >"$T/.install7.log" 2>&1; rc7=$?
 chk "the untouched event's hook survives the merge" "$(jq -r '.hooks.Notification[0].hooks[0].command' "$T/.claude/settings.json")" "notify-send done"
-if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then chk "...and that re-run exits 0" "$rc7" "0"; fi
+[ "$missing" -eq 0 ] && chk "...and that re-run exits 0" "$rc7" "0"
+# The pipeline's own 0.1 hook groups (the same commands, with the old missing-hook wording) are
+# REPLACED by the current ones, not kept beside them: two groups would run every hook twice.
+jq '.hooks |= with_entries(.value |= map(.hooks |= map(if (.command // "") | test("bd-(prime|prerun|stop)-hook") then .command |= sub("the pipeline.s session rules"; "bd session rules") else . end)))' \
+  "$T/.claude/settings.json" > "$T/.settings.v01" && cp -f "$T/.settings.v01" "$T/.claude/settings.json"
+chk "  (the fixture carries the 0.1 wording)" "$(grep -c 'bd session rules' "$T/.claude/settings.json" | tr -d ' ')" 4
+"$SRC/install.sh" "$T" >/dev/null 2>&1
+chk "0.1's pipeline groups are replaced, not doubled" \
+    "$(jq '[.hooks[][] | .hooks[] | select((.command // "") | test("bd-(prime|prerun|stop)-hook"))] | length' "$T/.claude/settings.json")" 4
+chk "  …with the current wording" "$(grep -c 'bd session rules' "$T/.claude/settings.json" | tr -d ' ')" 0
 rm -f "$T"/.claude/settings.json.bak.*
 else
   echo '  SKIP settings merge tests: jq absent (installer preserves existing settings as-is)'
@@ -374,21 +379,23 @@ fi
 
 printf '\n\033[1m### it refuses to clobber your content, and drops nothing beside AGENTS.md\033[0m\n'
 cp -f "$T/AGENTS.md" "$T/.agents.orig"
-# bd init appends its managed block to AGENTS.md. That is neither the user's edit nor drift, and
-# the installer used to answer it by writing AGENTS.md.new on every re-run -- a stray file that
-# the first outside reader took for a truncated rewrite in progress.
+# The old tracker appended a managed block to AGENTS.md telling agents to use it. The file is the
+# user's, so the block is NAMED (it now gives wrong instructions), never removed and never answered
+# with an AGENTS.md.new -- a stray file the first outside reader took for a rewrite in progress.
 { cat "$T/.agents.orig"
   printf '\n<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:deadbeef -->\n'
   printf '## Beads Issue Tracker\n\nbd wrote this\n<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
+cp -f "$T/AGENTS.md" "$T/.agents.withblock"
 printf 'left by an earlier run\n' > "$T/AGENTS.md.new"
-"$SRC/install.sh" --no-shell "$T" >"$T/.agents1.log" 2>&1
-grep -q 'AGENTS.md (current' "$T/.agents1.log" && ok "AGENTS.md with bd's block appended counts as current" \
-  || bad "AGENTS.md with bd's block appended counts as current"
+"$SRC/install.sh" "$T" >"$T/.agents1.log" 2>&1
+grep -q "AGENTS.md still carries bd's managed block" "$T/.agents1.log" && ok "an old managed block in AGENTS.md is named" \
+  || bad "an old managed block in AGENTS.md is named"
+cmp -s "$T/.agents.withblock" "$T/AGENTS.md" && ok "  …and AGENTS.md is not edited" || bad "  …and AGENTS.md is not edited"
 [ -e "$T/AGENTS.md.new" ] && bad "a stale AGENTS.md.new is removed" || ok "a stale AGENTS.md.new is removed"
 # The user's own edits are the whole point of the file: kept, nothing written beside it, and the
 # log says where our template is instead.
 printf 'MY OWN DOC\n' > "$T/AGENTS.md"
-"$SRC/install.sh" --no-shell "$T" >"$T/.agents2.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.agents2.log" 2>&1
 chk "existing AGENTS.md kept" "$(cat "$T/AGENTS.md")" "MY OWN DOC"
 [ -e "$T/AGENTS.md.new" ] && bad "no AGENTS.md.new dropped beside an edited AGENTS.md" \
   || ok "no AGENTS.md.new dropped beside an edited AGENTS.md"
@@ -400,31 +407,13 @@ printf '\n\033[1m### an installed file the target gitignores is named\033[0m\n'
 # The origin workspace ignores *.txt, which ate .claude/memory-hot.txt: every clone would have
 # taken the SessionStart hook's full-dump fallback. Verify checks every payload file that landed.
 printf '*.txt\n' > "$T/.gitignore"
-"$SRC/install.sh" --no-shell "$T" >"$T/.eaten.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.eaten.log" 2>&1
 grep -q 'GITIGNORED in this repo' "$T/.eaten.log" && grep -qE '^ *\.claude/memory-hot\.txt$' "$T/.eaten.log" \
   && ok "memory-hot.txt under a *.txt rule is reported, by path" || bad "memory-hot.txt under a *.txt rule is reported, by path"
 rm -f "$T/.gitignore"
-"$SRC/install.sh" --no-shell "$T" >"$T/.eaten2.log" 2>&1
+"$SRC/install.sh" "$T" >"$T/.eaten2.log" 2>&1
 grep -q 'no installed file is gitignored' "$T/.eaten2.log" && ok "and the clean state is stated, not silent" \
   || bad "and the clean state is stated, not silent"
-
-printf '\n\033[1m### the memory-graph ledger: ignored, untracked, tracked — each named\033[0m\n'
-# The doc used to recommend `.beads/` + `!.beads/memgraph-ledger.json`, which ignores the ledger:
-# git cannot re-include a file under an excluded directory. Verify says which state it is in.
-mkdir -p "$T/.beads"; printf '{}\n' > "$T/.beads/memgraph-ledger.json"
-printf '.beads/\n' > "$T/.gitignore"
-"$SRC/install.sh" --no-shell "$T" >"$T/.ledger1.log" 2>&1
-grep -q 'memgraph-ledger.json is GITIGNORED' "$T/.ledger1.log" && ok "ledger under an excluded .beads/ is reported as ignored" \
-  || bad "ledger under an excluded .beads/ is reported as ignored"
-printf '.beads/*\n!.beads/memgraph-ledger.json\n' > "$T/.gitignore"
-"$SRC/install.sh" --no-shell "$T" >"$T/.ledger2.log" 2>&1
-grep -q 'memgraph-ledger.json is untracked' "$T/.ledger2.log" && ok "with the working re-include it is reported as untracked" \
-  || bad "with the working re-include it is reported as untracked"
-git -C "$T" add .beads/memgraph-ledger.json
-"$SRC/install.sh" --no-shell "$T" >"$T/.ledger3.log" 2>&1
-grep -q 'memgraph-ledger.json is tracked' "$T/.ledger3.log" && ok "once added it is reported as tracked" \
-  || bad "once added it is reported as tracked"
-git -C "$T" rm -q --cached .beads/memgraph-ledger.json; rm -rf "$T/.beads" "$T/.gitignore"
 
 printf '\n\033[1m### linked worktrees install without changing the main checkout hooks\033[0m\n'
 W=$(mktemp -d)
@@ -433,7 +422,7 @@ git -C "$W/main" config user.email t@example.com; git -C "$W/main" config user.n
 git -C "$W/main" commit --allow-empty -qm base
 git -C "$W/main" config core.hooksPath main-hooks
 git -C "$W/main" worktree add -q "$W/linked" -b linked
-"$SRC/install.sh" --no-shell "$W/linked" >"$W/install.log" 2>&1; wrc=$?
+"$SRC/install.sh" "$W/linked" >"$W/install.log" 2>&1; wrc=$?
 chk "worktree installer exit matches dependency status" "$wrc" "$((missing > 0))"
 chk "linked worktree hooks are wired" "$(git -C "$W/linked" config core.hooksPath)" ".beads-hooks"
 chk "main checkout hooks unchanged" "$(git -C "$W/main" config core.hooksPath)" "main-hooks"
@@ -443,7 +432,7 @@ chk "worktree commit runs the installed guard" "$?" "1"
 grep -q 'forbidden agent-cache' "$W/commit.log" && ok "worktree refusal is attributable" || bad "worktree refusal is attributable"
 # A .git file also represents a submodule; it must use its own config, not its parent's.
 git -C "$W/main" -c protocol.file.allow=always submodule add -q "$W/linked" child
-"$SRC/install.sh" --no-shell "$W/main/child" >"$W/submodule.log" 2>&1
+"$SRC/install.sh" "$W/main/child" >"$W/submodule.log" 2>&1
 chk "submodule install exit matches dependency status" "$?" "$((missing > 0))"
 chk "submodule hooks are wired" "$(git -C "$W/main/child" config core.hooksPath)" ".beads-hooks"
 chk "submodule install preserves parent hooks" "$(git -C "$W/main" config core.hooksPath)" "main-hooks"
@@ -451,16 +440,16 @@ chk "submodule install preserves parent hooks" "$(git -C "$W/main" config core.h
 # main bare repository while the checkout remains non-bare.
 git clone -q --bare "$W/main" "$W/bare.git"
 git --git-dir="$W/bare.git" worktree add -q "$W/bare-linked" -b bare-linked
-"$SRC/install.sh" --no-shell "$W/bare-linked" >"$W/bare.log" 2>&1
+"$SRC/install.sh" "$W/bare-linked" >"$W/bare.log" 2>&1
 chk "bare-parent worktree install exit matches dependency status" "$?" "$((missing > 0))"
 chk "main bare repo stays bare" "$(git --git-dir="$W/bare.git" rev-parse --is-bare-repository)" "true"
 chk "linked checkout stays non-bare" "$(git -C "$W/bare-linked" rev-parse --is-bare-repository)" "false"
 rm -rf "$W"
 
-printf '\n\033[1m### under cairn a pull runs cairn sync in a clone bd never installed hooks in (workspace-7m8.23)\033[0m\n'
+printf '\n\033[1m### a pull runs cairn sync, from post-merge, once the clone is wired (workspace-7m8.23)\033[0m\n'
 P=$(mktemp -d); git -C "$P" init -q origin; git -C "$P/origin" config user.email s@e; git -C "$P/origin" config user.name s
-"$SRC/install.sh" --no-shell "$P/origin" >/dev/null 2>&1
-printf 'cairn\n' > "$P/origin/.claude/store-cli"
+"$SRC/install.sh" "$P/origin" >/dev/null 2>&1
+mkdir -p "$P/origin/.cairn"; printf '{"prefix": "s"}\n' > "$P/origin/.cairn/config.json"   # what git carries of a store
 git -C "$P/origin" add -A >/dev/null 2>&1; git -C "$P/origin" commit -qm install --no-verify
 git clone -q "$P/origin" "$P/b" 2>/dev/null
 mkdir -p "$P/bin"; printf '#!/bin/sh\necho "$*" >> "%s/calls"\n' "$P" > "$P/bin/cairn"; chmod +x "$P/bin/cairn"
@@ -471,7 +460,111 @@ pull_once() { : > "$P/calls"; echo "$1" >> "$P/origin/f"; git -C "$P/origin" add
 chk "a fresh clone runs no hook until it is wired" "$(pull_once one)" "0"
 git -C "$P/b" config core.hooksPath .beads-hooks
 chk "wired: the pull runs cairn sync from post-merge" "$(pull_once two)" "1"
+rm -rf "$P/b/.cairn"
+chk "  …and not where there is no .cairn/" "$(pull_once three)" "0"
 rm -rf "$P"
+
+printf '\n\033[1m### a repo whose store is still bd'"'"'s is refused, in every mode, and nothing is written\033[0m\n'
+# This release does not read bd. Over a live bd store with no writable cairn store the installer
+# must stop before it writes a byte, and point at the README's migration section.
+for d in embeddeddolt dolt; do
+  R=$(mktemp -d); git -C "$R" init -q; mkdir -p "$R/.beads/$d"
+  "$SRC/install.sh" "$R" >"$R/.git/refuse.log" 2>&1; rrc=$?
+  chk "live .beads/$d/: installer exits 1"         "$rrc" 1
+  grep -q 'REFUSED' "$R/.git/refuse.log" && grep -q 'Moving a repo off bd' "$R/.git/refuse.log" \
+    && ok "  …says REFUSED and names the README section" || bad "  …says REFUSED and names the README section"
+  chk "  …and wrote nothing"                       "$(ls -A "$R" | grep -vxE '\.git|\.beads' | wc -l | tr -d ' ')" 0
+  chk "  …core.hooksPath untouched"                "$(git -C "$R" config core.hooksPath || echo unset)" unset
+  for m in --check --dry-run; do
+    "$SRC/install.sh" "$m" "$R" >/dev/null 2>&1; chk "  $m refuses too" "$?" 1
+  done
+  printf 'not a database\n' > "$R/.beads/../.cairn.db.tmp"; mkdir -p "$R/.cairn"; mv -f "$R/.cairn.db.tmp" "$R/.cairn/cairn.db"
+  "$SRC/install.sh" "$R" >/dev/null 2>&1
+  chk "  a .cairn/cairn.db that is not a writable store does not count" "$?" 1
+  rm -rf "$R"
+done
+if command -v cairn >/dev/null 2>&1; then
+  R=$(mktemp -d); git -C "$R" init -q; mkdir -p "$R/.beads/embeddeddolt"
+  (cd "$R" && cairn init -p zz -q) >/dev/null 2>&1
+  "$SRC/install.sh" "$R" >"$R/.git/after.log" 2>&1
+  chk "with a writable cairn store beside it, the install runs" "$?" "$((missing > 0))"
+  grep -q "bd's old store is still on disk" "$R/.git/after.log" && ok "  …and says the old store is still on disk" \
+    || bad "  …and says the old store is still on disk"
+  rm -rf "$R"
+else
+  echo "  SKIP the install over a migrated store: cairn not on PATH"
+fi
+
+printf '\n\033[1m### a repo that had the bd-era pipeline: bd is taken out in place, everything else kept\033[0m\n'
+F=$(mktemp -d); F=$(cd "$F" && pwd -P); git -C "$F" init -q
+git -C "$F" config user.email t@example.com; git -C "$F" config user.name t
+mkdir -p "$F/.beads-hooks" "$F/.claude" "$F/.codex" "$F/.cursor" "$F/tools" "$F/.beads"
+BB='# --- BEGIN BEADS INTEGRATION v1.3.0 ---'; BE='# --- END BEADS INTEGRATION v1.3.0 ---'
+# A bd-era pre-commit of the pipeline's own shape: a store-cli stanza, a line of the user's, bd's block.
+printf '#!/usr/bin/env sh\n# >>> store CLI >>>\nSTORE_CLI=bd\n[ -f .claude/store-cli ] && STORE_CLI=$(cat .claude/store-cli)\n# <<< store CLI <<<\necho user-pre-commit-line\n%s\nbd hooks run pre-commit "$@"\n%s\n' "$BB" "$BE" > "$F/.beads-hooks/pre-commit"
+printf '#!/usr/bin/env sh\n%s\nbd hooks run pre-push "$@"\n%s\n' "$BB" "$BE" > "$F/.beads-hooks/pre-push"
+printf '#!/usr/bin/env sh\n# bd wrote this hook\n%s\nbd hooks run post-merge "$@"\n%s\n' "$BB" "$BE" > "$F/.beads-hooks/post-merge"
+printf '#!/usr/bin/env sh\necho user-pcm-line\n%s\nbd hooks run prepare-commit-msg "$@"\n%s\n' "$BB" "$BE" > "$F/.beads-hooks/prepare-commit-msg"
+chmod +x "$F/.beads-hooks/"*
+printf '{"hooks": {"SessionStart": [{"hooks": [{"command": "bd codex-hook SessionStart", "type": "command"}, {"command": "echo codex-keep", "type": "command"}], "matcher": "startup"}]}}\n' > "$F/.codex/hooks.json"
+printf '{"hooks": {"sessionStart": [{"command": "[ \\"$(tr -d \\" \\" < .claude/store-cli)\\" = cairn ] || bd cursor-hook sessionStart"}, {"command": "echo cursor-keep"}]}, "version": 1}\n' > "$F/.cursor/hooks.json"
+printf 'cairn\n' > "$F/.claude/store-cli"; printf '# old\n' > "$F/tools/dolt-guard.sh"
+printf '{"_type":"issue","id":"x-1"}\n' > "$F/.beads/issues.jsonl"; git -C "$F" add .beads/issues.jsonl
+FH=$(mktemp -d)
+printf 'before=1\n# >>> bd dolt-guard >>>\n# Restarts the beads Dolt server after a reboot; nothing else does.\n[ -f "%s/tools/dolt-guard.sh" ] && . "%s/tools/dolt-guard.sh"\n# <<< bd dolt-guard <<<\nafter=1\n' "$F" "$F" > "$FH/.bashrc"
+HOME="$FH" "$SRC/install.sh" "$F" >"$F/.git/strip.log" 2>&1
+chk "no hook in .beads-hooks/ runs \`bd hooks run\` any more" "$(cat "$F"/.beads-hooks/* | grep -c 'bd hooks run' | tr -d ' ')" 0
+chk "no hook in .beads-hooks/ carries a BEGIN BEADS block"   "$(cat "$F"/.beads-hooks/* | grep -c 'BEGIN BEADS' | tr -d ' ')" 0
+chk "a hook that held only bd's block is gone"               "$([ -e "$F/.beads-hooks/pre-push" ] && echo there || echo gone)" gone
+cmp -s "$SRC/pipeline/.beads-hooks/post-merge" "$F/.beads-hooks/post-merge" \
+  && ok "a hook left with only comments is replaced by ours" || bad "a hook left with only comments is replaced by ours"
+chk "a hook with a line of the user's keeps it"              "$(grep -c user-pcm-line "$F/.beads-hooks/prepare-commit-msg")" 1
+chk "  …and stays executable"                                "$([ -x "$F/.beads-hooks/prepare-commit-msg" ] && echo x || echo no)" x
+chk "the bd-era pre-commit keeps the user's line"            "$(grep -c user-pre-commit-line "$F/.beads-hooks/pre-commit")" 1
+cmp -s "$SRC/pipeline/.beads-hooks/pre-commit" "$F/.beads-hooks/pre-commit.new" \
+  && ok "  …ours is written beside it as .new" || bad "  …ours is written beside it as .new"
+grep -q '.beads-hooks/pre-commit is the bd-era version' "$F/.git/strip.log" && ok "  …and it is named as bd-era" \
+  || bad "  …and it is named as bd-era"
+chk "every changed hook was backed up under the git dir" \
+    "$(ls "$F"/.git/beads-agent-pipeline-backup/*/.beads-hooks/ 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')" "post-merge pre-commit pre-push prepare-commit-msg "
+chk "the codex hook running bd is removed, the other kept"   "$(grep -c 'bd codex-hook' "$F/.codex/hooks.json"):$(grep -c codex-keep "$F/.codex/hooks.json")" "0:1"
+chk "the cursor hook running bd (store-cli-guarded) is removed, the other kept" "$(grep -c 'bd cursor-hook' "$F/.cursor/hooks.json"):$(grep -c cursor-keep "$F/.cursor/hooks.json")" "0:1"
+chk "  …and both files are still JSON" "$(python3 -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]; print("ok")' "$F/.codex/hooks.json" "$F/.cursor/hooks.json" 2>&1 | tr -d '\r')" ok
+chk "the ~/.bashrc block for THIS repo is removed, the rest kept" "$(grep -c 'dolt-guard' "$FH/.bashrc"):$(grep -c '^before=1$\|^after=1$' "$FH/.bashrc")" "0:2"
+chk "  …with a backup beside it"                             "$(ls "$FH"/.bashrc.bak.* 2>/dev/null | wc -l | tr -d ' ')" 1
+grep -q 'git rm -q -- .claude/store-cli tools/dolt-guard.sh' "$F/.git/strip.log" && ok "bd-era files no longer shipped are named, with the git rm" \
+  || bad "bd-era files no longer shipped are named, with the git rm"
+chk "  …and not deleted"                                     "$(ls "$F/.claude/store-cli" "$F/tools/dolt-guard.sh" 2>/dev/null | wc -l | tr -d ' ')" 2
+grep -q "the old tracker's exports are still in .beads/ (.beads/issues.jsonl)" "$F/.git/strip.log" && ok "the old tracker's tracked export in .beads/ is named" \
+  || bad "the old tracker's tracked export in .beads/ is named"
+HOME="$FH" "$SRC/install.sh" "$F" >"$F/.git/strip2.log" 2>&1
+grep -q "nothing of bd's found\|bd-era files this release no longer ships" "$F/.git/strip2.log" && ok "a second run finds no bd block or harness hook to remove" \
+  || bad "a second run finds no bd block or harness hook to remove"
+chk "  …and changes no hook" "$(grep -c "managed block removed\|held only bd's block\|removed a harness hook" "$F/.git/strip2.log" | tr -d ' ')" 0
+printf '# >>> bd dolt-guard >>>\n[ -f "/elsewhere/tools/dolt-guard.sh" ] && . "/elsewhere/tools/dolt-guard.sh"\n# <<< bd dolt-guard <<<\n' > "$FH/.bashrc"
+HOME="$FH" "$SRC/install.sh" "$F" >"$F/.git/strip3.log" 2>&1
+chk "another repo's ~/.bashrc block is left alone" "$(grep -c 'elsewhere' "$FH/.bashrc"):$(grep -c 'block for ANOTHER repo' "$F/.git/strip3.log")" "1:1"
+"$SRC/install.sh" --no-shell "$F" >"$F/.git/noshell.log" 2>&1
+grep -q 'note: --no-shell does nothing' "$F/.git/noshell.log" && ok "--no-shell is accepted, with a note" || bad "--no-shell is accepted, with a note"
+rm -rf "$F" "$FH"
+
+printf '\n\033[1m### sibling worktrees of a store get the redirect that shares it\033[0m\n'
+if command -v cairn >/dev/null 2>&1; then
+  M=$(mktemp -d); M=$(cd "$M" && pwd -P); git -C "$M" init -q main; M=$M/main
+  git -C "$M" config user.email t@example.com; git -C "$M" config user.name t
+  (cd "$M" && cairn init -p zz -q) >/dev/null 2>&1
+  git -C "$M" add .cairn/.gitignore .cairn/config.json && git -C "$M" commit -qm store --no-verify
+  git -C "$M" worktree add -q "$M.side" -b side 2>/dev/null
+  "$SRC/install.sh" "$M" >"$M/.git/wt.log" 2>&1
+  chk "the sibling's .cairn/redirect names the main store" "$(cat "$M.side/.cairn/redirect" 2>/dev/null)" "$M/.cairn"
+  chk "  …and the sibling got no database of its own"       "$([ -e "$M.side/.cairn/cairn.db" ] && echo stray || echo none)" none
+  "$SRC/install.sh" "$M" >"$M/.git/wt2.log" 2>&1
+  grep -q "worktree $M.side shares this store" "$M/.git/wt2.log" && ok "  …a re-run says it is shared and writes nothing" \
+    || bad "  …a re-run says it is shared and writes nothing"
+  rm -rf "$(dirname "$M")" "$M.side"
+else
+  echo "  SKIP the worktree redirect: cairn not on PATH"
+fi
 
 printf '\n\033[1m### --dry-run and --check touch nothing\033[0m\n'
 D=$(mktemp -d); git -C "$D" init -q

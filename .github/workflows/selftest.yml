@@ -2,33 +2,31 @@
 #
 # ./selftest.sh installs the pipeline into throwaway repos and runs every shipped guard's suite
 # there. test/selftest-in-container.sh does that on a clean Ubuntu in Docker; this workflow does
-# it on ubuntu-latest, macos-latest (Homebrew bash: the stock /bin/bash is 3.2, and
-# tools/dolt-guard.sh needs bash ≥ 4.1) and windows-latest (Git Bash, which is what `shell: bash`
-# resolves to there), plus an Ubuntu run with no bd at all for the installer's required-command
-# branch. Each job prints one `box:` line, the RESULT line and every FAIL into the run summary and
-# keeps the full log as an artifact; after a failure it also keeps the installer's own output and
-# every suite's full log, since the self-test shows only the last 35 lines of a failing suite.
+# it on ubuntu-latest, macos-latest (Homebrew bash: the stock /bin/bash is 3.2) and windows-latest
+# (Git Bash, which is what `shell: bash` resolves to there). The self-test hides cairn from PATH
+# itself for the installer's required-command branch, so there is no separate no-store job. Each
+# job prints one `box:` line, the RESULT line and every FAIL into the run summary and keeps the
+# full log as an artifact; after a failure it also keeps the installer's own output and every
+# suite's full log, since the self-test shows only the last 35 lines of a failing suite.
 #
-# bd comes from the release archive named by BD_VERSION, verified against that release's
-# checksums.txt, into a directory of its own ($HOME/bd-bin): the self-test's no-bd probe hides
-# every PATH directory carrying a bd executable and needs git and python3 to survive that. The
-# official installer is not used — it refuses Git Bash and floats to the current release, so a
-# bd release could break this workflow with no change here. Bump BD_VERSION on purpose, or pass
-# bd_version to a manual run.
+# cairn comes from github.com/scgoetsch/cairn at the commit CAIRN_REF names (cairn has no release
+# tags yet), cloned into a directory of its own and put on PATH through a one-line wrapper in
+# $HOME/cairn-bin: the self-test's no-cairn probe hides every PATH directory carrying a cairn
+# executable and needs git and python3 to survive that, and a symlink would be a copy under MSYS.
+# Bump CAIRN_REF on purpose, or pass cairn_ref to a manual run. cairn needs Python 3.9+ and
+# nothing else.
 #
-# Every job is a gate. The first measurement (2026-10-06, bd 1.3.1) was ubuntu 127/127, macos 26
-# 107 passed / 20 failed and windows 2025 98 / 29; five batches later each passes all 135 checks,
-# and the CHANGELOG has every cause as it was measured. If a platform regresses for a reason that
-# takes time, allow-failure on its matrix entry is the honest stopgap: the workflow stays green
-# with that job red, and the summary says which suites.
+# Every job is a gate. If a platform regresses for a reason that takes time, allow-failure on its
+# matrix entry is the honest stopgap: the workflow stays green with that job red, and the summary
+# says which suites.
 name: self-test
 
 on:
   push:
   workflow_dispatch:
     inputs:
-      bd_version:
-        description: bd release to install (default is BD_VERSION in the workflow)
+      cairn_ref:
+        description: cairn commit to install (default is CAIRN_REF in the workflow)
         required: false
         default: ""
 
@@ -40,7 +38,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BD_VERSION: ${{ inputs.bd_version || '1.3.1' }}
+  # cairn 0.7.0 (the first that keeps the tracked files in .cairn/), main at 2026-11-08.
+  CAIRN_REF: ${{ inputs.cairn_ref || '5aec6b002e60cd05abddeb281beb6faa6faec3ce' }}
 
 jobs:
   selftest:
@@ -54,19 +53,12 @@ jobs:
         include:
           - key: ubuntu
             os: ubuntu-latest
-            bd: true
-            allow-failure: false
-          - key: ubuntu-no-bd
-            os: ubuntu-latest
-            bd: false
             allow-failure: false
           - key: macos
             os: macos-latest
-            bd: true
             allow-failure: false
           - key: windows
             os: windows-latest
-            bd: true
             allow-failure: false
     defaults:
       run:
@@ -96,49 +88,21 @@ jobs:
             echo "python3 shim -> $(command -v python)"
           fi
 
-      - name: "bd from the release archive, checksum-verified, in its own PATH directory"
-        if: matrix.bd
+      - name: "cairn at CAIRN_REF, on PATH through a wrapper in its own directory"
         run: |
-          V=$BD_VERSION
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64)         asset=beads_${V}_linux_amd64.tar.gz ;;
-            Linux-aarch64)        asset=beads_${V}_linux_arm64.tar.gz ;;
-            Darwin-arm64)         asset=beads_${V}_darwin_arm64.tar.gz ;;
-            Darwin-x86_64)        asset=beads_${V}_darwin_amd64.tar.gz ;;
-            MINGW*|MSYS*|CYGWIN*) asset=beads_${V}_windows_amd64.zip ;;
-            *) echo "no bd release asset for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          base=https://github.com/gastownhall/beads/releases/download/v$V
-          dl=$HOME/bd-download; bin=$HOME/bd-bin
-          mkdir -p "$dl" "$bin" && cd "$dl"
-          curl -fsSL --retry 3 -o checksums.txt "$base/checksums.txt"
-          curl -fsSL --retry 3 -o "$asset" "$base/$asset"
-          want=$(awk -v a="$asset" '$2 == a { print $1 }' checksums.txt)
-          [ -n "$want" ] || { echo "checksums.txt has no line for $asset" >&2; exit 1; }
-          if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$asset" | awk '{print $1}')
-          else got=$(shasum -a 256 "$asset" | awk '{print $1}'); fi
-          [ "$got" = "$want" ] || { echo "sha256 MISMATCH for $asset: got $got, release says $want" >&2; exit 1; }
-          echo "sha256 OK  $asset"
-          mkdir -p extracted
-          case $asset in
-            *.zip)    py=$(command -v python3 || command -v python)
-                      "$py" -I -m zipfile -e "$asset" extracted && mv -f extracted/bd.exe "$bin/" ;;
-            *.tar.gz) tar -xzf "$asset" -C extracted && mv -f extracted/bd "$bin/" && chmod +x "$bin/bd" ;;
-          esac
+          src=$HOME/cairn-src; bin=$HOME/cairn-bin
+          git init -q "$src"
+          git -C "$src" fetch -q --depth 1 https://github.com/scgoetsch/cairn "$CAIRN_REF"
+          git -C "$src" checkout -q FETCH_HEAD
+          [ "$(git -C "$src" rev-parse HEAD)" = "$CAIRN_REF" ] || { echo "cairn checkout is not $CAIRN_REF" >&2; exit 1; }
+          mkdir -p "$bin"
+          printf '#!/bin/sh\nexec python3 "%s/bin/cairn" "$@"\n' "$src" > "$bin/cairn"
+          chmod +x "$bin/cairn"
           case "$(uname -s)" in
             MINGW*|MSYS*|CYGWIN*) echo "$(cygpath -w "$bin")" >> "$GITHUB_PATH" ;;
             *)                    echo "$bin" >> "$GITHUB_PATH" ;;
           esac
-          "$bin/bd" --version
-
-      - name: "bd-memgraph (optional; with it present the pre-commit memory-graph stanza runs)"
-        if: matrix.bd && runner.os != 'Windows'
-        run: |
-          git clone -q --depth 1 https://github.com/scgoetsch/bd-memgraph "$HOME/bd-memgraph"
-          mkdir -p "$HOME/memgraph-bin"
-          ln -sf "$HOME/bd-memgraph/bd-memgraph.py" "$HOME/memgraph-bin/bd-memgraph"
-          echo "$HOME/memgraph-bin" >> "$GITHUB_PATH"
-          "$HOME/memgraph-bin/bd-memgraph" --help >/dev/null
+          "$bin/cairn" --version
 
       - name: git identity for the throwaway repos
         run: |
@@ -149,16 +113,16 @@ jobs:
       - name: box
         run: |
           has() { command -v "$1" >/dev/null 2>&1 && echo yes || echo no; }
-          { printf 'box: %s %s  bash %s  git %s  python3 %s  bd %s  bd-memgraph %s\n' \
+          { printf 'box: %s %s  bash %s  git %s  python3 %s  cairn %s (%s)\n' \
               "$(uname -s)" "$(uname -r)" "$BASH_VERSION" "$(git --version | awk '{print $3}')" \
               "$(python3 --version 2>&1 | awk '{print $2}')" \
-              "$(bd --version 2>/dev/null | head -1 || echo absent)" "$(has bd-memgraph)"
+              "$(cairn --version 2>/dev/null | head -1 || echo absent)" "${CAIRN_REF:0:12}"
             printf 'optional: jq %s  rg %s  ss %s  flock %s  setsid %s  timeout %s  iconv %s  node %s  utf8 locale: %s\n' \
               "$(has jq)" "$(has rg)" "$(has ss)" "$(has flock)" "$(has setsid)" "$(has timeout)" "$(has iconv)" \
               "$(node --version 2>/dev/null || echo no)" \
               "$(locale -a 2>/dev/null | grep -i -E '^c\.utf-?8$|^en_US\.utf-?8$' | tr '\n' ' ' || echo none)"
-            printf 'resolved: bash=%s python3=%s bd=%s timeout=%s  python3 stdout newline:%s\n' \
-              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v bd || echo none)" \
+            printf 'resolved: bash=%s python3=%s cairn=%s timeout=%s  python3 stdout newline:%s\n' \
+              "$(command -v bash)" "$(command -v python3 || echo none)" "$(command -v cairn || echo none)" \
               "$(command -v timeout || echo none)" "$(python3 -c 'print(1)' | od -An -c | tr -s ' ')"
             # Line endings as git sees them (i/ index, w/ working tree) and as bytes: the first
             # line of selftest.sh must end in \n alone, whatever core.autocrlf the box ships.
@@ -176,7 +140,7 @@ jobs:
         run: |
           out=$PWD/suite-logs; mkdir -p "$out"
           t=$(mktemp -d); git -C "$t" init -q
-          ./install.sh --no-shell --with-pi "$t" > "$out/install.log" 2>&1 || echo "install.sh exit $? — its ! lines:"
+          ./install.sh --with-pi "$t" > "$out/install.log" 2>&1 || echo "install.sh exit $? — its ! lines:"
           grep -E '^ *!' "$out/install.log" || true
           for s in "$t"/tools/*_test.sh; do
             n=$(basename "$s" .sh)

@@ -2,8 +2,8 @@
 # selftest-in-container.sh — run ./selftest.sh on a clean Ubuntu, in Docker.
 #
 #   test/selftest-in-container.sh            # both targets: bare, then full
-#   test/selftest-in-container.sh bare       # git + python3 only: no bd, jq, rg, ss
-#   test/selftest-in-container.sh full       # + bd (latest release), jq, rg, ss, bd-memgraph
+#   test/selftest-in-container.sh bare       # git + python3 only: no cairn, jq, rg
+#   test/selftest-in-container.sh full       # + cairn (pinned commit), jq, rg
 #   test/selftest-in-container.sh --build-only [target]
 #
 # WHY: the self-test had only ever run on boxes that already carried every dependency, so its
@@ -42,9 +42,9 @@ for t in "${TARGETS[@]}"; do
   docker run --rm -v "$SRC:/src:ro" "$TAG:$t" bash -lc '
     set -u
     cp -r /src /home/tester/work && cd /home/tester/work || exit 2
-    printf "box: %s  bash %s  bd %s  jq %s  rg %s  ss %s\n" "$(. /etc/os-release; echo "$PRETTY_NAME")" "$BASH_VERSION" \
-      "$(bd --version 2>/dev/null | head -1 || echo absent)" "$(command -v jq >/dev/null && echo yes || echo no)" \
-      "$(command -v rg >/dev/null && echo yes || echo no)" "$(command -v ss >/dev/null && echo yes || echo no)"
+    printf "box: %s  bash %s  cairn %s  jq %s  rg %s\n" "$(. /etc/os-release; echo "$PRETTY_NAME")" "$BASH_VERSION" \
+      "$(cairn --version 2>/dev/null | head -1 || echo absent)" "$(command -v jq >/dev/null && echo yes || echo no)" \
+      "$(command -v rg >/dev/null && echo yes || echo no)"
     ./selftest.sh
   ' > "$LOGDIR/selftest-$t.log" 2>&1
   rc=$?
