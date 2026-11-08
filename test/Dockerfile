@@ -24,9 +24,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends jq ripgrep \
  && rm -rf /var/lib/apt/lists/*
 USER tester
-# cairn: a clone at a pinned commit (cairn has no release tags yet) and a symlink of bin/cairn,
+# cairn: a clone at a pinned commit (the commit of cairn's tag v0.7.0) and a symlink of bin/cairn,
 # as its README installs it. Keep CAIRN_REF in step with .github/workflows/selftest.yml.
-ARG CAIRN_REF=5aec6b002e60cd05abddeb281beb6faa6faec3ce
+ARG CAIRN_REF=07550872866f9edb949360f564601a4b463a5199
 RUN git init -q /home/tester/cairn \
  && git -C /home/tester/cairn fetch -q --depth 1 https://github.com/scgoetsch/cairn "$CAIRN_REF" \
  && git -C /home/tester/cairn checkout -q FETCH_HEAD \

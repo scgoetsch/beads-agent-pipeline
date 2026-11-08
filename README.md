@@ -288,7 +288,7 @@ them a sweep binary-file case that depends on a UTF-8 locale a container does no
 **On every push, in GitHub Actions** (`.github/workflows/selftest.yml`): the same `./selftest.sh`
 on `ubuntu-latest`, on `macos-latest` (bash from Homebrew, since the stock `/bin/bash` is 3.2) and
 on `windows-latest` (Git Bash). cairn comes from github.com/scgoetsch/cairn at the commit the
-workflow pins (`CAIRN_REF`; cairn has no release tags yet), into a directory of its own so the
+workflow pins (`CAIRN_REF`, the commit of cairn's tag v0.7.0), into a directory of its own so the
 self-test's no-cairn probe can hide it. Each job writes its box line, the RESULT line and every
 FAIL to the run summary and keeps the log as an artifact; after a failure it also keeps the
 installer's own output and every suite's full log, since the self-test shows only a failing
@@ -463,8 +463,8 @@ For a bd user who pulls 0.2.0 and re-runs `install.sh`:
   `.beads-hooks/`, `.pi/extensions/beads-pipeline.ts`, `BEADS_ACTOR`, the `BD_*` knobs,
   `.git/bd-session-claims/` and `tools/refresh-beads-exports.sh` keep their names in this release:
   renaming them is a settings-merge and `core.hooksPath` migration of its own, for a later one.
-- **cairn is pinned by commit, not version.** cairn has no release tags yet; CI and the container
-  name a commit, and the installer checks only `cairn --version` ≥ 0.7.0.
+- **cairn is pinned by commit, not version.** CI and the container name the commit of cairn's tag v0.7.0
+  rather than the tag, which could be moved, and the installer checks only `cairn --version` ≥ 0.7.0.
 - **Platform coverage is what the Actions matrix runs: Ubuntu 24.04, macOS and Windows Server 2025
   under Git Bash, plus the Docker self-test on a bare Ubuntu.** Not covered: a Windows box that
   cannot create symlinks (the runner can; the installer's pointer-file fallback is exercised on

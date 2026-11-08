@@ -78,7 +78,7 @@ are expected to change again (renames; a migration verb in cairn).
 - **The self-test** proves a cairn-only install (no hook runs `bd hooks run`, carries a BEGIN
   BEADS block or reads `.claude/store-cli`), the refusal, the in-place removal on a bd-era
   fixture, and hides cairn from PATH for the required-command branch. CI and the container image
-  install cairn from github.com/scgoetsch/cairn at a pinned commit (cairn has no release tags yet).
+  install cairn from github.com/scgoetsch/cairn at a pinned commit, the one cairn's tag v0.7.0 names.
 
 ### Removed
 
