@@ -376,41 +376,65 @@ only the session-start hook syncs the store.
 For a repo that has the 0.1 pipeline and its store in bd. **Store first, hooks second; in this
 order, stopping at the first failure.** The installer refuses step 7 until steps 1–6 have made a
 writable cairn store (`cairn init` writes `.cairn/cairn.db`), so it cannot be run out of order by
-accident — but a green install proves only the install, not the move.
+accident — but a green install proves only the install, not the move. cairn's README, "Moving a
+bd store over" and "Migrating from other bd versions", is the reference for each cairn verb below;
+read it once before step 3.
+
+**What the steps need.** A `dolt` binary: bd embeds Dolt and ships none, and any dolt release that
+reads the store works (cairn measured 2.4.2 on bd 1.1.2). `<dolt>` below is that binary's path.
+The Dolt repository is read from a copy, never in place. A `.beads/` holding both an embedded
+(`embeddeddolt/`) and a server-mode (`dolt/`) store is refused until you name the repository
+(cairn's README says how).
 
 1. **Freeze writers**: no other session, no `bd dolt push`, no other clone writing.
 2. **`bd export --all`** (to a file outside the tree, e.g. `bd export --all -o /tmp/bd.jsonl`).
 3. **`cairn seed-from-dolt .beads --dolt <dolt>`** (every id ever issued, deleted ones too), on a
    copy, `-o seed.json`. A seed not read from Dolt can reissue deleted ids.
-4. **`cairn history-from-dolt`** against that export (plus `.beads/interactions.jsonl` when
-   present); keep the manifest:
-   `cairn history-from-dolt .beads --dolt <dolt> --interactions .beads/interactions.jsonl --export /tmp/bd.jsonl -o history.jsonl --manifest manifest.json`.
-   **If it fails, stop**: an `init` without `--events` is a content migration that silently drops
-   the history.
+4. **`cairn history-from-dolt`** against that export; keep the manifest:
+   `cairn history-from-dolt .beads --dolt <dolt> --export /tmp/bd.jsonl -o history.jsonl --manifest manifest.json`,
+   adding `--interactions .beads/interactions.jsonl` **only when that file exists** (a missing file
+   fails the read). **If it fails, stop**: an `init` without `--events` is a content migration that
+   silently drops the history. `-o` refuses an existing file, so remove a failed attempt's output
+   before running it again. Where cairn's `dev/verify-dolt-history.py` is available, run it on the
+   result: the check in step 5 compares the end state, not every intermediate memory body and
+   issue text the history claims to carry.
 5. **`cairn init -p <prefix> --from <export> --seed <seed> --events <history>`** (plus `--ledger
-   .beads/memgraph-ledger.json`, `--hot`, when present); require its byte-identical or
-   equal-content line.
-6. **`cairn check`; write the four files under `.cairn/`** (`tools/refresh-beads-exports.sh`, once
-   the pipeline's tools are there, or `cairn export` by hand); **commit them with `config.json`
-   and `.gitignore`.** Not in the design, found while implementing it: bd's own `issues.jsonl`
-   (and any `memories.jsonl`) is usually tracked in `.beads/`, and cairn refuses exports split
-   between `.beads/` and `.cairn/` (`cairn sync`: "the tracked exports are split"). Remove them
-   from `.beads/` in the same commit: `git rm -q --cached .beads/issues.jsonl` (git history keeps
-   them; the installer and the export refresh both name any that are left).
-7. **Only then install the cairn-only pipeline** (`install.sh`). It removes bd's managed blocks
-   from every git hook in `.beads-hooks/` in place, bd's harness entries (`bd prime` in
-   `.claude/settings.json` and `settings.local.json`, the Codex and Cursor hooks), and the
-   `~/.bashrc` block for this repo; writes `.cairn/redirect` in sibling worktrees; backs up each
-   file it edits under `.git/beads-agent-pipeline-backup/<timestamp>/`. A bd-era pipeline file you
-   edited keeps your copy and gets ours as `.new` — **adopt the `.new` of every session hook and
-   git hook the installer names as bd-era**, or bd keeps running there. Then delete what it lists
-   as no longer shipped (`.claude/store-cli`, `tools/dolt-guard.sh`, the `store-cli-*` tools) and
-   bd's managed block in `AGENTS.md` if it names one.
+   .beads/memgraph-ledger.json`, `--hot .claude/memory-hot.txt`, when present); require its
+   byte-identical or equal-content line. `<prefix>` is the prefix of the issues in the export:
+   `init` refuses an issue under another one. If the repo ever ran `cairn shadow sync`, its
+   `.cairn/cairn.db` is a shadow: `init` refuses an existing database, so move the shadow aside
+   first (`mkdir -p ../shadow-db && mv -f .cairn/cairn.db* ../shadow-db/`).
+6. **`cairn check`, and take the old exports out of `.beads/`.** bd's own `issues.jsonl` (and any
+   `memories.jsonl`, `allocator.json`, `events.jsonl` there) is usually tracked, and cairn refuses
+   exports split between `.beads/` and `.cairn/` (`cairn sync`: "the tracked exports are split";
+   the export refresh refuses too). A file left on disk is still a split, so remove them, not just
+   untrack them: `git rm -q -f --ignore-unmatch .beads/issues.jsonl .beads/memories.jsonl
+   .beads/allocator.json .beads/events.jsonl && rm -f .beads/issues.jsonl .beads/memories.jsonl
+   .beads/allocator.json .beads/events.jsonl` (git history keeps them; the installer prints the
+   same line for any that are left). **Do not commit yet**: until step 7, bd's own git hooks are
+   still in `.beads-hooks/`, and a commit runs them — its pre-commit re-exports and stages
+   `.beads/issues.jsonl` (the split again), and `--no-verify` would not help, because it does not
+   skip `prepare-commit-msg`, which bd also installs.
+7. **Then install the cairn-only pipeline, and commit the store with it.** `install.sh` removes
+   bd's managed blocks from every git hook in `.beads-hooks/` in place, bd's harness entries (`bd
+   prime` in `.claude/settings.json` and `settings.local.json`, the Codex and Cursor hooks), and
+   the `~/.bashrc` block for this repo; writes `.cairn/redirect` in sibling worktrees; backs up
+   each file it edits under `.git/beads-agent-pipeline-backup/<timestamp>/`. A bd-era pipeline
+   file you edited keeps your copy and gets ours as `.new` — **adopt the `.new` of every file the
+   installer names as bd-era** (`mv -f <file>.new <file>`), or bd keeps running there, and run the
+   installer again; only once none is live does it print the `git rm` of what is no longer shipped
+   (`.claude/store-cli`, `tools/dolt-guard.sh`, the `store-cli-*` tools). Delete bd's managed block
+   in `AGENTS.md` if it names one. Then write the four files and commit them with `config.json`
+   and `.gitignore` (and the install): `tools/refresh-beads-exports.sh && git add .cairn/.gitignore
+   .cairn/config.json .cairn/issues.jsonl .cairn/memories.jsonl .cairn/allocator.json
+   .cairn/events.jsonl`, then commit. The pipeline's pre-commit now runs `cairn check` and the
+   export freshness guard, and nothing of bd's.
 8. **Leave `.beads/` on disk until a person has read the manifest**; other clones need cairn
    0.7.0+ and `cairn sync`.
 
-cairn's own README has the reference for each verb ("Moving a bd store over", "Migrating from
-other bd versions"). A one-verb migration may replace this list later.
+This is the design's sequence with two changes the implementation found: the old exports have to
+leave `.beads/` (step 6), and the first commit comes after the hooks have changed (steps 6–7),
+because bd's hooks would put the split back. A one-verb migration may replace this list later.
 
 ### What breaks
 

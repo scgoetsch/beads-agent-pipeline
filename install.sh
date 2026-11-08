@@ -108,6 +108,15 @@ hooks_wired() {
 # `<!-- BEGIN/END BEADS INTEGRATION ... -->` in AGENTS.md. This release removes it from hooks
 # and reports it in AGENTS.md; it never compares around it any more.
 BD_BLOCK='/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/d'
+# A sed range whose END never comes deletes to the end of the file. So nothing is stripped unless
+# every BEGIN is closed by an END before the next BEGIN, and no END stands alone.
+markers_balanced() {  # markers_balanced BEGIN_RE END_RE FILE [exact] -> 0 when paired, at least once
+  awk -v b="$1" -v e="$2" -v x="${4:-}" '
+    function hit(re) { return x == "" ? index($0, re) > 0 : $0 == re }
+    hit(b) { if (open) bad = 1; open = 1; n++; next }
+    hit(e) { if (!open) bad = 1; open = 0 }
+    END { exit (bad || open || n == 0) ? 1 : 0 }' "$3"
+}
 
 # ---------------------------------------------------------------- preflight --
 hdr "dependencies"
@@ -132,7 +141,14 @@ if need cairn "the issue tracker and memory store" \
   fi
   set --
 fi
-need python3 "the PreToolUse guard parses hook JSON"   "your package manager" || true
+# python3 is a HARD requirement, refused before anything is written: every session hook parses
+# its JSON with it, and this installer uses it to tell a writable cairn store from any file named
+# cairn.db and to remove the old tracker's harness hooks. Without it both of those would be
+# guesses or silent skips (the review of 0.2.0 found both).
+if ! need python3 "the session hooks parse hook JSON with it; the installer reads the store and the harness files with it" "your package manager"; then
+  warn "REFUSED: python3 is required. Install it, then run this installer again. Nothing was changed."
+  exit 1
+fi
 if [ "$WITH_PI" -eq 1 ]; then
   need pi "--with-pi only works when Pi runs and trusts the project extension" \
     "https://github.com/badlogic/pi-mono" || true
@@ -199,15 +215,28 @@ fi
 # cairn store is refused, in every mode. A cairn shadow (`cairn shadow sync`) is not writable and
 # does not count. A worktree's .cairn/redirect names the main checkout's store.
 hdr "store"
-cairn_db=""
+# A linked worktree has no .beads/ or database of its own: its store is the MAIN checkout's, so
+# both the refusal and the writable-store test look there too. The main checkout is the first
+# entry of `git worktree list` (none when the repository is bare). A submodule's git dir is its
+# own common dir, so it is its own main checkout.
+MAIN=$TARGET
+if [ "$GIT_DIR" != "$GIT_COMMON" ]; then
+  MAIN=$(git -C "$TARGET" worktree list --porcelain 2>/dev/null | awk '
+    NR == 1 && /^worktree / { sub(/^worktree /, ""); p = $0; next }
+    NR > 1 && /^bare$/ && p != "" { p = ""; exit } /^$/ { exit } END { print p }')
+  [ -n "$MAIN" ] && [ -d "$MAIN" ] && MAIN=$(cd "$MAIN" && pwd -P) || MAIN=""
+  [ "$MAIN" = "$TARGET" ] && MAIN=$TARGET
+fi
+cairn_db=""; NEED_REDIRECT=0
 if [ -f "$TARGET/.cairn/redirect" ]; then
   cairn_db="$(head -1 "$TARGET/.cairn/redirect" | tr -d '\r')/cairn.db"
 elif [ -e "$TARGET/.cairn/cairn.db" ]; then
   cairn_db="$TARGET/.cairn/cairn.db"
+elif [ -n "$MAIN" ] && [ "$MAIN" != "$TARGET" ] && [ -e "$MAIN/.cairn/cairn.db" ]; then
+  cairn_db="$MAIN/.cairn/cairn.db"; NEED_REDIRECT=1   # written below, before anything runs cairn sync here
 fi
 cairn_writable() {  # 0 when $cairn_db is a writable cairn store (meta writable=1)
   [ -n "$cairn_db" ] && [ -f "$cairn_db" ] || return 1
-  command -v python3 >/dev/null 2>&1 || return 0   # python3 is reported missing above; trust the file
   python3 -I - "$cairn_db" <<'PY' 2>/dev/null
 import sqlite3, sys
 try:
@@ -220,19 +249,28 @@ PY
 }
 bd_live=""
 for d in embeddeddolt dolt; do [ -d "$TARGET/.beads/$d" ] && bd_live="$bd_live .beads/$d/"; done
+if [ -n "$MAIN" ] && [ "$MAIN" != "$TARGET" ]; then
+  for d in embeddeddolt dolt; do [ -d "$MAIN/.beads/$d" ] && bd_live="$bd_live $MAIN/.beads/$d/ (the main checkout's)"; done
+fi
 if cairn_writable; then
   say "cairn store: $cairn_db"
   [ -n "$bd_live" ] && say "bd's old store is still on disk ($bd_live) — nothing here reads it; delete it once the migration manifest has been read"
 elif [ -n "$bd_live" ]; then
-  warn "REFUSED: this repo's store is still bd's ($bd_live) and there is no writable cairn store (.cairn/cairn.db)."
+  warn "REFUSED: this repo's store is still bd's ($bd_live) and there is no writable cairn store (.cairn/cairn.db${MAIN:+, here or in the main checkout})."
   say "    This release does not read bd: installing now would leave every issue and memory where no hook looks."
   say "    Move the store first, in order, stopping at the first failure: README.md, \"Moving a repo off bd\""
   say "    ($SRC/README.md). Then run this installer again. Nothing was changed."
   exit 1
 elif [ -n "$cairn_db" ]; then
+  NEED_REDIRECT=0
   say "cairn: $cairn_db is not a writable store (a shadow, or unreadable) — create one with cairn init (see Next, below)"
 else
   say "no cairn store yet — create it yourself so the prefix is your choice (see Next, below)"
+fi
+
+if [ "$NEED_REDIRECT" -eq 1 ] && [ -e "$TARGET/.cairn/cairn.db" ]; then NEED_REDIRECT=0; fi
+if [ "$NEED_REDIRECT" -eq 1 ]; then
+  say "this worktree has no .cairn/redirect yet; the install writes one naming $MAIN/.cairn first"
 fi
 
 if [ "$MODE" = check ]; then
@@ -243,7 +281,20 @@ if [ "$MODE" = check ]; then
   exit $(( problems > 0 ))
 fi
 
+# A worktree of a migrated checkout gets its redirect FIRST: everything below may run `cairn sync`
+# here (the verify step runs the prime hook), and without the redirect that builds a store of its
+# own in this worktree, which the main checkout never sees.
+if [ "$NEED_REDIRECT" -eq 1 ]; then
+  if [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m write %s/.cairn/redirect -> %s/.cairn\n' "$TARGET" "$MAIN"
+  else
+    mkdir -p "$TARGET/.cairn" && printf '%s\n' "$MAIN/.cairn" > "$TARGET/.cairn/redirect" \
+      && did ".cairn/redirect -> $MAIN/.cairn (this worktree shares the main checkout's store)" \
+      || { warn "could not write $TARGET/.cairn/redirect — not installing: cairn sync here would build a second store"; exit 1; }
+  fi
+fi
+
 # ------------------------------------------------------------------- files --
+BD_ERA_KEPT=""
 # Copy a payload file. Never clobbers content the user may have edited: identical is a no-op,
 # different lands as `<file>.new` unless we are the only author it has ever had.
 install_file() { # install_file <relpath> [mode]
@@ -259,6 +310,7 @@ install_file() { # install_file <relpath> [mode]
     case $rel in *.md|*_test.sh) ;; *)    # a doc or a suite that mentions them runs nothing
     if grep -qE '\.claude/store-cli|bd hooks run|bd-memgraph|dolt-guard\.sh' "$dst" 2>/dev/null; then
       warn "$rel is the bd-era version and can still run bd — adopt ours unless you know why not:  mv -f \"$dst.new\" \"$dst\""
+      BD_ERA_KEPT="$BD_ERA_KEPT $rel"
     fi
     esac
     return 0
@@ -288,8 +340,12 @@ bd_left=0
 for h in "$TARGET"/.beads-hooks/*; do
   [ -f "$h" ] || continue
   case ${h##*/} in *.new|*.bak*|*.sample) continue ;; esac
-  grep -q 'BEGIN BEADS INTEGRATION' "$h" || continue
+  grep -q 'BEGIN BEADS INTEGRATION\|END BEADS INTEGRATION' "$h" || continue
   bd_left=1; rel=.beads-hooks/${h##*/}
+  if ! markers_balanced 'BEGIN BEADS INTEGRATION' 'END BEADS INTEGRATION' "$h"; then
+    warn "$rel has bd's BEGIN/END BEADS INTEGRATION markers out of pairs — NOT touched (a range would delete to the end of the file); remove bd's block by hand"
+    continue
+  fi
   rest=$(sed "$BD_BLOCK" "$h")
   only_comments=0
   [ -z "$(printf '%s\n' "$rest" | grep -vE '^[[:space:]]*(#.*)?$')" ] && only_comments=1
@@ -327,7 +383,11 @@ for path in sys.argv[3:]:
     try:
         doc = json.loads(raw)
     except ValueError as exc:
-        print(f"WARN {path} is not JSON ({exc}); not read — check it for bd hooks yourself"); continue
+        if re.search(r"(?<![\w./-])bd\s+[a-z]", raw):
+            print(f"BDJSON {path} is not valid JSON ({exc}), and it names a bd command: bd STILL RUNS from it. Not edited -- remove by hand every hook entry whose command runs bd (bd prime, bd codex-hook, bd cursor-hook, ...), then run this installer again")
+        else:
+            print(f"WARN {path} is not JSON ({exc}); not read -- check it for bd hooks yourself")
+        continue
     hooks = doc.get("hooks") if isinstance(doc, dict) else None
     if not isinstance(hooks, dict): continue
     removed = []
@@ -374,6 +434,7 @@ while IFS= read -r line; do
     "DRY "*)    bd_left=1; printf '  \033[36m[dry-run]\033[0m remove the harness hook that runs bd — %s\n' "${line#DRY }" ;;
     "BACKUP "*) say "    backup of ${line#BACKUP }: $BACKUP/${line#BACKUP }" ;;
     "WARN "*)   warn "${line#WARN }" ;;
+    "BDJSON "*) bd_left=1; warn "${line#BDJSON }" ;;
     ?*)         warn "harness-hook cleanup: $line" ;;
   esac
 done <<< "$harness_out"
@@ -381,7 +442,11 @@ done <<< "$harness_out"
 #    when it sources THIS repo's tools/dolt-guard.sh; another repo's block is that repo's.
 RC="${HOME:-}/.bashrc"; GB='# >>> bd dolt-guard >>>'; GE='# <<< bd dolt-guard <<<'
 esc() { printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g'; }
-if [ -n "${HOME:-}" ] && [ -f "$RC" ] && grep -qxF "$GB" "$RC"; then
+if [ -n "${HOME:-}" ] && [ -f "$RC" ] && { grep -qxF "$GB" "$RC" || grep -qxF "$GE" "$RC"; } \
+   && ! markers_balanced "$GB" "$GE" "$RC" exact; then
+  bd_left=1
+  warn "$RC has the bd dolt-guard markers out of pairs ('$GB' / '$GE') — NOT touched; remove that block by hand"
+elif [ -n "${HOME:-}" ] && [ -f "$RC" ] && grep -qxF "$GB" "$RC"; then
   rc_block=$(sed -n "/^$(esc "$GB")\$/,/^$(esc "$GE")\$/p" "$RC")
   if printf '%s\n' "$rc_block" | grep -qF "\"$TARGET/tools/dolt-guard.sh\""; then
     bd_left=1
@@ -397,7 +462,9 @@ if [ -n "${HOME:-}" ] && [ -f "$RC" ] && grep -qxF "$GB" "$RC"; then
   fi
 fi
 # 4. Files the bd-era pipeline shipped that this one does not. Nothing here runs them any more;
-#    they are named, not deleted, because they are tracked files of yours now.
+#    they are named, not deleted, because they are tracked files of yours now. They are reported
+#    AFTER the payload is installed: a bd-era hook kept beside our .new reads .claude/store-cli and
+#    runs bd when it is absent, so its removal is said only once no such hook is live.
 stale=""
 for rel in .claude/store-cli tools/store-cli.sh tools/dolt-guard.sh tools/dolt-guard_test.sh \
            tools/store-cli-git-hooks.sh tools/store-cli-git-hooks_test.sh \
@@ -405,11 +472,7 @@ for rel in .claude/store-cli tools/store-cli.sh tools/dolt-guard.sh tools/dolt-g
            tools/pre-commit-store-cli_test.sh; do
   [ -e "$TARGET/$rel" ] && stale="$stale $rel"
 done
-if [ -n "$stale" ]; then
-  bd_left=1
-  say "bd-era files this release no longer ships (nothing runs them; remove them):"
-  say "    git rm -q --$stale"
-fi
+[ -n "$stale" ] && bd_left=1   # reported after the files are installed (see "bd-era files", below)
 # 5. The old tracker's own exports in .beads/ (its issues.jsonl is usually tracked). cairn reads
 #    its exports from .beads/ while .cairn/ holds none, and refuses a split once both do, so every
 #    `cairn sync` and export refresh after the move would fail. Named; the fix is a git rm.
@@ -421,7 +484,7 @@ done
 if [ -n "$old_exports" ]; then
   bd_left=1
   warn "the old tracker's exports are still in .beads/ (${old_exports# }) — cairn refuses exports split between .beads/ and .cairn/"
-  say "    remove them (git history keeps them):  git rm -q --cached --ignore-unmatch$old_exports && rm -f$old_exports"
+  say "    remove them (git history keeps them):  git rm -q -f --ignore-unmatch$old_exports && rm -f$old_exports"
 fi
 # 6. Sibling worktrees of this checkout share its store through an untracked .cairn/redirect
 #    (cairn README, worktrees). One made before the move has none, and its post-checkout
@@ -637,6 +700,23 @@ elif [ ! -e "$TARGET/CLAUDE.md" ]; then
     fi
   fi
 fi
+# ------------------------------------------------------------ bd-era files --
+# Named only now, after the payload: while a bd-era copy of a hook is still the live one (ours
+# beside it as .new), removing .claude/store-cli would turn bd back on -- the 0.1 hooks read that
+# file and default to bd when it is absent, and the 0.1 pre-commit's bd-memgraph stanza runs on
+# that branch even with bd's block gone. So the order is: adopt the .new files, then remove.
+if [ -n "$stale" ]; then
+  hdr "bd-era files"
+  if [ -n "$BD_ERA_KEPT" ]; then
+    warn "bd-era files this release no longer ships are still here (${stale# }), and bd-era copies of pipeline files are still live:${BD_ERA_KEPT}"
+    say "    FIRST adopt the .new beside each of those (mv -f <file>.new <file>), then run this installer again;"
+    say "    it names what to remove once no bd-era copy is live. Removing .claude/store-cli before that turns bd back on."
+  else
+    say "bd-era files this release no longer ships (nothing runs them now; remove them):"
+    say "    git rm -q --$stale"
+  fi
+fi
+
 # --------------------------------------------------------------- git hooks --
 # Wired whether or not cairn is present. Two of the pre-commit's stanzas (agent-cache paths,
 # agent-docs symlink) need no store and are the whole point on a box without one; the ones that do

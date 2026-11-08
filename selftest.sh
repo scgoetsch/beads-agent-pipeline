@@ -532,12 +532,17 @@ chk "the cursor hook running bd (store-cli-guarded) is removed, the other kept" 
 chk "  …and both files are still JSON" "$(python3 -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]; print("ok")' "$F/.codex/hooks.json" "$F/.cursor/hooks.json" 2>&1 | tr -d '\r')" ok
 chk "the ~/.bashrc block for THIS repo is removed, the rest kept" "$(grep -c 'dolt-guard' "$FH/.bashrc"):$(grep -c '^before=1$\|^after=1$' "$FH/.bashrc")" "0:2"
 chk "  …with a backup beside it"                             "$(ls "$FH"/.bashrc.bak.* 2>/dev/null | wc -l | tr -d ' ')" 1
-grep -q 'git rm -q -- .claude/store-cli tools/dolt-guard.sh' "$F/.git/strip.log" && ok "bd-era files no longer shipped are named, with the git rm" \
-  || bad "bd-era files no longer shipped are named, with the git rm"
-chk "  …and not deleted"                                     "$(ls "$F/.claude/store-cli" "$F/tools/dolt-guard.sh" 2>/dev/null | wc -l | tr -d ' ')" 2
+# While the bd-era pre-commit is the live copy, removing .claude/store-cli would turn bd back on:
+# the git rm must not be printed, and the order (adopt the .new first) must be.
+chk "no git rm of .claude/store-cli while a bd-era hook is kept" "$(grep -c 'git rm -q -- .claude/store-cli' "$F/.git/strip.log" | tr -d ' ')" 0
+grep -q 'FIRST adopt the .new' "$F/.git/strip.log" && ok "  …it says to adopt the .new files first" || bad "  …it says to adopt the .new files first"
+chk "  …and nothing is deleted"                              "$(ls "$F/.claude/store-cli" "$F/tools/dolt-guard.sh" 2>/dev/null | wc -l | tr -d ' ')" 2
 grep -q "the old tracker's exports are still in .beads/ (.beads/issues.jsonl)" "$F/.git/strip.log" && ok "the old tracker's tracked export in .beads/ is named" \
   || bad "the old tracker's tracked export in .beads/ is named"
+mv -f "$F/.beads-hooks/pre-commit.new" "$F/.beads-hooks/pre-commit"     # adopt ours
 HOME="$FH" "$SRC/install.sh" "$F" >"$F/.git/strip2.log" 2>&1
+grep -q 'git rm -q -- .claude/store-cli tools/dolt-guard.sh' "$F/.git/strip2.log" && ok "once the .new is adopted, the bd-era files are named with the git rm" \
+  || bad "once the .new is adopted, the bd-era files are named with the git rm"
 grep -q "nothing of bd's found\|bd-era files this release no longer ships" "$F/.git/strip2.log" && ok "a second run finds no bd block or harness hook to remove" \
   || bad "a second run finds no bd block or harness hook to remove"
 chk "  …and changes no hook" "$(grep -c "managed block removed\|held only bd's block\|removed a harness hook" "$F/.git/strip2.log" | tr -d ' ')" 0
@@ -547,6 +552,92 @@ chk "another repo's ~/.bashrc block is left alone" "$(grep -c 'elsewhere' "$FH/.
 "$SRC/install.sh" --no-shell "$F" >"$F/.git/noshell.log" 2>&1
 grep -q 'note: --no-shell does nothing' "$F/.git/noshell.log" && ok "--no-shell is accepted, with a note" || bad "--no-shell is accepted, with a note"
 rm -rf "$F" "$FH"
+
+printf '\n\033[1m### the review cases: worktrees, python3, JSON it cannot read, unpaired markers, dry runs\033[0m\n'
+# A linked worktree has no .beads/ of its own: its main checkout's live bd store must refuse it.
+M=$(mktemp -d); M=$(cd "$M" && pwd -P); git -C "$M" init -q main; MM=$M/main
+git -C "$MM" config user.email t@example.com; git -C "$MM" config user.name t
+git -C "$MM" commit -q --allow-empty -m base; mkdir -p "$MM/.beads/embeddeddolt"
+git -C "$MM" worktree add -q "$M/side" -b side 2>/dev/null
+"$SRC/install.sh" "$M/side" >"$M/wt.log" 2>&1; wrc=$?
+chk "a worktree of a checkout whose store is still bd's is refused" "$wrc" 1
+grep -q "REFUSED.*the main checkout's" "$M/wt.log" && ok "  …naming the main checkout's store" || bad "  …naming the main checkout's store"
+chk "  …and nothing is written in the worktree" "$(ls -A "$M/side" | grep -vx '\.git' | wc -l | tr -d ' ')" 0
+rm -rf "$M"
+# After the move, a worktree installed on its own gets its redirect BEFORE anything runs cairn sync
+# there (the install's verify step runs the prime hook, which syncs).
+if command -v cairn >/dev/null 2>&1; then
+  M=$(mktemp -d); M=$(cd "$M" && pwd -P); git -C "$M" init -q main; MM=$M/main
+  git -C "$MM" config user.email t@example.com; git -C "$MM" config user.name t
+  (cd "$MM" && cairn init -p zz -q) >/dev/null 2>&1
+  git -C "$MM" add .cairn/.gitignore .cairn/config.json && git -C "$MM" commit -qm store --no-verify
+  git -C "$MM" worktree add -q "$M/side" -b side 2>/dev/null
+  "$SRC/install.sh" "$M/side" >"$M/wt2.log" 2>&1
+  chk "a worktree install after the move writes its redirect to the main store" "$(cat "$M/side/.cairn/redirect" 2>/dev/null)" "$MM/.cairn"
+  chk "  …and no database of its own was built" "$([ -e "$M/side/.cairn/cairn.db" ] && echo stray || echo none)" none
+  rm -rf "$M"
+else
+  echo "  SKIP the worktree install after the move: cairn not on PATH"
+fi
+# python3 is required: without it, any file named cairn.db would pass for a writable store.
+R=$(mktemp -d); git -C "$R" init -q; mkdir -p "$R/.cairn"; printf 'x\n' > "$R/.cairn/cairn.db"
+NP=$(mktemp -d)
+for tool in git dirname sed head tail cat tr mktemp rm awk grep cmp date ls cp mkdir chmod find sort wc env basename uname; do
+  b=$(command -v "$tool" 2>/dev/null) && printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$NP/$tool" && chmod +x "$NP/$tool"
+done
+PATH="$NP" "$(command -v bash)" "$SRC/install.sh" "$R" >"$NP/.log" 2>&1; prc=$?
+chk "no python3: refused" "$prc" 1
+grep -q 'REFUSED: python3 is required' "$NP/.log" && ok "  …and says why" || bad "  …and says why"
+chk "  …and nothing is written" "$(ls -A "$R" | grep -vxE '\.git|\.cairn' | wc -l | tr -d ' ')" 0
+rm -rf "$R" "$NP"
+# Harness files: one that does not parse but names a bd command is a LOUD problem, untouched; the
+# real guarded form 0.1's tools/store-cli-harness-hooks.sh wrote is recognised and removed.
+J=$(mktemp -d); git -C "$J" init -q; mkdir -p "$J/.claude" "$J/.codex"
+printf '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "bd prime --hook-json"}]}]},,}\n' > "$J/.claude/settings.json"
+python3 - "$J/.codex/hooks.json" <<'PY'
+import json, sys
+# GUARD, verbatim from 0.1's tools/store-cli-harness-hooks.sh (main, lines 27-28)
+GUARD = ('[ "$(tr -d \' \\t\\r\\n\' 2>/dev/null < "${CLAUDE_PROJECT_DIR:-$(git rev-parse '
+         '--show-toplevel 2>/dev/null || pwd)}/.claude/store-cli")" = cairn ] || ')
+json.dump({"hooks": {"SessionStart": [{"matcher": "", "hooks": [
+    {"type": "command", "command": GUARD + "bd codex-hook SessionStart"},
+    {"type": "command", "command": "echo codex-keep"}]}]}}, open(sys.argv[1], "w"), indent=2)
+PY
+before=$(cksum < "$J/.claude/settings.json")
+"$SRC/install.sh" "$J" >"$J/.git/json.log" 2>&1; jrc=$?
+chk "an unparseable settings.json naming bd: exit 1" "$jrc" 1
+grep -q '.claude/settings.json is not valid JSON.*bd STILL RUNS from it' "$J/.git/json.log" && ok "  …loud: bd still runs from it, remove by hand" \
+  || bad "  …loud: bd still runs from it, remove by hand"
+chk "  …and the file is untouched" "$(cksum < "$J/.claude/settings.json")" "$before"
+chk "the 0.1 guarded form of a bd hook is removed, the other kept" "$(grep -c 'codex-hook' "$J/.codex/hooks.json"):$(grep -c codex-keep "$J/.codex/hooks.json")" "0:1"
+rm -rf "$J"
+# Unpaired markers: a BEGIN with no END would make the range delete to the end of the file.
+U=$(mktemp -d); U=$(cd "$U" && pwd -P); git -C "$U" init -q; mkdir -p "$U/.beads-hooks"; UH=$(mktemp -d)
+printf '#!/bin/sh\necho mine\n# --- BEGIN BEADS INTEGRATION v1.3.0 ---\nbd hooks run pre-push "$@"\necho also-mine\n' > "$U/.beads-hooks/pre-push"
+printf 'a=1\n# >>> bd dolt-guard >>>\n[ -f "%s/tools/dolt-guard.sh" ] && . "%s/tools/dolt-guard.sh"\nkeep=1\n' "$U" "$U" > "$UH/.bashrc"
+bh=$(cksum < "$U/.beads-hooks/pre-push"); br=$(cksum < "$UH/.bashrc")
+HOME="$UH" "$SRC/install.sh" "$U" >"$U/.git/unpaired.log" 2>&1
+chk "a hook with BEGIN and no END is untouched" "$(cksum < "$U/.beads-hooks/pre-push")" "$bh"
+grep -q '.beads-hooks/pre-push has bd.s BEGIN/END BEADS INTEGRATION markers out of pairs' "$U/.git/unpaired.log" && ok "  …and named" || bad "  …and named"
+chk "a ~/.bashrc with an unclosed dolt-guard block is untouched" "$(cksum < "$UH/.bashrc")" "$br"
+grep -q 'dolt-guard markers out of pairs' "$U/.git/unpaired.log" && ok "  …and named" || bad "  …and named"
+rm -rf "$U" "$UH"
+# --dry-run and --check on a bd-era tree change no file, the git dir and ~/.bashrc included.
+D=$(mktemp -d); D=$(cd "$D" && pwd -P); git -C "$D" init -q; DH=$(mktemp -d)
+mkdir -p "$D/.beads-hooks" "$D/.claude" "$D/.cursor" "$D/tools"
+printf '#!/bin/sh\necho mine\n# --- BEGIN BEADS INTEGRATION v1.3.0 ---\nbd hooks run pre-commit "$@"\n# --- END BEADS INTEGRATION v1.3.0 ---\n' > "$D/.beads-hooks/pre-commit"
+printf '{"hooks": {"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "bd prime --hook-json"}]}]}}\n' > "$D/.claude/settings.json"
+printf '{"hooks": {"sessionStart": [{"command": "bd cursor-hook sessionStart"}]}, "version": 1}\n' > "$D/.cursor/hooks.json"
+printf 'cairn\n' > "$D/.claude/store-cli"; printf '# old\n' > "$D/tools/dolt-guard.sh"
+printf '# >>> bd dolt-guard >>>\n[ -f "%s/tools/dolt-guard.sh" ] && . "%s/tools/dolt-guard.sh"\n# <<< bd dolt-guard <<<\n' "$D" "$D" > "$DH/.bashrc"
+tree_sum() { (cd "$1" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done) | cksum; }
+t0=$(tree_sum "$D"); r0=$(cksum < "$DH/.bashrc")
+for m in --dry-run --check; do
+  HOME="$DH" "$SRC/install.sh" "$m" "$D" >/dev/null 2>&1
+  chk "$m on a bd-era tree changes no file (tree, git dir)" "$(tree_sum "$D")" "$t0"
+  chk "$m leaves ~/.bashrc as it was" "$(cksum < "$DH/.bashrc")" "$r0"
+done
+rm -rf "$D" "$DH"
 
 printf '\n\033[1m### sibling worktrees of a store get the redirect that shares it\033[0m\n'
 if command -v cairn >/dev/null 2>&1; then

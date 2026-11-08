@@ -40,13 +40,19 @@ are expected to change again (renames; a migration verb in cairn).
 - **Git hooks.** `pre-commit`: `cairn check` when `.cairn/` exists (marker `store check`), the
   agent-cache path guard, the agent-docs guard, the export freshness guard; no bd block.
   `post-merge` and `post-checkout`: `cairn sync` where `.cairn/` exists, never failing git.
-- **The installer** requires cairn ≥ 0.7.0 (`cairn --version`), refuses a live bd store with no
-  writable cairn store (in install, `--check` and `--dry-run`), and, in a repo that had bd:
+- **The installer** requires cairn ≥ 0.7.0 (`cairn --version`) and refuses to run without
+  python3; refuses a live bd store with no writable cairn store (in install, `--check` and
+  `--dry-run`), also from a linked worktree whose main checkout has one; writes a worktree's
+  `.cairn/redirect` to the main checkout's store before anything can run `cairn sync` there; and,
+  in a repo that had bd:
   removes bd's `BEGIN/END BEADS INTEGRATION` blocks **in place** from every hook in
-  `.beads-hooks/` (a hook left with only comments is replaced by ours or removed); removes hook
+  `.beads-hooks/` (a hook left with only comments is replaced by ours or removed; markers out of
+  pairs leave the file untouched and are named, as for the `~/.bashrc` block); removes hook
   entries that run bd from `.claude/settings.json`, `.claude/settings.local.json`,
   `.codex/hooks.json` and `.cursor/hooks.json`; removes the dolt-guard block from `~/.bashrc` only
-  when it sources this repo's guard; names bd-era files it no longer ships and the old tracker's
+  when it sources this repo's guard; names a harness file that does not parse but names a bd
+  command as a problem, without editing it; names bd-era files it no longer ships (only once no
+  bd-era hook is live: removing `.claude/store-cli` first would turn bd back on) and the old tracker's
   exports left in `.beads/` (cairn refuses exports split between `.beads/` and `.cairn/`); writes
   `.cairn/redirect` in sibling worktrees that have neither a redirect nor a store. Every file it
   edits is backed up under `<git common dir>/beads-agent-pipeline-backup/<timestamp>/`
