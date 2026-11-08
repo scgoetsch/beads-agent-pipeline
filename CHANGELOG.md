@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.1 — 2026-11-08
+
+- **macOS:** the export history check (`tools/refresh-beads-exports.sh`) refused every valid append there, so every commit was blocked. It now compares with `head -c | cmp` instead of `cmp -s -n`.
+- **Tests:**
+  - four cases that assumed GNU tools or POSIX path spellings now pass on macOS and under Git Bash;
+  - the self-test passes 218/0 on Ubuntu, macOS and Windows in CI. macOS had been failing since 2026-10-20.
+
 ## v0.2.0 — 2026-11-08
 
 **The store is [cairn](https://github.com/scgoetsch/cairn) (0.7.0 or later), and only cairn. This
