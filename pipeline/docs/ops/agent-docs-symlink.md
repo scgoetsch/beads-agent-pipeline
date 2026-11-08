@@ -29,7 +29,7 @@ asserts this one specifically — it checks the link's *target*, not just that a
 
 1. **A writer that replaces the file instead of writing through it.** Write-to-temp-then-rename is
    the common editor and tooling pattern, and it turns the symlink into a regular file with no
-   error. A `bd setup claude` run can do it too.
+   error. A harness's own setup command can do it too.
 2. **A checkout without symlink support.** On Windows without Developer Mode (or with
    `core.symlinks=false`), and on some network and container mounts, git materialises the link as
    a small regular file whose entire content is the text `AGENTS.md`. Nothing warns you. That
@@ -47,12 +47,14 @@ on demand. On commit it receives `--cached` and checks the index's modes, symlin
 launder a bad staged link, and an unstaged edit does not reject a clean staged version. It asserts:
 
 - `CLAUDE.md` is a symlink, not a regular file;
-- it points at `AGENTS.md` specifically;
-- and, if `AGENTS.md` contains a `BEGIN BEADS INTEGRATION` region, that your own protocol is not
-  sitting **inside** it — because `bd setup` regenerates that region and would destroy whatever is
-  there. That check is a size cap rather than a keyword list, on purpose: a keyword blocklist only
-  catches wording somebody already thought of, and a section titled "Corrections protocol" using
-  none of the listed words sailed straight through the earlier version.
+- it points at `AGENTS.md` specifically.
+
+If `AGENTS.md` still holds the old tracker's managed block (`BEGIN/END BEADS INTEGRATION`), the
+guard names it on stderr and lets the commit through: nothing regenerates that region any more,
+and what it says is out of date, so delete it by hand. (Until 0.2.0 the guard measured that
+region with a size cap, because protocol written inside it was destroyed on the next
+regeneration; a keyword blocklist had let a section titled "Corrections protocol" straight
+through.)
 
 It exits 0 when neither name is present — there is nothing to enforce until one exists. Note
 that a **dangling** link does not count as absent: `[ -e ]` follows the link and is false for a
@@ -61,7 +63,7 @@ catch. That was a real bug, and it survived because this was once the only guard
 without a `_test.sh` beside it.
 
 Its suite is `tools/check-agent-docs-linked_test.sh`: all four link states, the pointer-file
-state, both nothing-to-enforce cases, and the bd-managed-region check. It builds a throwaway root under
+state, both nothing-to-enforce cases, and the old managed block being named, not blocked. It builds a throwaway root under
 `mktemp`, so it never touches your working tree and is safe to run with work in progress.
 
 ## Recovering

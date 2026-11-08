@@ -1,46 +1,23 @@
 #!/usr/bin/env sh
+# pre-commit — shipped by beads-agent-pipeline. Git runs this hook from the top of the work tree.
+# Four independent stanzas; the installer verifies each by its marker. Bypass once with
+# `git commit --no-verify`. Reinstall: re-run beads-agent-pipeline's install.sh.
 
-# >>> store CLI >>>
-# .claude/store-cli names the store's CLI: bd (absent: bd) or cairn, its replacement. The same
-# rule as the session hooks (.claude/bd-prerun-hook.sh): tracked, one word, no environment
-# override, an unknown value means bd. Git runs this hook from the top of the work tree.
-STORE_CLI=bd
-if [ -f .claude/store-cli ]; then
-  case $(tr -d ' \t\r\n' < .claude/store-cli) in
-    cairn) STORE_CLI=cairn ;;
-    bd) ;;
-    *) echo "⚠ .claude/store-cli is neither bd nor cairn — the pre-commit treats the store as bd's" >&2 ;;
-  esac
-fi
-# <<< store CLI <<<
-
-# >>> bd-memgraph check >>>
-# Blocks commits on hard memory-graph errors (dangling/self links); warnings pass.
-# Under cairn the store checks itself: `cairn check` covers the same hard links (and the store's
-# own integrity: dangling dependencies, a second parent, a blocks cycle), and bd-memgraph is not
-# used; cairn's remember does bd-memgraph's admission control itself. Under bd, bd-memgraph.
-# Skips silently when the tools or .beads are absent — never bricks a repo.
-# Bypass once with: git commit --no-verify   Remove with: bd-memgraph install-hook --remove
-if [ "$STORE_CLI" = cairn ]; then
-  if command -v cairn >/dev/null 2>&1 && [ -d .beads ]; then
-    cairn check; _mg_rc=$?
-    if [ "$_mg_rc" -ge 2 ]; then
-      echo "cairn check could not run (exit $_mg_rc) — the store was NOT checked" >&2; _mg_rc=0
-    fi
-    [ "$_mg_rc" -eq 0 ] || {
-      echo "cairn check: errors in the store (see above) — fix or --no-verify" >&2
-      exit 1
-    }
+# >>> store check >>>
+# Blocks commits on hard store errors: `cairn check` covers the memory links (dangling or self
+# links) and the store's own integrity (dangling dependencies, a second parent, a blocks cycle).
+# Skips when cairn or the store (.cairn/) is absent; a check that cannot run is said, not failed.
+if command -v cairn >/dev/null 2>&1 && [ -d .cairn ]; then
+  cairn check; _sc_rc=$?
+  if [ "$_sc_rc" -ge 2 ]; then
+    echo "cairn check could not run (exit $_sc_rc) — the store was NOT checked" >&2; _sc_rc=0
   fi
-elif command -v bd-memgraph >/dev/null 2>&1 && command -v bd >/dev/null 2>&1 && [ -d .beads ]; then
-  # --no-ledger: the guard validates only — writing observations mid-commit would
-  # dirty .beads/memgraph-ledger.json in the working tree on every commit
-  bd-memgraph --no-ledger check || {
-    echo "bd-memgraph: hard errors in the memory graph (see above) — fix or --no-verify" >&2
+  [ "$_sc_rc" -eq 0 ] || {
+    echo "cairn check: errors in the store (see above) — fix or --no-verify" >&2
     exit 1
   }
 fi
-# <<< bd-memgraph check <<<
+# <<< store check <<<
 
 
 # >>> agent-cache path guard >>>
@@ -48,7 +25,6 @@ fi
 # brain/, Claude Code projects/, /tmp/claude-<uid>/). Enforced HERE, at the git layer,
 # because session hooks are harness-specific and this trap is not: every agent and every
 # human passes through `git commit`. Logic lives in the repo so it is reviewable.
-# Bypass once with: git commit --no-verify
 if [ -x tools/check-no-agent-cache-paths.sh ]; then
   tools/check-no-agent-cache-paths.sh || exit 1
 fi
@@ -56,51 +32,25 @@ fi
 
 
 # >>> agent-docs symlink guard >>>
-# CLAUDE.md must stay a symlink to AGENTS.md so the two cannot diverge, and the
-# workspace protocol must stay outside the bd-managed markers. Logic lives in the
+# CLAUDE.md must stay a symlink to AGENTS.md so the two cannot diverge. Logic lives in the
 # repo so it is reviewable; this stanza is only the invocation.
-# Bypass once with: git commit --no-verify   Reinstall: re-run beads-agent-pipeline's install.sh
 if [ -x tools/check-agent-docs-linked.sh ]; then
   tools/check-agent-docs-linked.sh --cached || exit 1
 fi
 # <<< agent-docs symlink guard <<<
 
-# >>> store CLI: cairn stops here >>>
-# Everything below is bd's managed block (`bd hooks run pre-commit`). With cairn as the store's CLI
-# bd's store is frozen, and a bd call on every commit is exactly what the move retires. This
-# stanza sits ABOVE bd's markers so `bd hooks install` cannot remove it.
-[ "$STORE_CLI" = cairn ] && exit 0
-# <<< store CLI: cairn stops here <<<
 
-# --- BEGIN BEADS INTEGRATION v1.1.2 ---
-# This section is managed by beads. Do not remove these markers.
-if command -v bd >/dev/null 2>&1; then
-  export BD_GIT_HOOK=1
-  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
-  _bd_used_perl=0
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$_bd_timeout" bd hooks run pre-commit "$@"
-    _bd_exit=$?
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$_bd_timeout" bd hooks run pre-commit "$@"
-    _bd_exit=$?
-  elif command -v perl >/dev/null 2>&1; then
-    _bd_used_perl=1
-    perl -e 'alarm shift; exec @ARGV' "$_bd_timeout" bd hooks run pre-commit "$@"
-    _bd_exit=$?
-  else
-    echo >&2 "beads: hook 'pre-commit' running without timeout; install coreutils or perl to enable BEADS_HOOK_TIMEOUT"
-    bd hooks run pre-commit "$@"
-    _bd_exit=$?
-  fi
-  if [ $_bd_exit -eq 124 ] || { [ $_bd_used_perl -eq 1 ] && [ $_bd_exit -eq 142 ]; }; then
-    echo >&2 "beads: hook 'pre-commit' timed out after ${_bd_timeout}s — continuing without beads"
-    _bd_exit=0
-  fi
-  if [ $_bd_exit -eq 3 ]; then
-    echo >&2 "beads: database not initialized — skipping hook 'pre-commit'"
-    _bd_exit=0
-  fi
-  if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
+# >>> export freshness guard >>>
+# The tracked exports in .cairn/ (issues.jsonl, memories.jsonl, allocator.json, events.jsonl) are
+# the plain-text copy of the store that another clone rebuilds from, and nothing kept them current
+# but a remembered manual export (39 issues of drift in two weeks, workspace-7m8.11). Blocks a
+# commit whose STAGED exports differ from what cairn exports now, or whose events.jsonl does not
+# extend the one in HEAD. A cairn that cannot run is not a stale export: the script exits 2, says
+# the comparison did not happen, and the commit goes ahead.
+if [ -x tools/refresh-beads-exports.sh ]; then
+  tools/refresh-beads-exports.sh --cached
+  if [ $? -eq 1 ]; then exit 1; fi
+elif [ -e tools/refresh-beads-exports.sh ]; then
+  echo "beads-exports: tools/refresh-beads-exports.sh is not executable — the tracked exports were NOT compared with the store." >&2
 fi
-# --- END BEADS INTEGRATION v1.1.2 ---
+# <<< export freshness guard <<<

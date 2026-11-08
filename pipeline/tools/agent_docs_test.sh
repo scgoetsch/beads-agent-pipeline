@@ -39,13 +39,12 @@ bad() { printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; FAIL=$((FAIL+1)); }
 #
 # Tokens that are legitimately absent from a checkout, and so are not pointer rot:
 #   MEMORY.md  — named only to say DO NOT create one
-#   .beads/…   — created by `bd init`, which the installer deliberately leaves to you so the
-#                issue prefix is your choice
-#   .claude/store-cli — absent means bd; it exists only in a checkout that moved to cairn
+#   .cairn/…   — created by `cairn init`, which the installer deliberately leaves to you so the
+#                issue prefix is your choice; the database in it is git-ignored
 # Add your own here (machine-specific mounts, generated output trees). Keep the list SHORT:
 # every entry is a path this test stops checking, and an exemption you cannot justify in one
 # line is usually a pointer you should have fixed instead.
-ALLOW='^(MEMORY\.md|\.beads(/.*)?|\.claude/store-cli)$'
+ALLOW='^(MEMORY\.md|\.cairn(/.*)?)$'
 # Per-repo exemptions and anchors live OUTSIDE this file, in tools/agent_docs_test.conf (sourced
 # when present), so the test itself stays identical to the shipped one:
 #   ALLOW_EXTRA='word/.*|/mnt/data/.*'      regex alternation appended to the allowlist
@@ -53,7 +52,7 @@ ALLOW='^(MEMORY\.md|\.beads(/.*)?|\.claude/store-cli)$'
 # Keep both SHORT, for the reason above.
 ALLOW_EXTRA=''; ROOTS_EXTRA=''
 [ -f "$ROOT/tools/agent_docs_test.conf" ] && . "$ROOT/tools/agent_docs_test.conf"
-[ -z "$ALLOW_EXTRA" ] || ALLOW="^(MEMORY\.md|\.beads(/.*)?|\.claude/store-cli|$ALLOW_EXTRA)\$"
+[ -z "$ALLOW_EXTRA" ] || ALLOW="^(MEMORY\.md|\.cairn(/.*)?|$ALLOW_EXTRA)\$"
 export ROOTS_EXTRA
 
 # Extract backticked path-looking tokens from a markdown file and report unresolved ones.
@@ -74,7 +73,7 @@ for m in re.finditer(r'`([^`\n]+)`', s):
     # `/schedule` get treated as paths and the test cries wolf until nobody runs it.
     # Directories that anchor a token as a repo path. Add your own top-level dirs here;
     # anything with a file extension is checked regardless of where it sits.
-    ROOTS = ('tools/', 'docs/', 'scripts/', '.claude/', '.beads/', '.beads-hooks/') \
+    ROOTS = ('tools/', 'docs/', 'scripts/', '.claude/', '.cairn/', '.beads-hooks/') \
             + tuple(d for d in os.environ.get('ROOTS_EXTRA', '').split() if d.endswith('/'))
     has_ext = re.search(r'\.[A-Za-z0-9]{1,6}$', t) is not None
     if not (t.startswith(ROOTS) or has_ext):

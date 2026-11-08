@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# memory-curation-gate.sh — says when the bd memory store is due for curation.
+# memory-curation-gate.sh — says when the cairn memory store is due for curation.
 #
-# Incident: bd has no consolidation cadence of its own. A store that was curated once on
+# Incident: the store has no consolidation cadence of its own. A store that was curated once on
 # 2026-09-18 then grew for weeks with nothing prompting anyone to run /memory-curate again; the
 # comparison with an agent CLI whose consolidation runs automatically, gated on hours and
 # sessions, made the gap plain (2026-10-06).
@@ -14,10 +14,8 @@
 #   .claude/memory-curation.txt   one line: YYYY-MM-DD<TAB>memory-count at the last curation.
 #                                 The installer writes it once; /memory-curate rewrites it after
 #                                 ANY mode, audit included. Tracked in git so every clone agrees.
-#   the current memory count      from .beads/memories.jsonl when a tracked export exists (no bd
-#                                 call, no server needed), else from `<cli> memories`, where
-#                                 <cli> is .claude/store-cli's bd or cairn (absent: bd); the two
-#                                 print the same listing.
+#   the current memory count      from .cairn/memories.jsonl when the tracked export exists (no
+#                                 store call), else from `cairn memories`.
 #
 # An input it cannot read is said out loud. A gate that could not run must never look like a
 # gate that passed -- that is the open-and-silent shape this hook exists to prevent.
@@ -28,12 +26,9 @@ WS=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P) || {
   exit 0
 }
 STAMP="$WS/.claude/memory-curation.txt"
-EXPORT="$WS/.beads/memories.jsonl"
+EXPORT="$WS/.cairn/memories.jsonl"
 MAXD=${BD_CURATION_MAX_DAYS:-30}; case $MAXD in ''|*[!0-9]*) MAXD=30 ;; esac
 MAXN=${BD_CURATION_MAX_NEW:-10};  case $MAXN in ''|*[!0-9]*) MAXN=10 ;; esac
-# The store's CLI, by the rule of the session hooks: .claude/store-cli, bd or cairn; else bd.
-CLI=bd
-[ -f "$WS/.claude/store-cli" ] && [ "$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")" = cairn ] && CLI=cairn
 HOWTO="Run /memory-curate audit (prune/consolidate if it flags drift), then stamp .claude/memory-curation.txt with today's date<TAB>memory count."
 
 if [ ! -r "$STAMP" ]; then
@@ -49,18 +44,18 @@ case $count in
   ''|*[!0-9]*) echo "memory curation gate: stamp count '$count' is not a number — the gate did NOT run. $HOWTO"; exit 0 ;;
 esac
 
-# Count: the tracked export first (cheap, no server), `bd memories` otherwise. bd's listing puts
-# each key on a line indented by two spaces; count those lines, not the header.
+# Count: the tracked export first (cheap), `cairn memories` otherwise. The listing puts each key on
+# a line indented by two spaces; count those lines, not the header.
 if [ -r "$EXPORT" ]; then
   now=$(grep -c '^{"_type":"memory"' "$EXPORT")
-elif command -v "$CLI" >/dev/null 2>&1; then
-  listing=$("$CLI" memories 2>/dev/null) || {
-    echo "memory curation gate: no .beads/memories.jsonl and \`$CLI memories\` failed — cannot count memories, the gate did NOT run."
+elif command -v cairn >/dev/null 2>&1; then
+  listing=$(cairn memories 2>/dev/null) || {
+    echo "memory curation gate: no .cairn/memories.jsonl and \`cairn memories\` failed — cannot count memories, the gate did NOT run."
     exit 0
   }
   now=$(printf '%s\n' "$listing" | grep -acE '^  [a-z0-9]')
 else
-  echo "memory curation gate: no .beads/memories.jsonl and no $CLI on PATH — cannot count memories, the gate did NOT run."
+  echo "memory curation gate: no .cairn/memories.jsonl and no cairn on PATH — cannot count memories, the gate did NOT run."
   exit 0
 fi
 

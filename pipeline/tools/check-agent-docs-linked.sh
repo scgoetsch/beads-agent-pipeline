@@ -6,10 +6,9 @@
 # drift apart, and git carries the link to every clone. That holds as long as the
 # link survives. It does not survive a writer that replaces a file rather than
 # writing through it — write-to-temp-then-rename is the common pattern, and a
-# `bd setup claude` run may install a regular file too. The moment that happens
+# harness's own setup command may install a regular file too. The moment that happens
 # the two documents are independent again and drift silently, which is the state
-# this repo was in until 2026-08-31 (bd doctor had been reporting it; the two had
-# diverged by ~180 lines).
+# the repo this came from was in until 2026-08-31 (the two had diverged by ~180 lines).
 #
 # Run manually any time to inspect the working tree. --cached inspects the index instead;
 # .beads-hooks/pre-commit always uses that mode. Git uses the hook via
@@ -19,9 +18,6 @@
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
-# The store's CLI (.claude/store-cli: bd or cairn; absent: bd), the session hooks' rule.
-store_cli=bd
-[ -f .claude/store-cli ] && [ "$(tr -d ' \t\r\n' < .claude/store-cli)" = cairn ] && store_cli=cairn
 
 case ${1:-} in
   --cached)
@@ -126,7 +122,7 @@ agent-docs: CLAUDE.md is a REGULAR FILE, not a symlink to AGENTS.md.
 
   The two are meant to be one file so they cannot diverge. Either something
   replaced the link -- commonly a tool that writes to a temp file and renames
-  over the target, or a `bd setup claude` run -- or this clone was checked out
+  over the target, or a harness's setup command -- or this clone was checked out
   on a filesystem without symlink support, where git materialises the link as a
   small regular file containing the text "AGENTS.md".
 
@@ -159,54 +155,15 @@ if [ "$target" != "AGENTS.md" ]; then
     exit 1
 fi
 
-# The landmine this restructure defused: workspace protocol must stay OUTSIDE the
-# bd-managed markers, because `bd setup` regenerates whatever is between them.
+# The old tracker appended a marker-managed block to AGENTS.md (`BEGIN/END BEADS INTEGRATION`)
+# and regenerated it on every setup run; this guard used to measure that region, because
+# protocol written inside it was destroyed on the next regeneration. Nothing regenerates it any
+# more, and what it says (use the old CLI) is now wrong. It is the user's file, so the block is NAMED, not
+# removed, and the commit is not blocked for it.
 if command grep -q 'BEGIN BEADS INTEGRATION' AGENTS.md; then
-    managed=$(sed -n '/BEGIN BEADS INTEGRATION/,/END BEADS INTEGRATION/p' AGENTS.md)
-
-    # STRUCTURAL CHECK, and the one that actually holds. The keyword list below is a
-    # BLOCKLIST: it only catches protocol whose wording someone already thought of.
-    # Verified 2026-09-01 that a section titled "Corrections protocol", using none of
-    # those four words, passes it untouched. Size does not care about wording.
-    #
-    # The region held 22 lines when this was written and bd 1.3.0's generated template is 56;
-    # the cap sits above a legitimate `bd setup` regeneration and far below the 307 lines of
-    # workspace protocol that were once in there. It is NOT a fixed number: an absolute
-    # threshold here is the aging-threshold defect of docs/ops/checks-narrower-than-what-they-check.md
-    # (instance 10), and bd's template already grew from ~22 (1.1.2) to 56 (1.3.0). So ask bd for
-    # the block it would write (`bd setup --print`, 1.1.2+) and allow that plus the marker lines
-    # and a dozen lines of slack; 56 stays the floor on a box without bd, or a bd without --print.
-    managed_lines=$(printf '%s' "$managed" | wc -l | tr -d ' ')
-    template_lines=0
-    # With .claude/store-cli = cairn (read at the top, before --cached moves to a snapshot), bd
-    # is frozen and its block in AGENTS.md is not regenerated: the floor below stands, and the
-    # guard does not call bd.
-    if [ "$store_cli" = bd ] && bd setup --help 2>&1 | command grep -q -- '--print'; then
-        template_lines=$(bd setup --print 2>/dev/null | wc -l | tr -d ' ')
-    fi
-    case $template_lines in ''|*[!0-9]*) template_lines=0 ;; esac
-    [ "$template_lines" -lt 56 ] && template_lines=56
-    cap=$((template_lines + 14))
-    if [ "$managed_lines" -gt "$cap" ]; then
-        echo "agent-docs: the BEADS INTEGRATION region in AGENTS.md is $managed_lines lines." >&2
-        echo "  That is too large to be bd's generated block alone (its template is $template_lines lines; cap $cap)." >&2
-        echo "  \`bd setup\` REGENERATES this region — anything hand-written in it will be" >&2
-        echo "  destroyed. Move it outside the markers (above BEGIN or below END)." >&2
-        exit 1
-    fi
-
-    # Only wording that is OURS belongs on this list. 'Session Completion' was on it and was
-    # wrong: bd 1.3.0's own generated block carries a "## Session Completion" heading, so on a
-    # fresh install every commit was blocked, with advice ("move it below the END marker") that
-    # would have been wrong to follow. Found 2026-09-22 on the first box with a current bd.
-    for pattern in 'sweep\.sh' 'memgraph' 'SUPERSEDE'; do
-        if printf '%s' "$managed" | command grep -qE "$pattern"; then
-            echo "agent-docs: '$pattern' is INSIDE the BEADS INTEGRATION markers in AGENTS.md." >&2
-            echo "  \`bd setup\` regenerates that region and would silently destroy it." >&2
-            echo "  Move it outside the markers (above BEGIN or below END)." >&2
-            exit 1
-        fi
-    done
+    echo "agent-docs: AGENTS.md still carries the old tracker's managed block (BEGIN/END BEADS INTEGRATION)." >&2
+    echo "  Nothing regenerates it now, and it tells agents to use a store this repo no longer has." >&2
+    echo "  Delete it, keeping anything of yours that sits inside the markers." >&2
 fi
 
 exit 0

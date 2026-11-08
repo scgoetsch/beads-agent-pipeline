@@ -1,4 +1,4 @@
-# Concurrent sessions against one bd store
+# Concurrent sessions against one cairn store
 
 **This document is OPTIONAL and environment-dependent.** It applies only if more than one agent
 session may run against this repo at once. If you work one session at a time, none of it is
@@ -9,40 +9,49 @@ it can message — not a foreign-lab peer reviewer; peer-review tooling that sit
 pipeline uses the same word for a different thing, which is why the install flag is no longer
 `--with-peer`.
 
-Nothing else in the pipeline assumes concurrent sessions. The one piece of concurrency machinery that always
-ships is the `flock` in `tools/dolt-guard.sh`, which stops two shells racing to start the Dolt
-server; that costs a single-session user nothing and prevents a real race when it matters.
+Nothing else in the pipeline assumes concurrent sessions. (Until 0.2.0 one piece always shipped:
+the `flock` in `tools/dolt-guard.sh`, which stopped two shells racing to start the old tracker's
+Dolt server. cairn has no server, so there is nothing to race.)
 
 ## The SET-not-append trap becomes a race
 
-**Several agent sessions can run against one bd store at once.** That is *safe at the storage
-layer* and needs no coordination: there is one `dolt sql-server`, every session is a client of
-it, and `bd` opens a connection per command rather than holding one. Writes are interleaved SQL
-transactions serialised by the server — no corruption, no lost rows. Verified by running four
-memory writes from two sessions concurrently: all four landed, graph clean.
+**Several agent sessions can run against one cairn store at once.** That is *safe at the storage
+layer* and needs no coordination: the store is one SQLite database (`.cairn/cairn.db`, WAL mode),
+and each write is one `BEGIN IMMEDIATE` transaction, so writes from separate processes queue
+rather than interleave. Measured on scratch stores (cairn 0.4.0): 8 parallel `cairn remember` on
+distinct keys, 10 and then 200 parallel `cairn note` on one issue, 6 parallel `cairn create`, 2
+parallel `cairn update` of different fields on one issue — everything landed, no error, `cairn
+check` clean. The queue has a limit: a writer still waiting after 5 s exits 2 with `database is
+locked` and writes nothing. That failure is loud, so run the write again. A second working tree
+made with `tools/new-worktree.sh` shares the same database through `.cairn/redirect`.
 
-**What concurrency changes is the SET rule, not the database.** Because `bd remember --key X` and
-`bd update --<field>` REPLACE rather than append, a second session can overwrite between your read
-and your write: you `bd recall`, they rewrite, you write back your stale-plus-edit body, and their
-change is gone. `bd show` / `bd memories` display only what survived, so it looks like one clean
-write. Within a single session this is a mistake you can avoid by reading first; across sessions it
-is a genuine race with no error message.
+**What concurrency changes is the SET rule, not the database.** Because `cairn remember --key X`
+and `cairn update --<field>` REPLACE rather than append, a second session can overwrite between
+your read and your write: you `cairn recall`, they rewrite, you write back your stale-plus-edit
+body, and their change is gone. `cairn show` / `cairn memories` display only what survived, so it
+looks like one clean write (measured: two parallel `cairn remember` on one key, one survivor, both
+exit 0). `cairn history --memory X` still holds the lost body, but nothing tells you to look.
+Within a single session this is a mistake you can avoid by reading first; across sessions it is a
+genuine race with no error message.
 
 Practice, in descending order of value:
 
 1. **Partition by scope, not by lock.** Sessions working disjoint issues and disjoint memory keys
    cannot collide, and this is what actually keeps the store safe day to day. Before a session
-   starts, know which area it owns.
-2. **`bd recall <key>` immediately before `bd remember --key <key>`** — not a recall from earlier
-   in the session. Narrow the window rather than trusting a stale read.
-3. **`bd note <id>`** for anything appending to a running record, always.
-4. **Serialise `bd dolt push`.** Simultaneous pushes to a shared blob store are the likeliest place
-   to see damage; the metadata branch `__dolt_remote_info__` force-updates on push. Have one session
-   push at close, or stagger them.
+   starts, know which area it owns. Issues are enforced: `--claim` is compare-and-swap on the
+   assignee, per session where `BEADS_ACTOR` is exported. Memory keys are not.
+2. **`cairn recall <key>` immediately before `cairn remember --key <key>`** — not a recall from
+   earlier in the session. Narrow the window rather than trusting a stale read.
+3. **`cairn note <id>`** for anything appending to a running record, always.
+4. **One working tree per session that edits files.** In one checkout there is no merge: two
+   sessions editing one file overwrite each other on disk and git says nothing, and the index is
+   shared, so a plain `git commit` sweeps in what the other session staged. Stage named paths and
+   commit by pathspec (`git commit -m ... -- <paths>`), or give each session its own tree.
 
 If two sessions may edit the same key, say so in the memory body rather than assuming the other
-session will read your mind. File-level collisions (`AGENTS.md`, `.claude/memory-hot.txt`) are
-ordinary git conflicts and git will tell you — it is only the bd layer that fails silently.
+session will read your mind. **More than one clone** (another machine) is a different case: each
+has its own store, git carries the four exports, and `cairn sync` refuses a store whose history
+has diverged from them — there is no merge of two clones' writes, so decide which machine writes.
 
 ## Two decay patterns to look for specifically
 
@@ -61,7 +70,7 @@ repo-specific instructions to sessions that are not in your repo.**
 
 Learned directly: asked to share a change with the other sessions, an agent sent a ~30-line
 briefing to all three live peers. Only one plausibly shared the workspace. One replied that it was
-in a different repo with its own `.beads`, so none of it applied; the others reported the message
+in a different repo with its own store, so none of it applied; the others reported the message
 as noise.
 
 **The cause was a missing fact, not a judgement slip.** A peer listing typically reports name,
@@ -82,8 +91,8 @@ What to do instead, cheapest first:
 ### An issue-prefix does not imply a separate store
 
 A peer reasoning "my ids are `ab-*` and yours are `xy-*`, so we cannot collide" has the right
-conclusion for the wrong reason. **bd resolves its store by upward directory discovery, not by
-prefix.** What separates two sessions is having separate `.beads/` directories. A session working
+conclusion for the wrong reason. **cairn resolves its store by upward directory discovery, not by
+prefix.** What separates two sessions is having separate `.cairn/` stores. A session working
 anywhere under a repo hits that repo's store whatever its task is — and the SET-not-append
 semantics above turn that into a silent overwrite rather than a visible conflict.
 

@@ -46,11 +46,13 @@ Open is a legitimate choice. **Open and silent is not.**
 
 Both are silent:
 
-- **`bd hooks install` without `--shared`** writes to `.git/hooks/`, which git ignores while
-  `core.hooksPath` is set. bd's hooks then stop firing with no error. Always pass `--shared`.
-- **`core.hooksPath` disagreeing with where bd installed.** bd supports `.git/hooks` (default),
-  `.beads/hooks` (`--beads`) and `.beads-hooks` (`--shared`); any is fine *so long as
-  `core.hooksPath` names the one bd actually used*. A mismatch leaves the hooks ignored.
+- **`core.hooksPath` unset in a clone.** It is local config, so a fresh clone has
+  `.beads-hooks/` in the tree and nothing running it. The session-start payload says so at the
+  top; under any other harness, check `git config core.hooksPath` yourself.
+- **A hook written to `.git/hooks/` while `core.hooksPath` is set.** Git ignores `.git/hooks/`
+  entirely then, so a tool that installs its hook there stops firing with no error. Put such a
+  stanza in `.beads-hooks/<hook>` instead. (The old tracker's own hook installer was the usual
+  case; this release removes its managed blocks from `.beads-hooks/` on install.)
 
 Re-running the installer is how you repair either. It is idempotent.
 

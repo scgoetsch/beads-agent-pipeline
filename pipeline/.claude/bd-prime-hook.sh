@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # bd-prime-hook.sh — TIERED memory injection (see .claude/skills/memory-curate, mode `tier`).
 # Emits, in this order: alarms, the session rules, site-check output, a key-only index of the
-# memory store, the HOT memories (memory-hot.txt) in full, then bd's workflow context and command
-# reference. Full store stays in bd; anything not hot is pulled on demand via `bd recall <key>`.
+# memory store, the HOT memories (memory-hot.txt) in full, then cairn's workflow context. The full
+# store stays in cairn; anything not hot is pulled on demand via `cairn recall <key>`.
 #
 # THE HOST HAS A BUDGET, AND IT IS SMALL. Claude Code keeps only a 2,000-byte preview of any one
 # SessionStart hook command's stdout above 10,000 bytes; the rest goes to a file. Measured
@@ -13,7 +13,7 @@
 # outside -- the open-and-silent shape this pipeline exists to prevent. So this hook budgets:
 # BD_PRIME_BUDGET (default 10000; 0 = no limit) bounds what it emits; the load-bearing parts come
 # first; index keys and hot bodies that do not fit are NAMED instead of silently lost;
-# the bd context is the first thing dropped; any trimming is announced at the top. Guard: tools/bd-prime-hook_test.sh.
+# the store's context is the first thing dropped; any trimming is announced at the top. Guard: tools/bd-prime-hook_test.sh.
 #
 # REPO ROOT COMES FROM THIS FILE'S OWN LOCATION (.claude/ -> repo root), never a literal.
 # This is load-bearing, and it was learned the hard way: an earlier version said
@@ -26,47 +26,25 @@ WS=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd -P)
 if [ -z "$WS" ] || [ ! -d "$WS/.claude" ]; then
   # SessionStart stdout becomes the session payload, so this alarm is the loud path.
   echo "# 🚨 bd-prime-hook: CANNOT RESOLVE THE WORKSPACE from '${BASH_SOURCE[0]:-$0}'."
-  echo "# This session has NO project rules and NO bd memories — do not treat it as primed."
+  echo "# This session has NO project rules and NO memories — do not treat it as primed."
   echo "# Fix: re-run the installer against this repo, then check .claude/settings.json."
   exit 0
 fi
 cd "$WS" || { echo "# 🚨 bd-prime-hook: cannot cd to '$WS' — session NOT primed."; exit 0; }
 
-# ── The store's CLI: bd (default) or cairn ────────────────────────────────────
-# .claude/store-cli holds one word, bd or cairn. It is TRACKED, so every session, every harness and
-# the git hooks agree; there is deliberately no environment override (one session must not write
-# a store the others have left). Absent: the CLI is bd and neither name is write-blocked, which is
-# how every install that never opted in keeps working. Present: the named CLI runs, and a write
-# through the OTHER name is blocked below, because it would land in a store nobody reads.
-# Keep this block identical in bd-prime-hook.sh, bd-stop-hook.sh and .beads-hooks/pre-commit.
-STORE_MODE=""
-if [ -f "$WS/.claude/store-cli" ]; then
-    STORE_MODE=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
-    case $STORE_MODE in
-        bd|cairn) ;;
-        *) echo "⚠ .claude/store-cli says '$STORE_MODE' (expected bd or cairn) — using bd, nothing write-blocked." >&2
-           STORE_MODE="" ;;
-    esac
-fi
-STORE_CLI=${STORE_MODE:-bd}
-
-# (SessionStart stderr is not shown: the rules below repeat an unknown value in the payload.)
-STORE_CLI_BAD=""
-[ -f "$WS/.claude/store-cli" ] && [ -z "$STORE_MODE" ] && STORE_CLI_BAD=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
-
-# ── SESSION IDENTITY FOR bd's AUDIT TRAIL ──────────────────────────────────────────────────────
-# bd stamps an actor on created_by, on the assignee a --claim sets, on comment authors and on the
-# field-change rows of .beads/interactions.jsonl; the default is git user.name, so every session of
-# one human is one name and the log cannot say which run did what (188 of 188 rows on the box that
-# motivated this, 2026-10-10). Claude Code hands SessionStart hooks CLAUDE_ENV_FILE: assignments
-# appended there are sourced before every later Bash call of the session and inherited by its
-# children (git hooks, the exports refresh, bd dolt push). So: BEADS_ACTOR=<git user.name>/claude/<8>
-# -- the human first, so a search for the name still hits every old and new row; then the harness;
-# then 8 hex chars of the hook payload's session_id, which prefix-match the claims record under
-# .git/bd-session-claims/ and the transcript file. Precedence in bd: --actor > BEADS_ACTOR > config.
-# CONSEQUENCE, by design: `bd update --claim` is compare-and-swap on the assignee, so a second
+# ── SESSION IDENTITY FOR THE STORE'S AUDIT TRAIL ───────────────────────────────────────────────
+# cairn stamps an actor on created_by, on the assignee a --claim sets, on comment authors and on
+# every event of its history; the default is git user.name, so every session of one human is one
+# name and the log cannot say which run did what (188 of 188 rows on the box that motivated this,
+# 2026-10-10). Claude Code hands SessionStart hooks CLAUDE_ENV_FILE: assignments appended there are
+# sourced before every later Bash call of the session and inherited by its children (git hooks, the
+# exports refresh). So: BEADS_ACTOR=<git user.name>/claude/<8> -- the human first, so a search for
+# the name still hits every old and new row; then the harness; then 8 hex chars of the hook
+# payload's session_id, which prefix-match the claims record under .git/bd-session-claims/ and the
+# transcript file. BEADS_ACTOR is the name cairn reads (kept from beads; cairn README).
+# CONSEQUENCE, by design: `cairn update --claim` is compare-and-swap on the assignee, so a second
 # session is refused by name and takes over with --assignee first (logged); bd-prerun-hook.sh's
-# stop reminder says how. BD_PRIME_SESSION_ACTOR=0 opts out. Never reads a terminal. Writes nothing
+# block message says how. BD_PRIME_SESSION_ACTOR=0 opts out. Never reads a terminal. Writes nothing
 # to stdout here: a FAILED export is named by emit_session_actor at the top of the payload; a host
 # without CLAUDE_ENV_FILE is not a failure. Guard: tools/bd-prime-hook_test.sh.
 SESSION_ACTOR=""; SESSION_ACTOR_FAIL=""
@@ -207,29 +185,22 @@ emit_hooks_unwired() {
 emit_session_rules() {
   echo "# 🚨 MANDATORY SESSION RULES — READ BEFORE RESPONDING 🚨"; echo ""
   if [ -f "$WS/projects.tsv" ]; then
-    # A project registry scopes the work: the brief below replaces "run bd ready NOW", which
+    # A project registry scopes the work: the brief below replaces "run cairn ready NOW", which
     # ranked every project's backlog together (on one store, 45 of 68 top items belonged to a
     # retired project).
     echo "1. Work comes from the ACTIVE projects listed below; inactive ones stay parked unless the user reopens them."
-    echo "2. Use \`$STORE_CLI create ... -l project:<name>\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+    echo "2. Use \`cairn create ... -l project:<name>\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
   else
-    echo "1. Run \`$STORE_CLI ready\` NOW to check for available work before doing anything else."
-    echo "2. Use \`$STORE_CLI create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
+    echo "1. Run \`cairn ready\` NOW to check for available work before doing anything else."
+    echo "2. Use \`cairn create\` for ALL task tracking — never TodoWrite, TaskCreate, or markdown lists."
   fi
-  echo "3. Use \`$STORE_CLI update <id> --claim\` before starting any issue."
-  echo "4. Use \`$STORE_CLI close <id>\` when work is complete."
-  echo "5. Use \`$STORE_CLI remember --key <slug>\` for persistent knowledge — never MEMORY.md files."
-  if [ "$STORE_MODE" = cairn ]; then
-    echo "6. This checkout's store is written with \`cairn\` (.claude/store-cli). \`bd\` is frozen here: EVERY bd call"
-    echo "   is BLOCKED (\`bd dolt push\` included; a read would answer from the old store without saying so)."
-    echo "   Where AGENTS.md or a memory says \`bd <verb>\`, run \`cairn <verb>\` with the same flags; the gate names"
-    echo "   the cairn verb, or says cairn has none (search, label, history, ...)."
-  fi
-  [ -n "$STORE_CLI_BAD" ] && echo "⚠ .claude/store-cli says '$STORE_CLI_BAD' (expected bd or cairn) — using bd, nothing write-blocked."
+  echo "3. Use \`cairn update <id> --claim\` before starting any issue."
+  echo "4. Use \`cairn close <id>\` when work is complete."
+  echo "5. Use \`cairn remember --key <slug>\` for persistent knowledge — never MEMORY.md files."
   echo ""
   emit_projects
 }
-# OPTIONAL PROJECT REGISTRY. When the repo keeps a projects.tsv (one bd store, several projects,
+# OPTIONAL PROJECT REGISTRY. When the repo keeps a projects.tsv (one store, several projects,
 # each marked active or inactive) and a tools/projects.py beside it, `projects.py brief` prints a
 # ~1.5 KB brief: per active project, its ready count and top items. Neither file is part of the
 # pipeline payload yet; a repo without the registry gets nothing here. A registry WITHOUT the
@@ -242,15 +213,17 @@ emit_projects() {
   if out=$($bound python3 "$tool" brief 2>&1); then out=${out//$'\r'/}; printf '%s\n\n' "$out"
   else echo "## ⚠ tools/projects.py brief failed — run it by hand:"; printf '%s\n\n' "$out" | head -c 400; fi
 }
-# The session-actor export above names its own failure here, at the top, so a session whose bd
+# The session-actor export above names its own failure here, at the top, so a session whose
 # writes will carry the bare user.name knows it before its first write. Silent when it worked and
 # when the host gave no CLAUDE_ENV_FILE (that host has no such mechanism; nothing to report).
 emit_session_actor() {
   [ -n "$SESSION_ACTOR_FAIL" ] || return 0
-  echo "# ⚠ bd-prime-hook: BEADS_ACTOR NOT exported for this session ($SESSION_ACTOR_FAIL); bd writes will"
+  echo "# ⚠ bd-prime-hook: BEADS_ACTOR NOT exported for this session ($SESSION_ACTOR_FAIL); cairn writes will"
   echo "#   carry the bare git user.name. A claim another session holds still needs --assignee to take over."; echo ""
 }
-emit_rules() { emit_hooks_unwired; emit_session_actor; emit_session_rules; emit_site_checks; }
+# s.sync (written below, before any fallback can run) carries the store's own alarms: no cairn, no
+# store yet, a refused sync. A fallback is exactly when they matter.
+emit_rules() { emit_hooks_unwired; cat "$TMPD/s.sync" 2>/dev/null; emit_session_actor; emit_session_rules; emit_site_checks; }
 # Every fallback SAYS it is one, and why. The full dump is the degraded path -- it was measured
 # at 76 KB on a 40-memory store, far past what the host shows -- and a silent fallback reads
 # exactly like the tiered output it replaced. An EMPTY hot list is not a reason to fall back:
@@ -260,14 +233,14 @@ emit_rules() { emit_hooks_unwired; emit_session_actor; emit_session_rules; emit_
 # the cut is announced on line 2, because a 36 KB dump that the host reduces to its first
 # 2,000 bytes is not "the full dump" however the hook labels it.
 fallback_full() {
-  local banner="# ⚠ bd-prime-hook: $1 — emitting the FULL $STORE_CLI prime dump (no memory tiering)."
+  local banner="# ⚠ bd-prime-hook: $1 — emitting the FULL cairn prime dump (no memory tiering)."
   local note="" used total dump room
   echo "$banner"
   emit_rules > "$TMPD/s.rules_all"
-  if ! "$STORE_CLI" prime > "$TMPD/dump" 2>"$ERR"; then { echo "# WARNING: $STORE_CLI prime failed (is $STORE_CLI installed? .claude/store-cli selects it) — this session is NOT primed with the store's context"; cat "$ERR"; } >> "$TMPD/dump"; fi
+  if ! cairn prime > "$TMPD/dump" 2>"$ERR"; then { echo "# WARNING: cairn prime failed (is cairn installed, and is there a store? cairn init -p <PREFIX>) — this session is NOT primed with the store's context"; cat "$ERR"; } >> "$TMPD/dump"; fi
   used=$(( ${#banner} + 1 + $(size "$TMPD/s.rules_all") + ${#FOOTER} + 2 )); dump=$(size "$TMPD/dump"); total=$((used + dump))
   if [ "$BUDGET" -gt 0 ] && [ "$total" -gt "$BUDGET" ]; then
-    note="# ⚠ bd-prime-hook: this dump is $total bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000) — CUT to fit. Run \`$STORE_CLI prime\` yourself for all of it; fix the cause named above so the tiered path can run, and keep the store lean (memory-curate)."
+    note="# ⚠ bd-prime-hook: this dump is $total bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000) — CUT to fit. Run \`cairn prime\` yourself for all of it; fix the cause named above so the tiered path can run, and keep the store lean (memory-curate)."
     echo "$note"; used=$((used + ${#note} + 1))
   fi
   cat "$TMPD/s.rules_all"
@@ -279,43 +252,34 @@ fallback_full() {
   fi
   echo ""; echo "$FOOTER"
 }
-# Under cairn, catch up first (workspace-7m8.21): another clone's work may have come in with a
-# pull, and every read below would show the store as it was. `cairn sync` rebuilds a store that
-# is behind the tracked exports, builds one in a fresh clone, leaves a store that is equal or
-# ahead alone, and refuses when two clones both wrote; it is said at the top of the payload.
+# Catch up first (workspace-7m8.21): another clone's work may have come in with a pull, and every
+# read below would show the store as it was. `cairn sync` rebuilds a store that is behind the
+# tracked exports, builds one in a fresh clone (from .cairn/config.json and the four files),
+# leaves a store that is equal or ahead alone, and refuses when two clones both wrote; it is said
+# at the top of the payload. No .cairn/ at all is a repo whose store was never created: said too.
 : > "$TMPD/s.sync"
-if [ "$STORE_CLI" = cairn ]; then
-  if sync_out=$(cairn sync 2>&1); then
-    case $sync_out in Synced*)
-      { echo "# ℹ The cairn store was behind the tracked exports and was brought up to them:"
-        echo "#   $sync_out"; echo ""; } > "$TMPD/s.sync" ;;
-    esac
-  else
-    { echo "# 🚨 cairn sync REFUSED — the store and .beads/ are out of step, and writes are refused until"
-      echo "#    that is resolved: $(printf '%s' "$sync_out" | head -c 600)"; echo ""; } > "$TMPD/s.sync"
-  fi
-fi
-# bd's own hooks keep running bd under cairn unless the two tools below were run at the switch and
-# after every `bd hooks install`, `bd init` or `bd setup`: git hooks (`bd hooks run <hook>`) and
-# harness hooks that call bd (`bd prime` at SessionStart) read, sync or push the frozen store, and
-# the prerun gate never sees them. Nothing else would say so (workspace-pg6h); a tool the install
-# does not have is not run.
-if [ "$STORE_CLI" = cairn ]; then
-  for t in store-cli-git-hooks store-cli-harness-hooks; do
-    [ -x "$WS/tools/$t.sh" ] || continue
-    if ! t_out=$("$WS/tools/$t.sh" --check 2>&1); then
-      { echo "# 🚨 bd's own hooks still run bd under cairn, against the FROZEN store — run tools/$t.sh:"
-        echo "#    $(printf '%s' "$t_out" | tr '\n' ' ' | head -c 400)"; echo ""; } >> "$TMPD/s.sync"
-    fi
-  done
+if ! command -v cairn >/dev/null 2>&1; then
+  { echo "# 🚨 cairn is not on PATH — this session has NO store: no issues, no memories (pipeline README: requirements)."
+    echo ""; } > "$TMPD/s.sync"
+elif [ ! -d "$WS/.cairn" ]; then
+  { echo "# ⚠ This repo has no cairn store yet: \`cairn init -p <PREFIX>\`, then tools/refresh-beads-exports.sh and commit .cairn/."
+    echo ""; } > "$TMPD/s.sync"
+elif sync_out=$(cairn sync 2>&1); then
+  case $sync_out in Synced*)
+    { echo "# ℹ The cairn store was behind the tracked exports and was brought up to them:"
+      echo "#   $sync_out"; echo ""; } > "$TMPD/s.sync" ;;
+  esac
+else
+  { echo "# 🚨 cairn sync REFUSED — the store and its tracked exports are out of step, and writes are refused until"
+    echo "#    that is resolved: $(printf '%s' "$sync_out" | head -c 600)"; echo ""; } > "$TMPD/s.sync"
 fi
 command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; }
 [ -e "$HOTFILE" ] || { fallback_full "$HOTFILE is missing (an empty file is fine)"; exit 0; }
-"$STORE_CLI" export --include-memories -o "$MM" 2>/dev/null || { fallback_full "$STORE_CLI export --include-memories failed"; exit 0; }
-[ -f "$MM" ] || { fallback_full "$STORE_CLI export exited 0 but wrote no file"; exit 0; }
+cairn export --include-memories -o "$MM" 2>/dev/null || { fallback_full "cairn export --include-memories failed"; exit 0; }
+[ -f "$MM" ] || { fallback_full "cairn export exited 0 but wrote no file"; exit 0; }
 # A store with NO memories yet is the normal state of a fresh project, not a failed export: the
 # tiered output is simply "0 of 0". Treating it as a fallback put a warning banner on every
-# session of a new project until its first `bd remember`. The failure this guards against -- an
+# session of a new project until its first `cairn remember`. The failure this guards against -- an
 # export that exits 0 and writes nothing -- is the missing-file case above.
 #
 # Every section is built into its own scratch file first, so the whole payload can be measured
@@ -323,21 +287,14 @@ command -v jq >/dev/null 2>&1 || { fallback_full "jq is not installed"; exit 0; 
 { emit_hooks_unwired; cat "$TMPD/s.sync"; } > "$TMPD/s.unwired"
 emit_session_rules > "$TMPD/s.rules"
 emit_site_checks   > "$TMPD/s.site"
-# bd workflow context + command reference, with the full memory dump removed
-# (delete from "## Persistent Memories" up to but NOT including "## Core Rules")
-# Capture status BEFORE filtering. A pipeline ending in sed hid bd's failure, and the
-# captured stderr was then discarded. Put the alarm with the never-dropped top sections.
-# cairn prints its own layout and has no "## Core Rules": bd's range would delete from the first
-# memory heading to the END of it. Its context is everything before its first memory heading;
-# the memories are tiered below from the export, as for bd.
-if "$STORE_CLI" prime > "$TMPD/prime" 2>"$ERR"; then
-  if [ "$STORE_CLI" = cairn ]; then
-    sed '/^## Persistent Memories/,$d' "$TMPD/prime" > "$TMPD/s.ctx"
-  else
-    sed '/^## Persistent Memories/,/^## Core Rules/{/^## Core Rules/!d;}' "$TMPD/prime" > "$TMPD/s.ctx"
-  fi
+# cairn's workflow context: everything before its first memory heading. cairn prime prints its own
+# memory tiers; the hook tiers the memories itself below, from the export, against its budget.
+# Capture status BEFORE filtering. A pipeline ending in sed hid a failure, and the captured stderr
+# was then discarded. Put the alarm with the never-dropped top sections.
+if cairn prime > "$TMPD/prime" 2>"$ERR"; then
+  sed '/^## Persistent Memories/,$d' "$TMPD/prime" > "$TMPD/s.ctx"
 else
-  { echo "# WARNING: $STORE_CLI prime failed — workflow context unavailable; memories below came from export."
+  { echo "# WARNING: cairn prime failed — workflow context unavailable; memories below came from export."
     head -c 1000 "$ERR"; echo; } >> "$TMPD/s.unwired"
   : > "$TMPD/s.ctx"
 fi
@@ -358,11 +315,11 @@ UNKNOWN=$(jq -r --argjson hot "$HOTLIST" -s '[.[] | select(._type=="memory") | .
 {
   echo ""; echo "## Persistent Memories — HOT tier ($HOTN selected keys of $TOTAL total; bodies included while budget permits)"
   if [ -n "$UNKNOWN" ]; then
-    echo "> ⚠ .claude/memory-hot.txt names memories that are not in the store — fix the list or \`$STORE_CLI remember\` them:"
+    echo "> ⚠ .claude/memory-hot.txt names memories that are not in the store — fix the list or \`cairn remember\` them:"
     printf '%s\n' "$UNKNOWN" | sed 's/^/>   /'; echo ""
   fi
-  [ "$TOTAL" -eq 0 ] && echo "_The store has no memories yet — nothing to tier. \`$STORE_CLI remember --key <slug> \"<fact>\"\` adds the first._"
-  echo "_Only recurring-mistake guards are injected in full below. Retrieve any other memory on demand with \`$STORE_CLI memories <keyword>\`._"; echo ""
+  [ "$TOTAL" -eq 0 ] && echo "_The store has no memories yet — nothing to tier. \`cairn remember --key <slug> \"<fact>\"\` adds the first._"
+  echo "_Only recurring-mistake guards are injected in full below. Retrieve any other memory on demand with \`cairn memories <keyword>\`._"; echo ""
 } > "$TMPD/s.hothdr"
 # One scratch file per hot body, in memory-hot.txt order, so the budget can keep the first N
 # that fit and name the rest. hot.keys holds the key for each file, line for line.
@@ -394,11 +351,11 @@ jq -r --argjson hot "$HOTLIST" \
    "$MM" | tr -d '\r' > "$INDEX"
 EXPECT=$((TOTAL - HOTN)); GOT=$(grep -c . "$INDEX")
 {
-  echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`$STORE_CLI memories <keyword>\` or \`$STORE_CLI recall <key>\`)"
+  echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`cairn memories <keyword>\` or \`cairn recall <key>\`)"
   echo "_Keys only. They are written as sentences precisely so this index does not need previews._"
   if [ "$GOT" -ne "$EXPECT" ]; then
     echo "> ⚠ INDEX IS INCOMPLETE — listing $GOT of an expected $EXPECT memories."
-    echo "> Do not read the list below as the full set. Use \`$STORE_CLI memories <keyword>\` to search the"
+    echo "> Do not read the list below as the full set. Use \`cairn memories <keyword>\` to search the"
     echo "> store directly, and fix .claude/bd-prime-hook.sh."; echo ""
   fi
   cat "$INDEX"
@@ -418,16 +375,16 @@ if [ "$BUDGET" -gt 0 ]; then
     # NONE and say so plainly; search is the discovery path. Never implies the list is complete.
     INDEX_PARTIAL=1; INDEX_SHOWN=0
     {
-      echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`$STORE_CLI memories <keyword>\` or \`$STORE_CLI recall <key>\`)"
-      echo "> INDEX OMITTED — $EXPECT keys are too many to list within the host budget. Search with \`$STORE_CLI memories <keyword>\`; list every key with \`$STORE_CLI export --include-memories\`."
+      echo ""; echo "## Persistent Memories — index ($EXPECT more; retrieve full text with \`cairn memories <keyword>\` or \`cairn recall <key>\`)"
+      echo "> INDEX OMITTED — $EXPECT keys are too many to list within the host budget. Search with \`cairn memories <keyword>\`; list every key with \`cairn export --include-memories\`."
     } > "$TMPD/s.index"
   fi
 fi
 # ---- assemble against the budget ------------------------------------------------------------
 # Priority when something has to go: alarms, rules, site checks and hot header stay first;
 # the index is replaced by an explicit OMITTED line if its keys would exceed the cap. Hot bodies are kept
-# in list order while they fit; the bd context goes first, because AGENTS.md carries bd's quick reference and
-# `bd prime` prints the rest on demand. Whatever is dropped is named at the top so the reader
+# in list order while they fit; the store's context goes first, because AGENTS.md carries cairn's
+# quick reference and `cairn prime` prints the rest on demand. Whatever is dropped is named at the top so the reader
 # can fetch it, instead of not knowing it existed.
 fixed=$(( $(size "$TMPD/s.unwired") + $(size "$TMPD/s.rules") + $(size "$TMPD/s.site") + $(size "$TMPD/s.index") + $(size "$TMPD/s.hothdr") + ${#FOOTER} + 2 ))
 hot_total=0; keys_bytes=0
@@ -452,12 +409,12 @@ done
 ctx_in=0; if [ $((used + ctx)) -le "$BUDGET" ]; then ctx_in=1; used=$((used + ctx)); fi
 if [ -n "$dropped" ]; then
   echo "# ⚠ bd-prime-hook: PAYLOAD TRIMMED TO FIT THIS HOST — the tiered output is $all bytes and the host shows at most BD_PRIME_BUDGET=$BUDGET per hook (Claude Code: a 2,000-byte preview above 10,000). Not shipped, fetch on demand:"
-  echo "#   hot memories, in full via \`$STORE_CLI recall <key>\`:$dropped"
-  [ "$ctx_in" -eq 0 ] && echo "#   $STORE_CLI's workflow context and command reference: run \`$STORE_CLI prime\`"
+  echo "#   hot memories, in full via \`cairn recall <key>\`:$dropped"
+  [ "$ctx_in" -eq 0 ] && echo "#   cairn's workflow context and command reference: run \`cairn prime\`"
   echo "#   Fix: trim .claude/memory-hot.txt or shrink the bodies it names (/memory-curate). BD_PRIME_BUDGET=0 lifts the cap on a host that has none."; echo ""
 elif [ "$ctx_in" -eq 0 ]; then
-  # Expected on a large store, not an alarm: AGENTS.md carries bd's quick reference.
-  echo "# bd-prime-hook: $STORE_CLI's workflow context is not inlined (host budget) — run \`$STORE_CLI prime\` for it."; echo ""
+  # Expected on a large store, not an alarm: AGENTS.md carries cairn's quick reference.
+  echo "# bd-prime-hook: cairn's workflow context is not inlined (host budget) — run \`cairn prime\` for it."; echo ""
 fi
 cat "$TMPD/s.unwired" "$TMPD/s.rules" "$TMPD/s.site" "$TMPD/s.index" "$TMPD/s.hothdr"
 emit_hot "$kept"

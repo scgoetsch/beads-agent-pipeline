@@ -12,15 +12,16 @@ The adapter does not fork the policy in JavaScript. It calls the installed `.cla
 
 | Pi event | Action |
 | --- | --- |
-| `session_start` | Run `tools/dolt-guard.sh` (Pi's non-interactive Bash does not source `~/.bashrc`), then `bd-prime-hook.sh`; cache its budgeted stdout. |
-| `before_agent_start` | Put cached context in a system-prompt section, once per agent run. **Do not rerun bd here.** The section is not summarized away by compaction. |
+| `session_start` | Run `bd-prime-hook.sh` (which runs `cairn sync` first); cache its budgeted stdout. |
+| `before_agent_start` | Put cached context in a system-prompt section, once per agent run. **Do not rerun the prime hook here.** The section is not summarized away by compaction. |
 | `session_before_compact` | Refresh the cache with `bd-prime-hook.sh`, as Claude Code's PreCompact does; the next run uses the fresh section. |
-| `tool_call` (`bash`) and `user_bash` (`!`) | Send `{"tool_name":"Bash","tool_input":{"command":"..."},"session_id":"pi-<id>","hook_event_name":"PreToolUse"}` on stdin to `bd-prerun-hook.sh`. Exit 2 blocks (for `!`, return an error result); exit 0 allows. Missing, failing or timed-out hook **allows with a visible warning**, never silently. The hook records this session's `bd update <id> --claim` and scopes the scripts gate to it. |
+| `tool_call` (`bash`) and `user_bash` (`!`) | Send `{"tool_name":"Bash","tool_input":{"command":"..."},"session_id":"pi-<id>","hook_event_name":"PreToolUse"}` on stdin to `bd-prerun-hook.sh`. Exit 2 blocks (for `!`, return an error result); exit 0 allows. Missing, failing or timed-out hook **allows with a visible warning**, never silently. The hook records this session's `cairn update <id> --claim` and scopes the scripts gate to it. |
 | `agent_settled` | Fires after **every** agent run, not at session end. Run `bd-stop-hook.sh` as a turn end (`{"hook_event_name":"Stop","session_id":...}`): it prints only this session's claimed in-progress issues, only when that set changed; show it as an info notice (stderr in print mode). Never use `agent_before_settle` / `continue:true`: an open issue would loop. |
 | `session_shutdown` | On `quit` or `new` only (`reload`/`resume`/`fork` continue the session): run the stop hook as `SessionEnd`, the close reminder for this session's still-open claims, as a warning. |
 
-**Why session-scoped.** The bd store is shared by every session and project on a machine, and
-every session claims as the same actor, so bd cannot say whose an in-progress issue is. Globally,
+**Why session-scoped.** The store is shared by every session in the checkout and its worktrees,
+and without a session-scoped actor every session claims as the same one, so the store cannot say
+whose an in-progress issue is. Globally,
 the reminder repeated every other session's work after every turn, and the scripts gate was
 licensed by anyone's stale claim. The id is Pi's own (`ctx.sessionManager.getSessionId()`), so a
 resumed session keeps its record; work picked up from another session is re-claimed (`--claim`
@@ -39,7 +40,7 @@ The `_test.sh` feeds simulated Pi events through the actual TypeScript handler a
 block and fail-open paths, priming, compaction refresh and settled notice; it also runs in the
 fresh install in `selftest.sh`. The separate live smoke copies **this checkout's** adapter and
 pretool guard into a throwaway repo (so a stale installed copy cannot pass by testing source),
-replaces its bd/Dolt helpers with no-op fixtures, puts a harmless `pkill` stub on PATH and
+replaces its prime and stop hooks with no-op fixtures, puts a harmless `pkill` stub on PATH and
 invokes the **real Pi CLI** with `--approve`. It checks the JSON event stream for a blocked model Bash call
 and refuses to pass if the stub runs. It sends one short prompt to your configured provider and
 needs model authentication and `timeout`; if the model never calls Bash, it reports

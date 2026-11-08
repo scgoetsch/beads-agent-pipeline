@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# PreToolUse hook — blocks bare pkill/killall and a keyless `bd remember`, gates analysis
-# scripts on an in_progress issue (a knob, see SCRIPT_DIRS_RE below), records what each
-# session claims (read by bd-stop-hook.sh), and, when .claude/store-cli names the store's CLI,
-# blocks the other one: every bd call under cairn (bd's store is frozen and would answer
-# silently), cairn's writes under bd. Both CLIs (bd, and cairn, its replacement) are parsed.
+# PreToolUse hook — blocks bare pkill/killall and a keyless or handoff-shaped `cairn remember`,
+# gates analysis scripts on an in_progress issue (a knob, see SCRIPT_DIRS_RE below), and records
+# what each session claims (read by bd-stop-hook.sh). The store's CLI is cairn.
 #
 # Claude Code passes the tool call as JSON on stdin:
 #   { "tool_name": "Bash", "tool_input": { "command": "..." }, ... }
@@ -15,7 +13,7 @@
 # and brick the session, which is worse than the outage. Open, but never silent.
 WS=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)
 if [ -z "$WS" ] || ! cd "$WS"; then
-    echo "⚠ bd-prerun-hook: cannot resolve the workspace from '${BASH_SOURCE[0]}' — the pkill, bd-remember and untracked-script guards are OFF for this session." >&2
+    echo "⚠ bd-prerun-hook: cannot resolve the workspace from '${BASH_SOURCE[0]}' — the pkill, cairn-remember and untracked-script guards are OFF for this session." >&2
     exit 0
 fi
 
@@ -41,27 +39,6 @@ command=${parsed#*$'\n'}
 
 [ -z "$command" ] && exit 0
 
-# ── The store's CLI: bd (default) or cairn ────────────────────────────────────
-# .claude/store-cli holds one word, bd or cairn. It is TRACKED, so every session, every harness and
-# the git hooks agree; there is deliberately no environment override (one session must not write
-# a store the others have left). Absent: the CLI is bd and neither name is write-blocked, which is
-# how every install that never opted in keeps working. Present: the named CLI runs, and the OTHER
-# name is blocked below: under cairn every bd call (bd's store is frozen: a write would land where
-# nobody reads, a read answers from the past without saying so); under bd, cairn's writes (its
-# shadow is rebuilt from bd, so its reads are current). `# frozen-store-ok` in the command lets a
-# bd READ through on purpose; nothing lets a write through.
-# Keep this block identical in bd-prime-hook.sh, bd-stop-hook.sh and .beads-hooks/pre-commit.
-STORE_MODE=""
-if [ -f "$WS/.claude/store-cli" ]; then
-    STORE_MODE=$(tr -d ' \t\r\n' < "$WS/.claude/store-cli")
-    case $STORE_MODE in
-        bd|cairn) ;;
-        *) echo "⚠ .claude/store-cli says '$STORE_MODE' (expected bd or cairn) — using bd, nothing write-blocked." >&2
-           STORE_MODE="" ;;
-    esac
-fi
-STORE_CLI=${STORE_MODE:-bd}
-
 # ── GUARD: bare pkill / killall ────────────────────────────────────────
 # Runs before memory admission; all invocations in a compound command are checked.
 #
@@ -78,7 +55,7 @@ STORE_CLI=${STORE_MODE:-bd}
 # arbitrary shell programs remain outside this heuristic's scope.
 # THE SCRIPTS-GATE KNOB. SCRIPT_DIRS_RE is the directory pattern the gate watches: a regex
 # alternation such as scripts|pipelines|analysis. EMPTY turns the gate off -- a repo whose
-# scripts/ directories all belong to retired projects has nothing to gate, and the gate's bd call
+# scripts/ directories all belong to retired projects has nothing to gate, and the gate's store call
 # is then skipped too. Precedence: the environment (BD_SCRIPT_DIRS_RE, set-but-empty counts),
 # then .claude/bd-prerun.conf (a one-line `SCRIPT_DIRS_RE=...`, tracked so every clone agrees),
 # then the default. The knob lives OUTSIDE this file so the hook stays byte-identical with the
@@ -86,33 +63,10 @@ STORE_CLI=${STORE_MODE:-bd}
 SCRIPT_DIRS_RE='scripts'
 [ -f "$WS/.claude/bd-prerun.conf" ] && . "$WS/.claude/bd-prerun.conf"
 [ -n "${BD_SCRIPT_DIRS_RE+x}" ] && SCRIPT_DIRS_RE=$BD_SCRIPT_DIRS_RE
-policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" "$STORE_MODE" <<'PY'
+policy=$(python3 - "$command" "$SCRIPT_DIRS_RE" <<'PY'
 import os, re, shlex, sys
 
-STORE_CLIS = ('bd', 'cairn')
-# The other CLI, which is blocked; none when .claude/store-cli is absent.
-FOREIGN = {'bd': 'cairn', 'cairn': 'bd'}.get(sys.argv[3])
-# Read verbs, an allowlist: a write verb nobody listed (bd has dozens: link, rename, set-state,
-# batch, mol, ...) counts as a write. Some verbs read in one form only. Under bd, cairn may read
-# (its shadow mirrors bd). Under cairn, bd may not even read: its store is frozen at the cutover
-# and answers from the past without saying so (workspace-7m8.16). `# frozen-store-ok` in the
-# command lets that command's bd reads through, visibly; a write never.
-READ_VERBS = {'show', 'list', 'ready', 'blocked', 'search', 'query', 'stats', 'export', 'memories',
-              'recall', 'prime', 'version', 'help', 'history', 'where', 'status', 'info', 'stale',
-              'orphans', 'lint', 'preflight', 'count', 'graph', 'comments', 'dep', 'dolt', 'doctor',
-              'config', 'human', 'types', 'check', 'shadow', 'seed-from-dolt'}
-FROZEN_OK = False   # set below, on the command with its data heredocs removed
-# bd verbs and the cairn verb that answers instead (cairn --help vs bd --help, 2026-10-16). A bd
-# verb missing here has no cairn equivalent; the gate's message says so.
-CAIRN_FOR = {'ready': 'ready', 'list': 'list', 'blocked': 'blocked', 'show': 'show',
-             'memories': 'memories', 'recall': 'recall', 'prime': 'prime', 'export': 'export',
-             'status': 'stats', 'where': 'where', 'create': 'create', 'update': 'update',
-             'close': 'close', 'reopen': 'reopen', 'note': 'note', 'comment': 'comment',
-             'comments': 'comments', 'defer': 'defer', 'undefer': 'undefer', 'delete': 'delete',
-             'dep': 'dep', 'remember': 'remember', 'forget': 'forget', 'import': 'import',
-             'tag': 'update --add-label', 'priority': 'update -p', 'assign': 'update --assignee',
-             'q': 'create --silent', 'children': 'list --parent'}
-
+STORE_CLIS = ('cairn',)
 script_path = re.compile(r'(?:^|/)(?:' + sys.argv[2] + r')/[^/].*') if sys.argv[2] else None  # None: gate off
 assignment = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
@@ -168,24 +122,26 @@ def safe_kill(name, args):
     return False
 
 def remember_call(name, args):
-    """(is a `bd remember` call, lacks --key) for one unwrapped command. Help is not a write."""
+    """(is a `cairn remember` call, lacks --key) for one unwrapped command. Help is not a write."""
     if name not in STORE_CLIS: return False, False
     sub = next((a for a in args if not a.startswith('-')), None)
     if sub != 'remember' or any(a in ('-h', '--help') for a in args): return False, False
     return True, not any(a == '--key' or a.startswith('--key=') for a in args)
 
 ISSUE_ID = re.compile(r'[A-Za-z][A-Za-z0-9]*-[A-Za-z0-9]+(?:\.[0-9]+)*')
-# bd update flags that take NO value; every other flag's next word is its value, not an issue id.
+# update flags that take NO value; every other flag's next word is its
+# value, not an issue id.
 BD_BOOL = {'--claim', '--allow-empty-description', '--ephemeral', '--history', '--no-history',
            '--persistent', '--stdin', '-h', '--help', '--json', '--profile', '--global',
            '--ignore-schema-skew'}
 BD_GLOBAL_VALUED = {'--actor', '--db', '-C', '--directory', '--dolt-auto-commit'}
 
 def claim_call(name, args):
-    """Issue ids this command moves to in_progress: bd update <id...> --claim | --status in_progress.
+    """Issue ids this command moves to in_progress: cairn update <id...> --claim | --status in_progress.
 
-    Recorded per session, because the bd store is shared by every session and all of them claim
-    as the same actor: bd itself cannot say which in-progress issue is whose."""
+    Recorded per session, because the store is shared by every session and, without a
+    session-scoped BEADS_ACTOR, all of them claim as the same actor: the store itself cannot say
+    which in-progress issue is whose."""
     if name not in STORE_CLIS: return set()
     i = 0
     while i < len(args) and args[i].startswith('-'):
@@ -205,45 +161,9 @@ def claim_call(name, args):
         elif ISSUE_ID.fullmatch(a): ids.add(a)
     return ids if claim else set()
 
-def is_write(verb, rest):
-    """Whether this verb, with these arguments, writes the store."""
-    sub = next((a for a in rest if not a.startswith('-')), None)
-    if verb not in READ_VERBS: return True
-    if verb == 'ready': return '--claim' in rest
-    if verb == 'comments': return sub == 'add'
-    if verb == 'dep': return sub not in ('tree', 'list', 'cycles')
-    if verb == 'dolt': return not (sub in ('show', 'status', 'test')
-                                   or (sub == 'remote' and 'list' in rest))
-    if verb == 'doctor': return any(a.startswith('--fix') for a in rest)
-    if verb == 'config': return sub not in ('get', 'list')
-    if verb == 'shadow': return FOREIGN != 'cairn'      # cairn's read-only mirror of bd
-    return False
-
-def foreign_call(name, args):
-    """None, or ('write'|'read', verb) for a call through the CLI .claude/store-cli does NOT
-    name that must be blocked. Help and --version touch no store and pass. A read through bd
-    under cairn is blocked unless the command carries `# frozen-store-ok`; a read through cairn
-    under bd passes (the shadow is bd's mirror)."""
-    if FOREIGN is None or name != FOREIGN: return None
-    if any(a in ('-h', '--help') for a in args): return None
-    i = 0
-    while i < len(args) and args[i].startswith('-'):
-        i += 2 if args[i] in BD_GLOBAL_VALUED else 1
-    if i >= len(args): return None                     # flags only: --version, --help
-    verb, rest = args[i], args[i + 1:]
-    if verb in ('help', 'version'): return None
-    if is_write(verb, rest): return ('write', verb)
-    if FOREIGN == 'bd' and not FROZEN_OK: return ('read', verb)
-    return None
-
-def worse(a, b):
-    """Of two gate results keep the one to report: a write over a read over nothing."""
-    rank = {None: 0, 'read': 1, 'write': 2}
-    return a if rank[a[0] if a else None] >= rank[b[0] if b else None] else b
-
 def inspect(command, depth=0):
-    """-> (bare kill, analysis script, bd remember call, bd remember WITHOUT --key, foreign
-    call (None or (kind, verb)), claimed ids)."""
+    """-> (bare kill, analysis script, cairn remember call, cairn remember WITHOUT --key, claimed
+    ids)."""
     if depth > 8: raise ValueError('nested shell command limit exceeded')
     lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()\n')
     lexer.whitespace = ' \t\r'; lexer.whitespace_split = True
@@ -254,11 +174,10 @@ def inspect(command, depth=0):
             unit = []
         else: unit.append(token)
     if unit: units.append(unit)
-    flags = [False] * 4 + [None, set()]
+    flags = [False] * 4 + [set()]
     def merge(more):
         for k, v in enumerate(more):
-            if k == 4: flags[k] = worse(flags[k], v)
-            else: flags[k] |= v
+            flags[k] |= v
     # Retain the previous guard's conservative coverage of literal command substitutions,
     # including ones shlex folds into a quoted argument. No substitution is ever evaluated.
     for sub in re.finditer(r'\$\(([^()]*)\)|`([^`]*)`', command):
@@ -270,8 +189,7 @@ def inspect(command, depth=0):
         if name in ('pkill', 'killall') and not safe_kill(name, args): flags[0] = True
         is_remember, keyless = remember_call(name, args)
         if is_remember: flags[2] = True; flags[3] |= keyless
-        flags[4] = worse(flags[4], foreign_call(name, args))
-        flags[5] |= claim_call(name, args)
+        flags[4] |= claim_call(name, args)
         if name in ('bash', 'sh', 'zsh'):
             for i, arg in enumerate(args):
                 if arg.startswith('-') and not arg.startswith('--') and 'c' in arg and i + 1 < len(args):
@@ -304,7 +222,7 @@ def line_fallback(command):
         segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
         if not safe_kill(m[1], segment.split()): bare = True
     calls = [command[m.end():].split('\n', 1)[0]
-             for m in re.finditer(pos + r'(?:bd|cairn)[ \t]+remember(?=[ \t]|$)', command, re.M)]
+             for m in re.finditer(pos + r'cairn[ \t]+remember(?=[ \t]|$)', command, re.M)]
     calls = [c for c in calls if not re.match(r'[ \t]+(?:-h|--help)(?:[ \t]|$)', c)]
     keyless = any(not re.search(r'--key(?:[ \t]|=)', c) for c in calls)
     d = sys.argv[2]
@@ -312,18 +230,11 @@ def line_fallback(command):
                   or re.search(r'(?:^|[ \t])(?:bash|sh)[ \t]+(?:\S*/)?(?:' + d + r')/\S+\.sh(?:[ \t]|$)', command, re.M)
                   or re.search(pos + r'(?:\S*/)?(?:' + d + r')/\S+', command, re.M))
     claims = set()
-    for m in re.finditer(pos + r'(?:bd|cairn)[ \t]+(?:\S+[ \t]+)*?update(?=[ \t])', command, re.M):
+    for m in re.finditer(pos + r'cairn[ \t]+(?:\S+[ \t]+)*?update(?=[ \t])', command, re.M):
         segment = re.split(r'[;&|\n]', command[m.end():], maxsplit=1)[0]
         if re.search(r'--claim\b|(?:--status|-s)[ \t=]+in_progress\b', segment):
             claims |= {w for w in segment.split() if ISSUE_ID.fullmatch(w)}
-    foreign = None
-    if FOREIGN:
-        # The tokenised path unwraps `env X=1 bd`, `sudo bd`, `/usr/bin/bd`; here the same shapes are
-        # matched by regex, so an unbalanced quote elsewhere in the command does not open the gate.
-        lead = r'(?:(?:sudo|env|command|exec|nohup)[ \t]+)*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*(?:\S*/)?'
-        for m in re.finditer(pos + lead + re.escape(FOREIGN) + r'[ \t]+(\S+)([^;&|\n]*)', command, re.M):
-            foreign = worse(foreign, foreign_call(FOREIGN, [m[1], *m[2].split()]))
-    return bare, script, bool(calls), keyless, foreign, claims
+    return bare, script, bool(calls), keyless, claims
 
 SHELLS = ('bash', 'sh', 'zsh', 'dash', 'ksh', 'ssh')
 
@@ -333,7 +244,7 @@ def drop_data_heredocs(command):
     A heredoc body is text, not commands -- unless the command reading it is a shell (bash <<EOF,
     ssh host <<EOF), whose body is kept and checked like any other lines. Bodies were the main
     source of both failures fixed here: prose such as "don't" made the whole command
-    untokenizable, and a prose line that happened to START with a guarded word ("bd remember
+    untokenizable, and a prose line that happened to START with a guarded word ("cairn remember
     ...", "pkill -f is ...") was judged as a call. A body is dropped only when its terminator
     line is found; an unterminated operator (e.g. '<<EOF' quoted in prose) leaves the text as is.
     """
@@ -353,23 +264,16 @@ def drop_data_heredocs(command):
     return '\n'.join(out)
 
 text = drop_data_heredocs(sys.argv[1])
-# The escape is read from the command text, not from tokens (shlex drops shell comments), and
-# after the data heredocs are gone: a marker inside text that is only being written is none.
-FROZEN_OK = re.search(r'#[ \t]*frozen-store-ok\b', text) is not None
 try:
     flags = inspect(text)
 except (ValueError, re.error) as exc:
     print('bd-prerun-hook: command not tokenizable (' + str(exc) + '); judged by the line-based fallback checks instead', file=sys.stderr)
     flags = line_fallback(text)
-foreign = flags[4]
-# One word: kind:verb:hint, the hint with ~ for spaces (the shell reads the policy word by word).
-print(*(int(x) for x in flags[:4]),
-      ':'.join((foreign[0], foreign[1], CAIRN_FOR.get(foreign[1], '').replace(' ', '~'))) if foreign else '-',
-      ','.join(sorted(flags[5])) or '-')
+print(*(int(x) for x in flags[:4]), ','.join(sorted(flags[4])) or '-')
 PY
 ) || exit 0   # python itself failed: open, as the header says
 policy=${policy//$'\r'/}
-read -r bare is_script remember remember_keyless foreign claims <<< "$policy"
+read -r bare is_script remember remember_keyless claims <<< "$policy"
 if [ "$bare" -eq 1 ]; then
     cat >&2 <<KILLGATE
 ⛔ BARE pkill / killall BLOCKED
@@ -397,63 +301,22 @@ KILLGATE
     exit 2
 fi
 
-# ── GATE: a call through the CLI this checkout has left ────────────────────────
-# After a move (.claude/store-cli = cairn) bd's store is frozen: nothing writes it and nothing
-# syncs it, so a `bd update` typed from habit, a transcript or an old memory would succeed and
-# vanish, and a `bd show` would answer from the day of the cutover as if that were now (its output
-# says nothing). Every bd call is blocked; `# frozen-store-ok` in the command lets a read through
-# on purpose (workspace-7m8.16). After a rollback (store-cli = bd) cairn's writes are blocked the
-# same way; its reads pass, because its shadow is rebuilt from bd.
-if [ "$foreign" != - ]; then
-    other=$([ "$STORE_CLI" = cairn ] && echo bd || echo cairn)
-    kind=${foreign%%:*}; rest=${foreign#*:}; verb=${rest%%:*}; hint=${rest#*:}; hint=${hint//\~/ }
-    if [ "$STORE_CLI" = cairn ]; then
-        if [ -n "$hint" ]; then instead="Run it with cairn instead: \`cairn $hint ...\` (bd's flags carry over)."
-        else instead="cairn has no \`$verb\`: bd verbs outside the agent contract were not carried over (cairn --help lists what is)."; fi
-    else
-        instead="Run the same command with bd instead (same verbs and flags)."
-    fi
-    if [ "$kind" = write ]; then
-        cat >&2 <<FGATE
-⛔ WRITE THROUGH $other BLOCKED — this checkout's store is written with $STORE_CLI
-
-.claude/store-cli names $STORE_CLI. $other's store is frozen here: a write to it succeeds and
-is never seen again. $instead
-
-(Gate: .claude/bd-prerun-hook.sh. Tests: tools/bd-prerun-hook_test.sh)
-Blocked command: $command
-FGATE
-    else
-        cat >&2 <<FGATE
-⛔ READ THROUGH bd BLOCKED — this checkout's store moved to cairn
-
-.claude/store-cli names cairn. bd's store is frozen at the cutover and nothing updates it:
-\`bd $verb\` would answer from that old copy as if it were current, and its output would not say so.
-$instead
-To read the frozen bd store on purpose, say so in the command:  $command  # frozen-store-ok
-
-(Gate: .claude/bd-prerun-hook.sh. Tests: tools/bd-prerun-hook_test.sh)
-Blocked command: $command
-FGATE
-    fi
-    exit 2
-fi
-
-# ── GATE: bd remember admission control (memory-curate "gate" mode) ───────────
+# ── GATE: cairn remember admission control (memory-curate "gate" mode) ────────
 # Keep the persistent-memory store lean at the SOURCE. Blocks only unambiguous
 # violations (missing --key; transient session/status state); warns on oversized
-# inline bodies; fails open. Scoped strictly to `bd remember` invocations -- which the parser
-# above identifies by TOKENS. The old trigger was a regex over the raw text, so a
-# quoted argument of another command ("... ; bd remember without --key" in a bd create
-# description) was gated as a write, while `env X=1 bd remember ...` or `bash -c "bd remember"`
-# escaped it. Unparsable text falls back to that regex, line by line.
+# inline bodies; fails open. Scoped strictly to `cairn remember` invocations -- which the parser
+# above identifies by TOKENS. The old trigger was a regex over the raw text, so a quoted
+# argument of another command ("... ; cairn remember without --key" in a create description)
+# was gated as a write, while `env X=1 cairn remember ...` or `bash -c "cairn remember"` escaped it.
+# cairn's own remember adds admission control of its own (a near-duplicate of another key is
+# refused, naming it); this gate is the session-memo half, which cairn does not judge. Unparsable text falls back to that regex, line by line.
 if [ "$remember" -eq 1 ]; then
     gate_reason=""
     if [ "$remember_keyless" -eq 1 ]; then
-        gate_reason="\"$STORE_CLI remember\" without --key. Auto-generated keys cannot be deduped or updated
+        gate_reason="\"cairn remember\" without --key. Auto-generated keys cannot be deduped or updated
 in place — that is how the store bloats. Re-run with a stable slug:
 
-  $STORE_CLI remember --key <topic-slug> \"<load-bearing fact>\""
+  cairn remember --key <topic-slug> \"<load-bearing fact>\""
     else
         # This used to block on VOCABULARY — any body containing
         # "session-handoff", "wrap-up", etc. That matched memories which merely MENTION the
@@ -485,13 +348,13 @@ in place — that is how the store bloats. Re-run with a stable slug:
         if [ "$struct" -ge 2 ] && [ "$cites_path" -eq 0 ]; then
             gate_reason='This is structurally a session/status memo, not durable knowledge (it reads as
 a handoff: next-session pointers, task lists, and/or a leading status line, with no
-committed tool or file path). Put it in the git commit message, or a bd issue note
-(bd note <id> "..."), not a memory.
+committed tool or file path). Put it in the git commit message, or an issue note
+(cairn note <id> "..."), not a memory.
 
 If it IS durable knowledge, name the artifact it applies to — a script, doc or path —
 and it will be admitted.'
         elif [ "$struct" -ge 1 ] || { [ "$lexical" -eq 1 ] && [ "$cites_path" -eq 0 ]; }; then
-            echo "⚠ memory-curate gate: body mentions session/status vocabulary. Admitted — it cites a committed path and/or lacks the structure of a handoff memo. If this IS session state, put it in a bd note instead. (Allowed.)" >&2
+            echo "⚠ memory-curate gate: body mentions session/status vocabulary. Admitted — it cites a committed path and/or lacks the structure of a handoff memo. If this IS session state, put it in an issue note (cairn note) instead. (Allowed.)" >&2
         fi
     fi
     if [ -n "$gate_reason" ]; then
@@ -509,16 +372,17 @@ GATE
     if echo "$command" | grep -qE '"[^"]{1600,}"'; then
         echo "⚠ memory-curate gate: large inline memory body (>~1.5KB) — keep load-bearing facts, move long detail to a repo doc + pointer. (Allowed.)" >&2
     fi
-    # No `exit 0` here: an admitted `bd remember` used to end the hook, so
-    # `bd remember --key k "fact" && python3 scripts/run.py` never reached the scripts gate below.
+    # No `exit 0` here: an admitted `remember` used to end the hook, so
+    # `cairn remember --key k "fact" && python3 scripts/run.py` never reached the scripts gate below.
 fi
 
 # ── Session scope: which in-progress issues are THIS session's ────────────
-# The bd store is SHARED by every session and project on this machine, and every session claims
-# as the same actor, so bd cannot say whose an in-progress issue is. A busy store always holds some
+# The store is SHARED by every session working in this checkout (and its worktrees), and without
+# a session-scoped BEADS_ACTOR every session claims as the same actor, so the store cannot say
+# whose an in-progress issue is. A busy store always holds some
 # in-progress issue -- often a stale one -- so "any issue in progress" licensed every script
-# everywhere and this gate could never fire. So the hook records what each session CLAIMS (bd update <id>
-# --claim / --status in_progress, recognized above) under its session id, in the git dir where it
+# everywhere and this gate could never fire. So the hook records what each session CLAIMS (cairn
+# update <id> --claim / --status in_progress, recognized above) under its session id, in the git dir where it
 # is never committed. A session's issues are the ones it claimed that are still in progress.
 # bd-stop-hook.sh reads the same record; keep claims_dir and in_progress_ids identical there.
 claims_dir() {
@@ -528,10 +392,10 @@ claims_dir() {
     else printf '%s/bd-session-claims-%s' "${TMPDIR:-/tmp}" "$(id -u)"; fi
 }
 # "<id><TAB><title><TAB><assignee>" per in-progress issue; returns 1 when the CLI is unavailable.
-# --limit 0: both CLIs stop at 50 rows by default, and say so only on the stderr discarded here.
+# --limit 0: cairn stops at 50 rows by default, and says so only on the stderr discarded here.
 in_progress_rows() {
     local json rows text
-    if json=$("$STORE_CLI" --json list --status=in_progress --limit 0 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
+    if json=$(cairn --json list --status=in_progress --limit 0 2>/dev/null) && rows=$(printf '%s' "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert isinstance(d, list)
@@ -541,7 +405,7 @@ for x in d:
 ' 2>/dev/null); then
         printf '%s' "${rows//$'\r'/}"; return 0   # CR LF from a native Windows Python
     fi
-    text=$("$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null) || return 1
+    text=$(cairn list --status=in_progress --limit 0 2>/dev/null) || return 1
     # rows start with the in_progress glyph after any tree prefix; the legend never does
     printf '%s\n' "$text" | awk '/^[^[:alnum:]]*◐ /{ sub(/^[^[:alnum:]]*◐ +/, ""); id = $1;
         sub(/^[^ ]+ */, ""); print id "\t" $0 }'
@@ -564,7 +428,7 @@ fi
 [ "$is_script" -eq 0 ] && exit 0
 
 if [ -n "$session_id" ]; then
-    # A claim in the SAME command licenses it: `bd update X --claim && python3 scripts/run.py`.
+    # A claim in the SAME command licenses it: `cairn update X --claim && python3 scripts/run.py`.
     [ "$claims" != "-" ] && exit 0
     rows=$(in_progress_rows) || exit 0      # CLI unavailable — fail open rather than block all work
     mine=$(printf '%s\n' "$rows" | cut -f1 | grep -Fx -f "$(claims_dir)/$session_id" 2>/dev/null | head -1)
@@ -585,15 +449,15 @@ belong to other sessions or projects; they do not cover this work.
 
 Claim the issue this work belongs to:
 
-  $STORE_CLI update <id> --claim
-  (new work: $STORE_CLI create --title="..." --description="..." --type=task, then claim it)
+  cairn update <id> --claim
+  (new work: cairn create --title="..." --description="..." --type=task, then claim it)
 
 --claim is idempotent for the SAME actor only. Where bd-prime-hook.sh exported BEADS_ACTOR
 (<user>/claude/<session8>) the actor is this session, so an issue still claimed by an EARLIER
 session is refused by name ("already claimed by ..."). Take it over first -- the assignee
 change is logged -- then claim:
 
-  $STORE_CLI update <id> --assignee="\$BEADS_ACTOR" && $STORE_CLI update <id> --claim
+  cairn update <id> --assignee="\$BEADS_ACTOR" && cairn update <id> --claim
 
 Then re-run your command.
 
@@ -605,23 +469,23 @@ fi
 # No session id (a manual run, an older adapter): the pre-session behaviour, global.
 
 
-# ── Check for an in_progress beads issue ─────────────────────────────────────
-# Count issue ROWS, not ● glyphs: ● is bd's priority bullet on every row and its BLOCKED glyph in
+# ── Check for an in_progress issue ─────────────────────────────────────
+# Count issue ROWS, not ● glyphs: ● is the priority bullet on every row and the BLOCKED glyph in
 # the legend under any non-empty listing, so `grep -c "●"` matched rows for the wrong reason and
 # the legend for no reason. Only "any or none" matters here, but the same function feeds the
 # number bd-stop-hook.sh prints; keep the two identical (the comment there has the shape).
 count_in_progress() {
     local text n=""
-    text=$("$STORE_CLI" list --status=in_progress --limit 0 2>/dev/null) || return 1
+    text=$(cairn list --status=in_progress --limit 0 2>/dev/null) || return 1
     if command -v jq >/dev/null 2>&1; then
-        n=$("$STORE_CLI" --json list --status=in_progress --limit 0 2>/dev/null \
+        n=$(cairn --json list --status=in_progress --limit 0 2>/dev/null \
             | jq -r 'if type == "array" then length else empty end' 2>/dev/null)
     fi
     case $n in ''|*[!0-9]*) n=$(printf '%s\n' "$text" | grep -cE '^[^[:alnum:]]*◐ ' || true) ;; esac
     printf '%s' "${n:-0}"
 }
 
-# bd unavailable — fail open rather than block all work
+# cairn unavailable — fail open rather than block all work
 in_progress=$(count_in_progress) || exit 0
 : "${in_progress:=0}"
 [ "$in_progress" -gt 0 ] && exit 0
@@ -630,14 +494,14 @@ in_progress=$(count_in_progress) || exit 0
 cat >&2 <<BLOCK
 ⛔ UNTRACKED WORK BLOCKED
 
-No beads issue is in_progress. Running analysis scripts without a tracked
+No issue is in_progress. Running analysis scripts without a tracked
 issue creates reproducibility gaps — untracked output files and no audit trail.
 Untracked runs are how reproducibility gaps get created in the first place.
 
 Before running scripts, create and claim an issue:
 
-  $STORE_CLI create --title="..." --description="..." --type=task
-  $STORE_CLI update <id> --claim
+  cairn create --title="..." --description="..." --type=task
+  cairn update <id> --claim
 
 Then re-run your command.
 

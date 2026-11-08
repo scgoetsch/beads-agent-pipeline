@@ -55,7 +55,7 @@ blocks "after a semicolon"              "echo hi; pkill -f rsync"
 blocks "after &&"                       "echo hi && killall foo"
 blocks "inside a pipeline segment"      "true | pkill -f rsync"
 blocks "on a later line"                "$(printf 'echo a\npkill -f rsync\n')"
-blocks "would bypass via bd remember"   "bd remember --key k 'a fact about scripts/x.py' ; pkill -f rsync"
+blocks "would bypass via cairn remember"   "cairn remember --key k 'a fact about scripts/x.py' ; pkill -f rsync"
 blocks "-n/--newest is NOT a safe flag" "pkill -n -f rsync"
 
 echo "### ALLOW: forms that cannot select the just-started shell"
@@ -87,12 +87,12 @@ allows "kill with explicit PIDs"        "kill 12345 12346"
 allows "plain command"                  "echo hello"
 
 echo "### ALLOW: the word inside prose must not trip the guard"
-allows "mid-string in a bd note"        "bd note WS-x 'the pkill trap bit us twice'"
+allows "mid-string in a cairn note"        "cairn note WS-x 'the pkill trap bit us twice'"
 allows "mid-string in a commit message" "git commit -m 'document the killall self-match'"
 
 echo "### REGRESSION: the pre-existing memory gate still works"
-blocks "bd remember without --key"      "bd remember 'some floating fact'"
-allows "bd remember with --key"         "bd remember --key some-topic 'a durable fact about scripts/x.py'"
+blocks "cairn remember without --key"      "cairn remember 'some floating fact'"
+allows "cairn remember with --key"         "cairn remember --key some-topic 'a durable fact about scripts/x.py'"
 
 echo "### the allowlist is judged per pkill INVOCATION, not over the whole line"
 # `ls -h && pkill -f x`: the -h belongs to ls. The old whole-line test read it as pkill's
@@ -107,16 +107,16 @@ echo "### text shlex cannot tokenize is judged by the line fallback, not waved t
 # hook then exited 0 for the WHOLE command: no pkill guard, no memory gate, no scripts gate. The
 # regex hook before it blocked these. Each case below was allowed by the first tokenizing hook.
 blocks "heredoc prose with an apostrophe, then a bare pkill" $'cat <<EOF\ndon\'t\nEOF\npkill -f rsync'
-blocks "heredoc prose, then a key-less bd remember"         $'cat > /tmp/n <<EOF\ndon\'t forget\nEOF\nbd remember "$(cat /tmp/n)"'
+blocks "heredoc prose, then a key-less cairn remember"         $'cat > /tmp/n <<EOF\ndon\'t forget\nEOF\ncairn remember "$(cat /tmp/n)"'
 blocks "an unbalanced quote on the pkill line itself"       $'pkill -f don\'t'
 allows "unparsable text with nothing guarded in it"          $'cat <<EOF\nit\'s fine\nEOF\necho done'
 allows "the fallback still honours a pkill age filter"       $'cat <<EOF\ndon\'t\nEOF\npkill -O 60 -f rsync'
-allows "the fallback admits a keyed bd remember"             $'cat <<EOF\nit\'s\nEOF\nbd remember --key k "a fact about scripts/x.py"'
+allows "the fallback admits a keyed cairn remember"             $'cat <<EOF\nit\'s\nEOF\ncairn remember --key k "a fact about scripts/x.py"'
 
 echo "### heredoc bodies that feed DATA are text, not commands; shell-fed ones are commands"
-# Found while committing the fix: a commit-message line that BEGAN with 'bd remember ...' was judged
+# Found while committing the fix: a commit-message line that BEGAN with 'cairn remember ...' was judged
 # as a key-less call, and the old regex hook did the same with prose lines starting 'pkill -f'.
-allows "commit message, a line starting with the memory phrase" $'git commit -F - <<\'EOF\'\nFix the gate\nbd remember admission gate no longer skipped; it\'s fixed\nEOF'
+allows "commit message, a line starting with the memory phrase" $'git commit -F - <<\'EOF\'\nFix the gate\ncairn remember admission gate no longer skipped; it\'s fixed\nEOF'
 allows "commit message, a line starting with pkill -f"          $'git commit -F - <<\'EOF\'\nWhy:\npkill -f matches its own shell\nEOF'
 allows "the \$(cat <<EOF) commit idiom, apostrophe in the body" $'git commit -m "$(cat <<\'EOF\'\nIt\'s done; pkill -f is guarded\nEOF\n)"'
 blocks "a heredoc fed to bash is still checked"                 $'bash <<\'EOF\'\npkill -f rsync\nEOF'
@@ -125,28 +125,29 @@ blocks "a heredoc fed to ssh is still checked"                  $'ssh host <<EOF
 blocks "an unterminated heredoc operator hides nothing"         $'echo "write <<EOF here"\npkill -f rsync'
 blocks "commands after a data heredoc are still checked"        $'cat > /tmp/x <<\'EOF\'\nprose\nEOF\npkill -f rsync'
 
-echo "### the memory gate fires on bd remember CALLS, found by tokens, not on the phrase"
-# The trigger used to be a regex over the raw text: '; bd remember' inside a quoted argument of
-# another command was gated as a write (it blocked a bd create whose description quoted it), while a
+echo "### the memory gate fires on cairn remember CALLS, found by tokens, not on the phrase"
+# The trigger used to be a regex over the raw text: '; cairn remember' inside a quoted argument of
+# another command was gated as a write (it blocked a cairn create whose description quoted it), while a
 # wrapped call escaped it.
-allows "the phrase in another command's quoted argument"     "bd create --title x --description 'see foo; bd remember without --key'"
-allows "the phrase in a commit message"                      "git commit -m 'gate: x; bd remember with no key is blocked'"
-blocks "bd remember behind env"                              "env X=1 bd remember 'floating fact'"
-blocks "bd remember inside bash -c"                          "bash -c 'bd remember \"floating fact\"'"
-blocks "bd remember in a command substitution"              'echo "$(bd remember floating)"'
-allows "the --key=slug form"                                 "bd remember --key=some-topic 'a durable fact about scripts/x.py'"
-allows "bd remember --help is not a write"                   "bd remember --help"
+allows "the phrase in another command's quoted argument"     "cairn create --title x --description 'see foo; cairn remember without --key'"
+allows "the phrase in a commit message"                      "git commit -m 'gate: x; cairn remember with no key is blocked'"
+blocks "cairn remember behind env"                              "env X=1 cairn remember 'floating fact'"
+blocks "cairn remember inside bash -c"                          "bash -c 'cairn remember \"floating fact\"'"
+blocks "cairn remember in a command substitution"              'echo "$(cairn remember floating)"'
+allows "the --key=slug form"                                 "cairn remember --key=some-topic 'a durable fact about scripts/x.py'"
+allows "cairn remember --help is not a write"                   "cairn remember --help"
 
-echo "### the untracked-scripts gate: consults bd, needs an in_progress issue, fails open"
+echo "### the untracked-scripts gate: consults cairn, needs an in_progress issue, fails open"
 export BD_SCRIPT_DIRS_RE=scripts   # this clone's .claude/bd-prerun.conf may turn the gate off; pin it on
-# A stub bd on PATH answers `bd list --status=in_progress` with whatever BD_STUB_LIST holds and
-# `bd --json list ...` with BD_STUB_JSON. The text fixtures below are bd 1.3's REAL shape: a row is
+# A stub cairn on PATH answers `cairn list --status=in_progress` with whatever BD_STUB_LIST holds and
+# `cairn --json list ...` with BD_STUB_JSON. The text fixtures below are the REAL shape cairn prints (the old tracker's,
+# which cairn kept): a row is
 # "◐ id ● P2 [type] title" (● is the priority bullet) and a non-empty listing ends with a legend
 # that says "● blocked". The old fixture was "● proj-1 P2 ..." — a row the hook matched for the
 # wrong reason, which is how `grep -c "●"` survived here (2026-09-22).
 # This gate had no coverage at all while three documents said this suite covered it.
 STUB=$(mktemp -d); trap 'rm -rf "$STUB" "$ERRF"' EXIT
-cat > "$STUB/bd" <<'BDSTUB'
+cat > "$STUB/cairn" <<'BDSTUB'
 #!/usr/bin/env bash
 case "$*" in
   *--json*)      printf '%s\n' "${BD_STUB_JSON-}" ;;
@@ -154,14 +155,14 @@ case "$*" in
 esac
 exit 0
 BDSTUB
-chmod +x "$STUB/bd"
+chmod +x "$STUB/cairn"
 LEGEND=$'\n--------\nTotal: 1 issues (0 open, 1 in progress)\n\nStatus: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred'
 export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
 PATH="$STUB:$PATH" blocks "python3 scripts/run.py with nothing in_progress"   "python3 scripts/run.py"
 PATH="$STUB:$PATH" blocks "bash scripts/x.sh with nothing in_progress"        "bash scripts/x.sh"
 PATH="$STUB:$PATH" blocks "a direct scripts/run_* invocation"                 "scripts/run_analysis --fast"
-PATH="$STUB:$PATH" blocks "an admitted bd remember does not license the script after it" \
-                          "bd remember --key k 'fact' && python3 scripts/run.py"
+PATH="$STUB:$PATH" blocks "an admitted cairn remember does not license the script after it" \
+                          "cairn remember --key k 'fact' && python3 scripts/run.py"
 PATH="$STUB:$PATH" blocks "interpreter flags do not bypass the gate" "python3 -u scripts/run.py"
 PATH="$STUB:$PATH" blocks "quoted script path" "python3 -u 'scripts/my run.py'"
 PATH="$STUB:$PATH" blocks "shell flags" "bash -eu scripts/x.sh"
@@ -187,8 +188,8 @@ OTHERS='{"id":"other-1","title":"someone else"},{"id":"other-2","title":"stale s
 export BD_STUB_JSON="[$OTHERS]" BD_STUB_LIST="◐ other-1 ● P2 [task] someone else$LEGEND"
 PATH="$STUB:$PATH" HOOK_SID=s1 blocks "unrelated in-progress issues do not license this session" "python3 scripts/run.py"
 PATH="$STUB:$PATH"            allows "…while a caller with no session id keeps the global rule" "python3 scripts/run.py"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim in the SAME command licenses it"  "bd update mine-1 --claim && python3 scripts/run.py"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "claiming is itself allowed"               "bd update mine-2 --claim"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim in the SAME command licenses it"  "cairn update mine-1 --claim && python3 scripts/run.py"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "claiming is itself allowed"               "cairn update mine-2 --claim"
 chk_rec() { if grep -qx "$2" "$CL/s1" 2>/dev/null; then ok "$1"; else bad "$1" "$(cat "$CL/s1" 2>/dev/null | tr '\n' ' ')"; fi; }
 nochk_rec() { if grep -qx "$2" "$CL/s1" 2>/dev/null; then bad "$1" "recorded $2"; else ok "$1"; fi; }
 chk_rec "the claim is recorded for this session"                              mine-2
@@ -197,31 +198,31 @@ PATH="$STUB:$PATH" HOOK_SID=s1 allows "its claimed issue in progress licenses la
 PATH="$STUB:$PATH" HOOK_SID=s2 blocks "…but not another session's"              "python3 scripts/run.py"
 export BD_STUB_JSON="[$OTHERS]"
 PATH="$STUB:$PATH" HOOK_SID=s1 blocks "claimed, then closed: no longer licensed" "python3 scripts/run.py"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "--status in_progress is a claim"          "bd update mine-3 --status in_progress"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "--status=in_progress is a claim"          "bd update mine-4 --status=in_progress"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "a flag before the id"                     "bd update --claim mine-5"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "a flag value is not an id"                "bd update mine-6 --title my-fix --claim"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "not a claim"                              "bd update mine-7 --notes progress"
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim in unparsable text (fallback)"    "bd update mine-8 --claim; echo don't"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "--status in_progress is a claim"          "cairn update mine-3 --status in_progress"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "--status=in_progress is a claim"          "cairn update mine-4 --status=in_progress"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "a flag before the id"                     "cairn update --claim mine-5"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "a flag value is not an id"                "cairn update mine-6 --title my-fix --claim"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "not a claim"                              "cairn update mine-7 --notes progress"
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim in unparsable text (fallback)"    "cairn update mine-8 --claim; echo don't"
 for id in mine-3 mine-4 mine-5 mine-6 mine-8; do chk_rec "recorded: $id" "$id"; done
 nochk_rec "not recorded: a --title value"                                       my-fix
 nochk_rec "not recorded: an update that is not a claim"                         mine-7
-PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim after an admitted bd remember"      "bd remember --key k 'fact' && bd update mine-9 --claim"
-chk_rec "recorded: a claim after an admitted bd remember"                         mine-9
+PATH="$STUB:$PATH" HOOK_SID=s1 allows "a claim after an admitted cairn remember"      "cairn remember --key k 'fact' && cairn update mine-9 --claim"
+chk_rec "recorded: a claim after an admitted cairn remember"                         mine-9
 if [ -e "$CL/s2" ]; then bad "another session's record is untouched" "s2 exists"; else ok "another session's record is untouched"; fi
 export BD_STUB_JSON="[$OTHERS,{\"id\":\"mine-8\",\"title\":\"mine\"}]"
 PATH="$STUB:$PATH" HOOK_SID=s1 allows "a fallback-recorded claim licenses too"   "python3 scripts/run.py"
 unset BD_SESSION_CLAIMS_DIR
 unset BD_STUB_LIST BD_STUB_JSON
-# bd absent entirely: the gate must fail OPEN (a broken bd must not block all work).
+# cairn absent entirely: the gate must fail OPEN (a broken store CLI must not block all work).
 bare_path=""; oldifs=$IFS; IFS=:
-for d in $PATH; do [ -x "$d/bd" ] || bare_path="${bare_path:+$bare_path:}$d"; done
+for d in $PATH; do [ -x "$d/cairn" ] || bare_path="${bare_path:+$bare_path:}$d"; done
 IFS=$oldifs
-if PATH="$bare_path" command -v python3 >/dev/null 2>&1 && ! PATH="$bare_path" command -v bd >/dev/null 2>&1; then
-  PATH="$bare_path" allows "no bd on PATH: the scripts gate fails open"         "python3 scripts/run.py"
+if PATH="$bare_path" command -v python3 >/dev/null 2>&1 && ! PATH="$bare_path" command -v cairn >/dev/null 2>&1; then
+  PATH="$bare_path" allows "no cairn on PATH: the scripts gate fails open"      "python3 scripts/run.py"
   PATH="$bare_path" HOOK_SID=s1 allows "…also for a session-scoped call"         "python3 scripts/run.py"
 else
-  bad "no bd on PATH: the scripts gate fails open" "could not build a PATH without bd but with python3"
+  bad "no cairn on PATH: the scripts gate fails open" "could not build a PATH without cairn but with python3"
 fi
 
 echo "### the knob: an empty SCRIPT_DIRS_RE turns the scripts gate off; the environment beats the conf file"
@@ -229,7 +230,7 @@ export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
 PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= allows "empty pattern: a script runs with nothing in progress"   "python3 scripts/run.py"
 PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= HOOK_SID=s7 allows "...also with a session id"                     "./scripts/analyze.py"
 PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= blocks "...the pkill guard still covers a line after the script"  "python3 scripts/run.py; pkill -f rsync"
-PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= blocks "...and a key-less bd remember after it"                   "python3 scripts/run.py && bd remember 'x'"
+PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= blocks "...and a key-less cairn remember after it"                   "python3 scripts/run.py && cairn remember 'x'"
 PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE= allows "...unparsable text with the gate off: the fallback does not gate either" $'cat <<EOF\nit\'s\nEOF\npython3 scripts/run.py'
 PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE=pipelines blocks "another directory name gates that directory"   "python3 pipelines/run.py"
 PATH="$STUB:$PATH" BD_SCRIPT_DIRS_RE=pipelines allows "...and not scripts/"                            "python3 scripts/run.py"
@@ -243,10 +244,9 @@ PATH="$STUB:$PATH" blocks "conf off: the pkill guard is untouched"              
 HOOK=$REAL_HOOK
 unset BD_STUB_LIST BD_STUB_JSON
 
-echo "### both CLI names are parsed on every install (no .claude/store-cli: nothing write-blocked)"
+echo "### cairn's claim forms: update --claim, ready --claim"
 export BD_SCRIPT_DIRS_RE=scripts BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
 export BD_SESSION_CLAIMS_DIR="$STUB/claims2"     # never the clone's own git dir
-cp "$STUB/bd" "$STUB/cairn"
 PATH="$STUB:$PATH" blocks "cairn remember without --key"                 "cairn remember 'a fact'"
 PATH="$STUB:$PATH" allows "cairn remember with --key"                    "cairn remember --key k 'a fact about tools/x.sh'"
 PATH="$STUB:$PATH" HOOK_SID=c1 allows "a cairn claim licenses the script in the same command" \
@@ -257,7 +257,6 @@ PATH="$STUB:$PATH" HOOK_SID=c2 allows "ready --claim licenses the script in the 
                           "cairn ready --claim && python3 scripts/run.py"
 if [ ! -s "$STUB/claims2/c2" ] || ! grep -qx ready "$STUB/claims2/c2"; then ok "…and records no placeholder id"
 else bad "…and records no placeholder id" "claims file has 'ready'"; fi
-PATH="$STUB:$PATH" allows "bd and cairn writes both pass when no store-cli is set" "bd close x-1 && cairn close x-2"
 
 echo "### ready --claim records no id: the LATER command is licensed by the assignee, and only by it"
 export BD_STUB_JSON="[]"
@@ -267,13 +266,13 @@ export BD_STUB_JSON='[{"id":"r-7","title":"t","assignee":"u/claude/abcd1234"}]'
 PATH="$STUB:$PATH" HOOK_SID=r1 BEADS_ACTOR=u/claude/abcd1234 allows "…a later script once the store names the actor" "python3 scripts/run.py"
 export BD_STUB_JSON="[]"
 
-echo "### the in-progress listing asks for every row (both CLIs stop at 50 by default)"
-cat > "$STUB/argv-bd" <<'ARGV'
+echo "### the in-progress listing asks for every row (cairn stops at 50 by default)"
+cat > "$STUB/argv-cairn" <<'ARGV'
 #!/usr/bin/env bash
 echo "$*" >> "$ARGV_LOG"
 printf '%s\n' "${BD_STUB_JSON-}"
 ARGV
-chmod +x "$STUB/argv-bd"; mkdir -p "$STUB/argvbin"; cp "$STUB/argv-bd" "$STUB/argvbin/bd"
+chmod +x "$STUB/argv-cairn"; mkdir -p "$STUB/argvbin"; cp "$STUB/argv-cairn" "$STUB/argvbin/cairn"
 export ARGV_LOG="$STUB/argv.log"; : > "$ARGV_LOG"
 PATH="$STUB/argvbin:$PATH" HOOK_SID=l1 blocks "(gate consulted)" "python3 scripts/run.py"
 if grep -q -- '--json list --status=in_progress --limit 0' "$ARGV_LOG"; then ok "the listing passes --limit 0"
@@ -288,89 +287,23 @@ export BD_STUB_JSON='[{"id":"v-1","title":"t","assignee":"u"}]'
 PATH="$STUB:$PATH" HOOK_SID=a1 BEADS_ACTOR=u blocks "a bare user name is shared by every session: not mine"            "python3 scripts/run.py"
 export BD_STUB_JSON="[]"
 
-echo "### .claude/store-cli = cairn: bd's store is frozen, every bd call is blocked, cairn answers the gate"
+echo "### cairn only: no other CLI is gated, and a .claude/store-cli left from before changes nothing"
+# Decided for 0.2.0 (workspace-7m8.35.1): no typed-bd guard. bd run here is the user's own tool and
+# makes a store cairn never reads; the README says so. The remember gate and the claim recording
+# parse cairn only.
 SW="$STUB/storews"; mkdir -p "$SW/.claude" "$STUB/cairnonly"; cp "$REAL_HOOK" "$SW/.claude/"
-printf 'cairn\n' > "$SW/.claude/store-cli"
+printf 'bd\n' > "$SW/.claude/store-cli"
 HOOK="$SW/.claude/bd-prerun-hook.sh"
-for c in "bd update w-1 --claim" "bd close w-1" "bd create --title x" "bd remember --key k 'v'" \
-         "bd dolt push" "bd ready --claim" "bd comments add w-1 hi" "bd note w-1 x" "bd dep add w-1 w-2" \
-         "env X=1 bd delete w-1 --force" "bash -c 'bd close w-1'" "bd --json update w-1 -p 1" \
-         "echo ok && bd reopen w-1" $'bd close w-1; echo don\'t'; do
-  PATH="$STUB:$PATH" blocks "blocked: $c" "$c"
-done
-for c in "bd link w-1 w-2" "bd rename w-1 w-9" "bd set-state w-1 x=y" "bd batch -f ops.txt" \
-         "bd dolt remote add o url" "bd dep remove w-1 w-2" "bd doctor --fix" "bd config set k v" \
-         "bd sql 'delete from issues'" "bd shadow sync"; do
-  PATH="$STUB:$PATH" blocks "blocked (not a read): $c" "$c"
-done
-# workspace-7m8.16: a bd READ answers from the frozen store without saying so. Blocked too.
-for c in "bd show w-1" "bd list --status=in_progress" "bd ready" "bd dolt status" "bd export --all" \
-         "bd dep tree w-1" "bd dolt remote list" "bd doctor" "bd memories key" "bd comments w-1" \
-         "bd search frozen" "bd history w-1" "bd --json list" "env X=1 bd show w-1" "bash -c 'bd ready'" \
-         "echo ok && bd show w-1" $'echo don\'t; bd show w-1' "bd close w-1 # frozen-store-ok" \
-         "bd update w-1 --claim  # frozen-store-ok" "bd dolt push # frozen-store-ok"; do
-  PATH="$STUB:$PATH" blocks "blocked (a read of the frozen store, or a write however marked): $c" "$c"
-done
-for c in $'echo don\'t; env X=1 bd show w-1' $'echo don\'t; /usr/local/bin/bd ready' $'echo don\'t; sudo bd list' \
-         $'echo don\'t; env X=1 bd close w-1 # frozen-store-ok' \
-         $'cat > f <<EOF\nsee # frozen-store-ok\nEOF\nbd show w-1'; do
-  PATH="$STUB:$PATH" blocks "blocked (fallback unwraps; a marker in a data heredoc is text): $c" "$c"
-done
-for c in "bd close --help" "bd --version" "bd version" "bd help" "bd help close" "cairn close w-1" \
-         "cairn update w-1 --claim" "cairn show w-1" "git commit -m 'bd close w-1'" \
-         "bd show w-1 # frozen-store-ok" "bd export --all -o /tmp/x.jsonl  # frozen-store-ok" \
-         "bd dolt status #frozen-store-ok" $'echo don\'t; bd show w-1 # frozen-store-ok'; do
-  PATH="$STUB:$PATH" allows "allowed: $c" "$c"
-done
-run_hook "bd show w-1"
-if grep -q 'READ THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn show' "$ERRF" && grep -q 'frozen-store-ok' "$ERRF"
-then ok "a blocked read names the cairn verb and the escape"; else bad "a blocked read names the cairn verb and the escape" "$(cat "$ERRF")"; fi
-run_hook "bd search frozen"
-if grep -q 'READ THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn has no `search`' "$ERRF"
-then ok "a blocked read says when cairn has no such verb"; else bad "a blocked read says when cairn has no such verb" "$(cat "$ERRF")"; fi
-run_hook "bd update w-1 --claim"
-if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn update' "$ERRF"
-then ok "a blocked write names the cairn verb"; else bad "a blocked write names the cairn verb" "$(cat "$ERRF")"; fi
-run_hook "bd tag w-1 urgent"
-if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn update --add-label' "$ERRF"
-then ok "a blocked write names the cairn form when the verb differs"; else bad "a blocked write names the cairn form" "$(cat "$ERRF")"; fi
-run_hook "bd label add w-1 x"
-if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF" && grep -q 'cairn has no `label`' "$ERRF"
-then ok "a blocked write says when cairn has no such verb"; else bad "a blocked write says when cairn has no such verb" "$(cat "$ERRF")"; fi
-run_hook "bd show w-1; bd close w-2"
-if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF"; then ok "a read and a write in one command: the write is reported"
-else bad "a read and a write in one command: the write is reported" "$(cat "$ERRF")"; fi
-run_hook "bd close w-2; bd show w-1"
-if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF"; then ok "…in either order"
-else bad "…in either order" "$(cat "$ERRF")"; fi
-run_hook $'echo don\'t; bd close w-2; bd show w-1'
-if grep -q 'WRITE THROUGH bd BLOCKED' "$ERRF"; then ok "…and through the line fallback"
-else bad "…and through the line fallback" "$(cat "$ERRF")"; fi
-cp "$STUB/bd" "$STUB/cairnonly/cairn"
+export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
+PATH="$STUB:$PATH" allows "another CLI's call is not this hook's business" "bd close w-1"
+PATH="$STUB:$PATH" allows "…nor its remember"                              "bd remember 'x'"
+PATH="$STUB:$PATH" blocks "a keyless cairn remember is still blocked under an old store-cli" "cairn remember 'x'"
+if grep -q 'cairn remember --key' "$ERRF"; then ok "the remember gate names cairn"; else bad "the remember gate names cairn" "$(cat "$ERRF")"; fi
+if grep -q 'store-cli' "$ERRF"; then bad "nothing reads .claude/store-cli" "$(cat "$ERRF")"; else ok "nothing reads .claude/store-cli"; fi
+cp "$STUB/cairn" "$STUB/cairnonly/cairn"
 printf '#!/bin/sh\nexit 1\n' > "$STUB/cairnonly/bd"; chmod +x "$STUB/cairnonly/bd"
 BD_STUB_JSON='[{"id":"w-9","title":"t","assignee":"u/claude/abcd1234"}]' PATH="$STUB/cairnonly:$PATH" \
-  HOOK_SID=k1 BEADS_ACTOR=u/claude/abcd1234 allows "the scripts gate asks cairn, not bd" "python3 scripts/run.py"
-run_hook "cairn remember 'x'"
-if grep -q 'cairn remember --key' "$ERRF"; then ok "the remember gate names cairn"; else bad "the remember gate names cairn" "$(cat "$ERRF")"; fi
-
-echo "### .claude/store-cli = bd (after a rollback): cairn writes are blocked, cairn reads pass (its shadow mirrors bd)"
-printf 'bd\n' > "$SW/.claude/store-cli"
-PATH="$STUB:$PATH" blocks "blocked: cairn update"  "cairn update w-1 --claim"
-PATH="$STUB:$PATH" blocks "blocked: cairn migrate" "cairn migrate"
-PATH="$STUB:$PATH" blocks "blocked: cairn update, however marked" "cairn update w-1 --claim # frozen-store-ok"
-run_hook "cairn update w-1 --claim"
-if grep -q 'same verbs and flags' "$ERRF"; then ok "…and the message points at bd"; else bad "…and the message points at bd" "$(cat "$ERRF")"; fi
-PATH="$STUB:$PATH" allows "allowed: cairn show"    "cairn show w-1"
-PATH="$STUB:$PATH" allows "allowed: cairn ready"   "cairn ready"
-PATH="$STUB:$PATH" allows "allowed: cairn export"  "cairn export --all"
-PATH="$STUB:$PATH" allows "allowed: cairn shadow run (the mirror of bd)" "cairn shadow run --quiet"
-PATH="$STUB:$PATH" blocks "blocked: cairn remember" "cairn remember --key k v"
-PATH="$STUB:$PATH" allows "allowed: bd close"      "bd close w-1"
-
-echo "### an unknown store-cli value: warned, nothing blocked"
-printf 'beads\n' > "$SW/.claude/store-cli"
-PATH="$STUB:$PATH" allows "unknown value: bd write passes"    "bd close w-1"
-if grep -q "expected bd or cairn" "$ERRF"; then ok "…and says why"; else bad "…and says why" "$(cat "$ERRF")"; fi
+  HOOK_SID=k1 BEADS_ACTOR=u/claude/abcd1234 allows "the scripts gate asks cairn" "python3 scripts/run.py"
 HOOK=$REAL_HOOK
 unset BD_STUB_LIST BD_STUB_JSON BD_SESSION_CLAIMS_DIR
 

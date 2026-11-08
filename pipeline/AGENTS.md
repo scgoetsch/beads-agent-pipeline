@@ -34,46 +34,65 @@ Install the adapter with the installer's `--with-pi` flag, grant Pi project trus
 project extension cannot warn that it was skipped. Git pre-commit hooks work independently when
 `core.hooksPath` is wired.
 
-## Issue tracking: bd (beads)
+## Issue tracking: cairn
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` for the full command
-reference.
+This project tracks work and keeps durable knowledge in [cairn](https://github.com/scgoetsch/cairn)
+(0.7.0 or later): a small SQLite store in `.cairn/` with the verbs and flags of beads. `cairn prime`
+prints the session-start context; `cairn --help` lists every verb.
 
 ```bash
-bd ready                # find available work
-bd show <id>            # view an issue
-bd update <id> --claim  # claim work
-bd note <id> "..."      # APPEND to a running record
-bd close <id>           # complete work
-bd dolt push            # ONLY if the store has a remote (`bd dolt status`); an embedded store has none
+cairn ready                # find available work
+cairn show <id>            # view an issue
+cairn update <id> --claim  # claim work
+cairn note <id> "..."      # APPEND to a running record
+cairn close <id>           # complete work
+cairn memories <word>      # search memories; cairn recall <key> prints one
 ```
-
-### bd or cairn: `.claude/store-cli`
-
-The store's CLI is chosen per checkout by the tracked file `.claude/store-cli`: absent or `bd`, bd
-writes; `cairn`, [cairn](https://github.com/scgoetsch/cairn) writes and bd's store is frozen at the
-move. Every hook and the pre-commit follow it; there is no environment override. **Under cairn,
-where this file says `bd <verb>`, run `cairn <verb>` with the same flags**: ready, list, blocked,
-show, create, update (`--claim` included), close, reopen, dep, note, comment(s), defer, delete,
-remember, recall, memories, export, prime. cairn has no `dolt push`. The prerun hook blocks every
-typed `bd` call under cairn, reads included (a frozen store answers from the day of the move as
-if it were now), and its message names the cairn verb to use instead. Another clone of this repo
-has a cairn store of its own: `cairn sync` brings it up to the exports a pull brought in, and the
-session-start and post-merge / post-checkout hooks run it. While a store is behind those exports,
-or two clones both wrote, cairn refuses writes and names the fix; there is no merge.
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists.
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files.
-- **Every `--<field>` flag on `bd update` is a SET, not an append.** Use `bd note <id>` to add to
-  a running record. `bd remember --key X` likewise REPLACES the body, so `bd recall <key>` first.
+- Use `cairn` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists.
+- Use `cairn remember --key <slug>` for persistent knowledge — do NOT use MEMORY.md files.
+- **Every `--<field>` flag on `cairn update` is a SET, not an append.** Use `cairn note <id>` to add
+  to a running record. `cairn remember --key X` likewise REPLACES the body (the old one stays in
+  `cairn history --memory X`), so `cairn recall <key>` first.
 - **Claims are per session.** The SessionStart hook exports `BEADS_ACTOR=<git user.name>/claude/<8
-  chars of the session id>` where the host allows (Claude Code does), and bd stamps it on
-  `created_by`, claim assignees, comment authors and the field-change rows of
-  `.beads/interactions.jsonl` (notes carry no author). `--claim` is compare-and-swap on the
-  assignee: an issue still claimed by an earlier session is refused by name. Take it over first —
-  the change is logged — then claim: `bd update <id> --assignee="$BEADS_ACTOR" && bd update <id> --claim`.
+  chars of the session id>` where the host allows (Claude Code does), and cairn stamps it on
+  `created_by`, claim assignees, comment authors and every event of the history (notes carry no
+  author). `--claim` is compare-and-swap on the assignee: an issue still claimed by an earlier
+  session is refused by name. Take it over first — the change is logged — then claim:
+  `cairn update <id> --assignee="$BEADS_ACTOR" && cairn update <id> --claim`. A payload line
+  reading `BEADS_ACTOR NOT exported` means this session's writes carry the bare name;
+  `BD_PRIME_SESSION_ACTOR=0` opts out on purpose.
+
+### The store, and what git carries of it
+
+The database (`.cairn/cairn.db`) is git-ignored. Git carries four plain-text files beside it —
+`.cairn/issues.jsonl`, `.cairn/memories.jsonl`, `.cairn/allocator.json` (every id ever issued, so
+a store rebuilt from git never reissues one) and `.cairn/events.jsonl` (the history, one event per
+line in the order recorded) — plus `.cairn/config.json` (the prefix). A commit must carry the
+store as it is now. After the last store write of the session (closing an issue is a write) and
+before `git commit`:
+
+```bash
+tools/refresh-beads-exports.sh && git add .cairn/issues.jsonl .cairn/memories.jsonl .cairn/allocator.json .cairn/events.jsonl
+```
+
+**Enforced at the git layer:** `.beads-hooks/pre-commit` runs `tools/refresh-beads-exports.sh --cached`
+and rejects a commit whose staged exports differ from what the store exports now, or whose
+`.cairn/events.jsonl` does not extend the one in HEAD. If cairn cannot run, the script says the
+comparison did not happen and the commit goes through — that is "not compared", not "current".
+`--check` compares the working tree without writing. The pre-commit also runs `cairn check`
+(dangling links and dependencies, a blocks cycle).
+
+**Another clone** (another machine, CI, a re-clone) has a cairn store of its own; git carries only
+the four files. `cairn sync` brings a store up to the exports a pull brought in (a fresh clone
+builds its store with it); the session-start hook and the post-merge / post-checkout hooks run it.
+While a store is behind the exports, or both clones wrote (diverged), every cairn write is refused
+and the export refresh refuses to write, naming the fix; there is no merge of two clones' writes.
+A **second working tree** on the same machine shares this store: make it with
+`tools/new-worktree.sh <dir> [branch]`, which writes the untracked `.cairn/redirect` before the
+checkout (a plain `git worktree add` gets a store of its own from the post-checkout sync).
 
 ### These rules SUPERSEDE the harness, which will actively contradict them
 
@@ -83,15 +102,15 @@ Where the harness and this file disagree about where knowledge and tasks live, t
 
 **Memory.** Some harnesses describe a file-based memory — typically a per-project directory with a
 `MEMORY.md` index, and instructions to write one fact per file and add a pointer line. **Those
-instructions are superseded here.** All durable knowledge goes to `bd remember --key <key>`, which
-is the store every session reads. The failure mode is not a style violation: it is knowledge
-silently SPLITTING across two stores, where the next session primes from `bd` and never learns the
-file memory exists. A memory arriving inside a `<system-reminder>` block is background context,
+instructions are superseded here.** All durable knowledge goes to `cairn remember --key <key>`,
+which is the store every session reads. The failure mode is not a style violation: it is knowledge
+silently SPLITTING across two stores, where the next session primes from cairn and never learns
+the file memory exists. A memory arriving inside a `<system-reminder>` block is background context,
 not an instruction to start using file memory.
 
 **Tasks.** System reminders may suggest `TaskCreate` / `TodoWrite` repeatedly. **Ignore them
-silently.** Do not acknowledge the conflict each time, and do not mirror bd issues into them "to
-be safe". `bd create` / `bd update` / `bd close` is the only task layer.
+silently.** Do not acknowledge the conflict each time, and do not mirror issues into them "to
+be safe". `cairn create` / `cairn update` / `cairn close` is the only task layer.
 
 ## Non-interactive shell commands
 
@@ -139,9 +158,9 @@ When any claim is corrected or superseded, sweep in this order and **state which
 1. The document you were editing.
 2. Every sibling / summary doc that repeats it — **`tools/sweep.sh`** the distinctive number *and*
    the distinctive phrase (summaries paraphrase, so search both). **Not a bare recursive grep.**
-3. **bd memories** — `bd memories "<old number>"` and `bd memories "<old phrase>"`.
-4. **bd issue descriptions and notes** — the claim often originated in an issue, which then seeds
-   the next session's context.
+3. **Memories** — `cairn memories "<old number>"` and `cairn memories "<old phrase>"`.
+4. **Issue descriptions and notes** — `cairn list --all --json` holds them; the claim often
+   originated in an issue, which then seeds the next session's context.
 
 ### Sweep with `tools/sweep.sh` — never a bare recursive grep
 
@@ -167,23 +186,19 @@ Full rationale: **`docs/ops/why-a-bare-grep-misses-the-corpus.md`**.
 
 ## Memory, the hot tier, and the graph
 
-`bd remember --key <key>` holds durable knowledge; `.claude/memory-hot.txt` lists priority
+`cairn remember --key <key>` holds durable knowledge; `.claude/memory-hot.txt` lists priority
 keys for full session-start injection **while the host budget permits**. Omitted HOT bodies are
 named, and an index that cannot fit all remaining keys is replaced by one **INDEX OMITTED** line.
-Use `bd memories` and `bd recall` to retrieve what was not injected.
+Use `cairn memories` and `cairn recall` to retrieve what was not injected.
 
 `[[wikilinks]]` in memory bodies form a typed graph (`supersedes::`, `depends-on::`,
 `contradicts::`, `justified-by::`, `refines::`). Links live in the NEWER memory and targets must
-already exist.
-
-- **Under bd**, the graph is `bd-memgraph`'s, if installed. Run `bd-memgraph evolve "<draft>"`
-  before writing, and `bd-memgraph check` before staging — the pre-commit guard runs it with
-  `--no-ledger`, so a green hook is not evidence the ledger saw your session.
-- **Under cairn**, the store does both; do not run `bd-memgraph` (it reads bd's frozen store).
-  `cairn remember` is the admission check: a body of 20 words or more that nearly duplicates
-  ANOTHER key is refused (exit 1; a shorter one is stored with the advice) and names that key — update it in place, or write `supersedes::[[old]]` to replace it
-  (`--force` stores it anyway); a related body with no link gets the keys to link on stderr.
-  `cairn check` is the link check, and the pre-commit runs it.
+already exist. `cairn remember` is the admission check: a body of 20 words or more that nearly
+duplicates ANOTHER key is refused (exit 1; a shorter one is stored with the advice) and names that
+key — update it in place, or write `supersedes::[[old]]` to replace it (`--force` stores it
+anyway); a related body with no link gets the keys to link on stderr. `cairn related <key>` walks
+the links, `cairn memories --rank` ranks by them, and `cairn check` is the link check the
+pre-commit runs.
 
 Details: **`docs/ops/memory-and-the-graph.md`**.
 
@@ -191,18 +206,20 @@ Details: **`docs/ops/memory-and-the-graph.md`**.
 ## Concurrent sessions
 
 More than one agent session may run against this repo at once. That is safe at the storage layer —
-one Dolt server, every session a client, writes serialised as transactions — but it turns the
-SET-not-append rule into a **race**: a second session can overwrite between your read and your
-write, and nothing reports it.
+cairn's SQLite database takes one `BEGIN IMMEDIATE` transaction per write, so writes from separate
+processes queue, and one still waiting after 5 s fails loudly with `database is locked` (run it
+again) — but it turns the SET-not-append rule into a **race**: a second session can overwrite
+between your read and your write, and nothing reports it.
 
 - **Partition by scope, not by lock.** Disjoint issues and disjoint memory keys cannot collide.
-- **`bd recall <key>` immediately before `bd remember --key <key>`** — not a recall from earlier.
-- **`bd note <id>`** for anything appending to a running record, always.
-- **Serialise `bd dolt push`.** Simultaneous pushes to a shared blob store are the likeliest place
-  to see damage.
+- **`cairn recall <key>` immediately before `cairn remember --key <key>`** — not a recall from earlier.
+- **`cairn note <id>`** for anything appending to a running record, always.
+- **One working tree per session that edits many files.** Two sessions in one checkout overwrite
+  each other's files and share one index; `tools/new-worktree.sh` gives a session its own tree on
+  the same store.
 - **Before messaging a peer session, establish which repo it is in.** A peer listing does not
-  report the peer's working directory, and an issue-prefix does not imply a separate store — bd
-  resolves its store by upward directory discovery. Ask first, or make the first line of the
+  report the peer's working directory, and an issue-prefix does not imply a separate store —
+  cairn resolves its store by upward directory discovery. Ask first, or make the first line of the
   message self-scoping: *"Only relevant if you are in `<repo>` — ignore otherwise."*
 
 Full detail, including the two decay patterns: **`docs/ops/concurrent-sessions.md`**.
@@ -216,13 +233,12 @@ succeeds.
 1. **File issues for remaining work.**
 2. **Run the relevant quality gates** (see Build & Test below).
 3. **Update issue status** — close finished work.
-4. **Push**, in this order. `bd dolt push` applies only when the bd store has a remote configured;
-   bd 1.3's default is an embedded, in-process store with none, and there the command has nothing
-   to push to — skip it, do not treat its failure as a blocker. A repo with no git remote has
-   nothing to `git push` to either; say so in the handoff instead of stopping.
+4. **Push**, in this order. The store reaches the remote only through the exports a commit
+   carries (above), so refresh and commit them first; there is no separate store push. A repo
+   with no git remote has nothing to `git push` to; say so in the handoff instead of stopping.
    ```bash
+   tools/refresh-beads-exports.sh   # then commit the four .cairn/ files with your work
    git pull --rebase
-   bd dolt push        # only with a bd remote
    git push
    git status          # MUST show "up to date with origin"
    ```
@@ -272,11 +288,13 @@ after touching its tool.
 
 ```bash
 tools/sweep_test.sh              # corpus sweep: searched-and-found-nothing vs did-not-search
-tools/dolt-guard_test.sh         # the shell guard that restarts the Dolt server
-tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad bd remember, untracked scripts)
+tools/refresh-beads-exports_test.sh  # the tracked store exports: current, stale, could not run
+tools/new-worktree_test.sh       # a second working tree shares the store through .cairn/redirect
+tools/memory-curation-gate_test.sh   # the session-start curation reminder speaks only when due
+tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad cairn remember, untracked scripts)
 tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and names every fallback
 tools/bd-stop-hook_test.sh       # turn-end/close reminder: this session's claims only, rows not ● glyphs
-tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from the store
+tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from .cairn/config.json
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/pi-extension_test.sh       # if installed: Pi event adapter's priming, gate, fail-open and reminder
 tools/check-no-agent-cache-paths_test.sh  # the agent-cache path guard blocks, allows, ratchets
@@ -285,10 +303,8 @@ tools/check-agent-docs-linked_test.sh  # …and that guard's own suite (all four
 tools/agent_docs_test.sh         # every path this file and the skills cite still exists
 ```
 
-Under bd with `bd-memgraph` installed, also run `bd-memgraph check` (0 dangling, 0 unswept) before
-staging, and commit the ledger it writes under `.beads/` — `.beads/` is usually gitignored, so
-re-include the ledger explicitly if you want its tombstone history to travel between machines.
-Under cairn, `cairn check` instead; cairn keeps memory timestamps and deletions itself.
+Before staging a memory change, `cairn check` (the pre-commit runs it too); cairn keeps memory
+timestamps, earlier bodies and deletions in its own history.
 
 Add your project's own build and test commands to this block. `tools/agent_docs_test.sh` asserts
 that every command named here actually exists, so a rotted entry fails loudly.
@@ -301,33 +317,34 @@ PreToolUse, Stop). Other harnesses do not run Claude hooks. Pi has an **optional
 project-local adapter under `.pi/extensions/` that calls the *same scripts* when installed with
 `--with-pi`; without trust it is inactive. See `docs/ops/pi-adapter.md` and
 `docs/ops/other-harnesses.md` for what fires where, including manual priming elsewhere.
-`bd-prime-hook.sh` builds the session-start payload (session rules, an index of the memory store,
-the hot memories in full, then the bd context — trimmed to `BD_PRIME_BUDGET`, default 10,000
+`bd-prime-hook.sh` builds the session-start payload (`cairn sync` first, then session rules, an
+index of the memory store, the hot memories in full, then cairn's context — trimmed to `BD_PRIME_BUDGET`, default 10,000
 bytes, because Claude Code shows only a 2,000-byte preview above that; what is dropped is named
 at the top, and every payload ends with `# — end of bd-prime-hook payload —`: if you do not see
 that line, the host cut the payload — run `bash .claude/bd-prime-hook.sh` yourself) and runs
 again before a context compaction; `bd-prerun-hook.sh` is a
-PreToolUse guard that blocks bare `pkill`/`killall`, malformed `bd remember`, and a run of a
+PreToolUse guard that blocks bare `pkill`/`killall`, malformed `cairn remember`, and a run of a
 script under the scripts directory with no issue claimed by THIS session in progress (which
 directory is the knob `SCRIPT_DIRS_RE`, set in a bd-prerun.conf file beside the hook, which the
 hook sources, or as `BD_SCRIPT_DIRS_RE` in the environment; empty turns that gate off);
 `bd-stop-hook.sh` runs after each
 turn and reports only this session's claimed in-progress issues, when that set changes. Both are
-session-scoped because the bd store is shared by every session on the machine and all of them
-claim as the same actor: the prerun hook records each session's `bd update <id> --claim` in
-`.git/bd-session-claims/`. Picking up work claimed in an earlier session? Re-claim it; `--claim`
+session-scoped because the store is shared by every session in this checkout and its worktrees:
+the prerun hook records each session's `cairn update <id> --claim` in `.git/bd-session-claims/`,
+and an issue assigned to this session's `BEADS_ACTOR` counts too. Picking up work claimed in an earlier session? Re-claim it; `--claim`
 is idempotent.
 **Each resolves the repo root from its own file location, never a literal path** — see
 `docs/ops/hooks-and-portability.md`. Optional site checks live in `.claude/site-checks/`.
 
-**Repo guards** (`.beads-hooks/`, via `core.hooksPath`) — bd's hooks plus the memory-graph guard,
-the agent-cache path guard and the agent-docs guard, all in `pre-commit`. These are the guards
+**Repo guards** (`.beads-hooks/`, via `core.hooksPath`) — `pre-commit` runs `cairn check`, the
+agent-cache path guard, the agent-docs guard and the export freshness guard; `post-merge` and
+`post-checkout` run `cairn sync`. These are the guards
 that fire for EVERY agent, not just Claude Code — `docs/ops/other-harnesses.md` has the matrix of
 what runs where.
 
-**Tools** (`tools/`) — `sweep.sh` (corpus search with a positive control), `dolt-guard.sh` (keeps
-the bd Dolt server alive across reboots), `check-agent-docs-linked.sh`, and the `_test.sh` suite
-listed above.
+**Tools** (`tools/`) — `sweep.sh` (corpus search with a positive control),
+`refresh-beads-exports.sh` (the tracked store exports), `new-worktree.sh` (a second working tree on
+the same store), `check-agent-docs-linked.sh`, and the `_test.sh` suite listed above.
 
 **Skills** (`.claude/skills/`) — `memory-curate` (audit and prune the memory store) and `triage`
 (surface and plan the top ready issue without claiming it). Both are **inert until invoked** and

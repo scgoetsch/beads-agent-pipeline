@@ -1,6 +1,6 @@
 # Memory: what goes in, and the graph over it
 
-`bd remember` is the durable store. The rules that keep it useful are about *admission* and
+`cairn remember` is the durable store. The rules that keep it useful are about *admission* and
 *linking*, not volume — a store nobody trusts is worse than a small one.
 
 ## What belongs in a memory
@@ -11,9 +11,9 @@ with its method, a trap and how to avoid it, a tool's real behaviour. Write the 
 index shows.
 
 What does **not** belong: session state, handoff notes, task lists, "where I left off". That is
-what issue notes (`bd note <id>`) and commit messages are for. `.claude/bd-prerun-hook.sh` enforces
-this at write time — it blocks `bd remember` without `--key`, and blocks bodies that are
-structurally a handoff memo.
+what issue notes (`cairn note <id>`) and commit messages are for. `.claude/bd-prerun-hook.sh`
+enforces this at write time — it blocks `cairn remember` without `--key`, and blocks bodies that
+are structurally a handoff memo.
 
 That gate is deliberately **structural, not lexical**. An earlier version blocked on vocabulary —
 any body containing "handoff", "wrap-up" and so on — which matched memories that merely *mentioned*
@@ -23,9 +23,10 @@ existed to prevent. If you tighten it, tighten the structure test.
 
 ## Every `--<field>` is a SET, not an append
 
-`bd update <id> --notes "..."` REPLACES the notes. `bd remember --key X` REPLACES the body. Use
-`bd note <id>` to add to a running record, and `bd recall <key>` immediately before any
-`bd remember` you intend as an edit. With more than one session running the same rule becomes a
+`cairn update <id> --notes "..."` REPLACES the notes. `cairn remember --key X` REPLACES the body
+(the old one stays readable in `cairn history --memory X`). Use `cairn note <id>` to add to a
+running record, and `cairn recall <key>` immediately before any `cairn remember` you intend as an
+edit. With more than one session running the same rule becomes a
 race — see `docs/ops/concurrent-sessions.md`, installed only with `install.sh --with-concurrent`.
 
 ## The hot tier
@@ -35,7 +36,7 @@ race — see `docs/ops/concurrent-sessions.md`, installed only with `install.sh 
 at the top. Other memories appear in a key-only index; if its keys alone exceed the budget, no keys are
 listed and one **INDEX OMITTED** line gives the count instead (an arbitrary prefix of keys told the
 reader almost nothing). Search the whole store with
-`bd memories <keyword>` and fetch a body with `bd recall <key>`.
+`cairn memories <keyword>` and fetch a body with `cairn recall <key>`.
 
 Keep the hot list to recurring-mistake guards — the things an agent must not rediscover the hard
 way. Two measurements from a live store that shaped this design:
@@ -50,84 +51,42 @@ way. Two measurements from a live store that shaped this design:
   letting the host trim for it: it names omitted HOT bodies and replaces an index that cannot fit
 with an explicit INDEX OMITTED line, whereas what the host drops nobody sees.
 
-An empty `memory-hot.txt` is fine and is how it ships: the hook emits the rules, the bd context and a
-key-only index (replaced by an INDEX OMITTED line on large stores), with nothing in full. It does NOT fall back to the full `bd prime`
+An empty `memory-hot.txt` is fine and is how it ships: the hook emits the rules, cairn's context and a
+key-only index (replaced by an INDEX OMITTED line on large stores), with nothing in full. It does NOT fall back to the full `cairn prime`
 dump for an empty list (an earlier version did, silently); it falls back only when it cannot tier at
 all — no `jq`, no hot file, a failed export — and then says so on its first line.
 
-## The graph under cairn
+## The graph
 
-Where `.claude/store-cli` says `cairn`, the store does what bd-memgraph does under bd, and
-bd-memgraph is not used (it reads `bd memories --json`, which is bd's frozen store there):
-
-- **Admission** is `cairn remember` itself, with bd-memgraph `evolve`'s heuristic and thresholds.
-  A body that nearly duplicates ANOTHER key is refused, exit 1, naming that key and the update
-  recipe; `--force` stores it anyway. A key the body `supersedes::` is not a candidate, and
-  rewriting the same key is never refused. A related body that links to no memory is stored, with
-  the keys worth linking named on stderr.
-- **Links** are parsed from the bodies in the same transaction as every `remember` and `forget`
-  (the bodies stay the source; the notation is the one below). `cairn check` reports dangling and
-  self links as errors and explains a link to a deleted key; it also checks the issues (dangling
-  dependencies, a second parent, a `blocks` cycle). The pre-commit runs it.
-- **Timestamps and deletions** are columns and a tombstone table in cairn's store, so there is no
-  ledger to commit.
-- `rank`, `lineage`, `related` and `graph` have no cairn verb.
-
-## bd-memgraph (under bd)
-
-[bd-memgraph](https://github.com/scgoetsch/bd-memgraph) (MIT) is an **optional** layer that reads
-`bd memories --json` and treats `[[wikilinks]]` in memory bodies as a typed graph. bd is never
-modified; the structure lives inside the memory bodies, so it survives upgrades and exports.
-
-It is a single python3 file with no dependencies:
-
-```bash
-git clone https://github.com/scgoetsch/bd-memgraph
-ln -sf "$PWD/bd-memgraph/bd-memgraph.py" ~/.local/bin/bd-memgraph
-```
-
-**Nothing breaks without it.** The `.beads-hooks/pre-commit` stanza tests for the binary and
-skips when it is absent, so the pipeline installs and runs fine either way. That silence is a
-deliberate exception to this repo's usual rule: silence is the enemy when it hides a FAILURE, but
-an optional tool you chose not to install is a decision, not a fault, and a hook that nags about
-it every commit would be noise. What is *not* silent is whether the stanza is present at all —
-the installer reports each guard in the pre-commit by name, so a hook missing one is visible.
-
-If you ever re-run `bd hooks install --shared`, it rewrites only the region between its own
-`BEADS INTEGRATION` markers, so the memory-graph and agent-docs stanzas should survive. Re-run
-the installer afterwards to confirm rather than assuming — it prints one line per guard.
+`[[wikilinks]]` in memory bodies form a typed graph, and the store keeps it: the bodies stay the
+source, and the links are parsed from them in the same transaction as every `remember` and
+`forget`.
 
 - Bare `[[key]]` means *related*. Type it when the relation is causal: `supersedes::`,
   `depends-on::`, `contradicts::`, `justified-by::`, `refines::`.
 - **Links live in the NEWER memory, and targets must already exist.**
-- Before writing: `bd-memgraph evolve "<draft>"` tells you near-duplicate (update in place) vs
-  novel, and suggests link candidates.
-- To supersede: write the corrected body under an accurate key with `supersedes::[[old-key]]`, run
-  `bd-memgraph check`, repoint the inbound links it lists, then `bd forget` the old key.
-- At session close `bd-memgraph check` should report OK — no dangling links, no unswept
-  supersedes. The pre-commit guard runs it with `--no-ledger`, which records no observations, so
-  **a green hook is not evidence the ledger saw your session**; run a plain `check` before staging.
-  A non-observing run says so on its own status line — read it.
+- **Admission** is `cairn remember` itself. A body of 20 words or more that nearly duplicates
+  ANOTHER key is refused, exit 1, naming that key and the update recipe (a shorter one is stored
+  with the advice); `--force` stores it anyway. A key the body `supersedes::` is not a candidate,
+  and rewriting the same key is never refused. A related body that links to no memory is stored,
+  with the keys worth linking named on stderr.
+- **Checking:** `cairn check` reports dangling and self links as errors and explains a link to a
+  deleted key; it also checks the issues (dangling dependencies, a second parent, a `blocks`
+  cycle). The pre-commit runs it.
+- **Walking and ranking:** `cairn related <key>` lists a memory's links, out and in (`--depth`
+  walks them); `cairn memories --rank` orders the store by the link graph (PageRank times recency,
+  superseded keys discounted), which is what the memory-curate skill's tier mode starts from.
+- **To supersede:** write the corrected body under an accurate key with `supersedes::[[old-key]]`,
+  run `cairn related old-key` to find the inbound links and repoint them, `cairn check`, then
+  `cairn forget old-key`.
+- **Timestamps, earlier bodies and deletions** are in cairn's own history (`cairn history --memory
+  <key>`, and `.cairn/events.jsonl` in git), so there is no separate ledger to commit.
 
-**Commit the ledger.** `bd-memgraph` writes `.beads/memgraph-ledger.json`, which carries tombstone
-history so a superseded key stays known after `bd forget`. Without it in git the history is
-local-only and the next machine re-learns nothing. bd itself does not ignore it: bd 1.1.2 and 1.3.0
-both ship a `.beads/.gitignore` that excludes specific state files (`sync-state.json`, `*.db`, …),
-not the directory, and `git check-ignore -v .beads/memgraph-ledger.json` prints nothing on either.
-So the whole step is `git add .beads/memgraph-ledger.json` once; a tracked file is not subject to
-ignore rules afterwards. The installer's verify step says so if it finds a ledger that is ignored.
+Before 0.2.0 an optional memory-graph tool did the admission, check, rank and lineage jobs, with
+a ledger file of its own; cairn absorbed them with the same notation and thresholds, so bodies
+written under it carry over unchanged, and the pipeline no longer ships its pre-commit stanza.
 
-Only if your own root `.gitignore` excludes `.beads/` wholesale do you need a re-include, and then
-it must exclude the directory's **contents**, not the directory — git cannot re-include a file
-under an excluded directory, so the pair this doc used to show (`.beads/` then
-`!.beads/memgraph-ledger.json`) ignored the ledger anyway, verified 2026-09-22:
-
-```gitignore
-.beads/*
-!.beads/memgraph-ledger.json
-```
-
-`tools/../.claude/skills/memory-curate/audit_wikilinks.py` repairs dangling links in bulk. Its
+`.claude/skills/memory-curate/audit_wikilinks.py` repairs dangling links in bulk. Its
 repoint table ships empty on purpose: you fill it in per repair, and only for successors you have
 verified carry the same claim. A link that points somewhere plausible but wrong is worse than one
 that is visibly broken, because nothing will flag it again.

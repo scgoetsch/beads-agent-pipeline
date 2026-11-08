@@ -12,8 +12,8 @@ until you type their name — but they do carry assumptions, and those assumptio
 
 ## What a skill assumes in general
 
-- **bd is present and initialised.** Both skills read the bd store. Without `.beads/` they have
-  nothing to work on.
+- **cairn is present and the store initialised.** Both skills read the cairn store. Without
+  `.cairn/` (`cairn init -p <PREFIX>`) they have nothing to work on.
 - **Slash-command invocation is a harness feature.** `/memory-curate` and `/triage` are how
   Claude Code invokes them. In another harness, the `SKILL.md` body is still a perfectly good
   prompt — point your agent at the file.
@@ -23,14 +23,15 @@ until you type their name — but they do carry assumptions, and those assumptio
 
 ## `memory-curate`
 
-Keeps the bd memory store lean. bd injects memories at prime time and has no decay or compaction
-of its own, so the store's size is a per-session token tax. This adds the missing lifecycle:
+Keeps the cairn memory store lean. The session-start hook injects every memory key and the hot
+bodies, and the store has no decay or compaction of its own, so its size is a per-session token
+tax. This adds the missing lifecycle:
 admission → tier → periodic curate (dedup, compact, consolidate, decay).
 
 | | |
 | --- | --- |
-| **Requires** | `bd` |
-| **Optional** | a semantic engine — `memory-mesh` or `bd find-duplicates`. It is **probed, never required**, and the skill falls back to bd-native comparison when absent. |
+| **Requires** | `cairn` (its `audit_wikilinks.py` reads the issue prefix from `.cairn/config.json`) |
+| **Optional** | a semantic engine — `memory-mesh`. It is **probed, never required**, and the skill falls back to cairn-native comparison (`cairn memories`, `cairn related`, `cairn memories --rank`) when absent. |
 | **Assumes** | the hot/index tiering this pipeline installs (`.claude/memory-hot.txt`). Without it the "tier" mode has nothing to tier. |
 | **Safety** | read-only audit by default; every destructive step is backed up and human-confirmed. |
 | **Cadence** | the session-start gate `.claude/site-checks/memory-curation-gate.sh` asks for an audit once the store is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt`; every run of the skill ends by rewriting that stamp. No `/loop` needed. |
@@ -40,13 +41,13 @@ prime-cost breakdown — it tells you which memories are actually expensive.
 
 ## `triage`
 
-One read-only pass over the bd queue: resume check, surface the top ready issue, load its prior
+One read-only pass over the cairn queue: resume check, surface the top ready issue, load its prior
 context from memories, classify it, and draft a short plan plus a single next action. It does
 **not** claim or execute.
 
 | | |
 | --- | --- |
-| **Requires** | `bd`, and `bd ready --json` — or, when the repo keeps a project registry (a projects.tsv with a projects.py beside it under tools/, not shipped here), that tool's `ready` and `audit` modes, which group the queue by ACTIVE project. |
+| **Requires** | `cairn`, and `cairn ready --json` — or, when the repo keeps a project registry (a projects.tsv with a projects.py beside it under tools/, not shipped here), that tool's `ready` and `audit` modes, which group the queue by ACTIVE project. |
 | **Assumes** | a queue worth triaging. It was written where the queue spanned several projects; with one project it still works, it just has less to disambiguate. |
 | **Safety** | read-only by default. `--claim` and `--comment` are explicit opt-ins. |
 | **Harness extras** | `/loop /triage` or `/schedule` for a recurring morning pass. Optional — and keep it **propose-only when unattended**. |

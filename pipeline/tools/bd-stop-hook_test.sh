@@ -3,11 +3,11 @@
 #
 # WHY IT EXISTS
 # The hook counted lines containing ● and said "You have 2 in-progress issue(s)" for one issue: ●
-# is bd's priority bullet on every row AND its BLOCKED glyph in the legend under every non-empty
-# listing. Found by the 2026-09-22 review; nothing had ever run the hook against bd's real output.
+# is the priority bullet on every row AND the BLOCKED glyph in the legend under every non-empty
+# listing. Found by the 2026-09-22 review; nothing had ever run the hook against the real output.
 #
-# Hermetic: a stub bd on PATH answers `bd list --status=in_progress` (text, bd 1.3's real shape)
-# and `bd --json list ...`, and the hook is copied into a throwaway .claude/ so it resolves that
+# Hermetic: a stub cairn on PATH answers `cairn list --status=in_progress` (text, the real shape)
+# and `cairn --json list ...`, and the hook is copied into a throwaway .claude/ so it resolves that
 # root from its own location. Nothing here touches the real store.
 set -uo pipefail
 HOOK=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.claude/bd-stop-hook.sh
@@ -19,7 +19,7 @@ chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));
         else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
 
 mkdir -p "$T/bin" "$T/ws/.claude"
-cat > "$T/bin/bd" <<'STUB'
+cat > "$T/bin/cairn" <<'STUB'
 #!/usr/bin/env bash
 case "$*" in
   *--json*)      printf '%s\n' "${BD_STUB_JSON-}" ;;
@@ -27,7 +27,7 @@ case "$*" in
 esac
 exit 0
 STUB
-chmod +x "$T/bin/bd"
+chmod +x "$T/bin/cairn"
 cp -f "$HOOK" "$T/ws/.claude/bd-stop-hook.sh"
 run_hook() { (cd "$T/ws" && PATH="$T/bin:${HOOK_PATH:-$PATH}" bash .claude/bd-stop-hook.sh) 2>/dev/null; }
 # A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
@@ -67,7 +67,7 @@ chk "no jq: one row -> 1"                   "$(HOOK_PATH="$T/nojq" run_hook | gr
 export BD_STUB_LIST="No issues found." BD_STUB_JSON="[]"
 chk "no jq: nothing -> silent"              "$(HOOK_PATH="$T/nojq" run_hook | grep -c 'SESSION CLOSE')" 0
 
-echo "### bd absent: silent, exit 0 (a broken bd must not fail the Stop event)"
+echo "### cairn absent: silent, exit 0 (a broken CLI must not fail the Stop event)"
 rc=0; out=$(cd "$T/ws" && PATH="$T/nojq" bash .claude/bd-stop-hook.sh 2>/dev/null) || rc=$?
 chk "exit 0"                                "$rc" 0
 chk "no reminder"                           "$(grep -c 'SESSION CLOSE' <<<"$out")" 0
@@ -109,7 +109,7 @@ rm -f "$BD_SESSION_CLAIMS_DIR/s1.reported"
 export BD_STUB_JSON="not json" BD_STUB_LIST="◐ mine-9 ● P2 [task] my claimed work"$'\n'"◐ other-1 ● P2 [bug] someone else$LEGEND"
 out=$(run_s Stop s1)
 chk "text fallback: own issue only"                "$(grep -c 'mine-9' <<<"$out")/$(grep -c 'other-1' <<<"$out")" "1/0"
-echo "### bd absent with a session id: silent, exit 0"
+echo "### cairn absent with a session id: silent, exit 0"
 rc=0; out=$(cd "$T/ws" && printf '{"hook_event_name":"SessionEnd","session_id":"s1"}' | PATH="$T/nojq" bash .claude/bd-stop-hook.sh 2>/dev/null) || rc=$?
 chk "exit 0, nothing printed"                      "$rc/$(grep -c . <<<"$out")" "0/0"
 
@@ -124,13 +124,11 @@ printf 'echo PRERUN-CONF-SOURCED\n' > "$T/ws/.claude/bd-prerun.conf"
 chk "bd-prerun.conf is not sourced"                "$(run_s Stop s9 | grep -c PRERUN-CONF-SOURCED)" 0
 rm -f "$T/ws/.claude/bd-prerun.conf"
 
-echo "### .claude/store-cli = cairn: the hook asks cairn and names it"
-printf 'cairn\n' > "$T/ws/.claude/store-cli"
-mkdir -p "$T/cairnbin"; cp "$T/bin/bd" "$T/cairnbin/cairn"
-printf '#!/bin/sh\nexit 1\n' > "$T/cairnbin/bd"; chmod +x "$T/cairnbin/bd"
+echo "### the hook asks cairn and names it; a .claude/store-cli left from before changes nothing"
+printf 'bd\n' > "$T/ws/.claude/store-cli"
 export BD_STUB_JSON='[{"id":"c-1","title":"in cairn","assignee":""}]'
 printf 'c-1\n' > "$BD_SESSION_CLAIMS_DIR/s6"
-out=$( (cd "$T/ws" && printf '{"hook_event_name":"SessionEnd","session_id":"s6"}' | PATH="$T/cairnbin:$PATH" bash .claude/bd-stop-hook.sh) 2>/dev/null)
+out=$(run_s SessionEnd s6)
 chk "listed from cairn, reminder says cairn close"  "$(grep -c 'c-1' <<<"$out")/$(grep -c 'cairn close' <<<"$out")" "1/1"
 rm -f "$T/ws/.claude/store-cli"
 unset BD_SESSION_CLAIMS_DIR

@@ -15,7 +15,7 @@ count as output**: a check that dies with "command not found" on stderr is repor
 
 ## What ships here
 
-`memory-curation-gate.sh` — the one check in the payload. It is silent until the bd memory store
+`memory-curation-gate.sh` — the one check in the payload. It is silent until the cairn memory store
 is 30 days or 10 memories past the stamp in `.claude/memory-curation.txt` (see the
 `memory-curate` skill), and it is loud, not silent, when it cannot read its inputs.
 

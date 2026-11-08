@@ -60,8 +60,8 @@ should say what the sweep could not reach.
 - Files gitignored *inside* a repo — excluded by default because that is usually where bulk data
   lives. Pass `--include-ignored`.
 - Files over the size cap (printed; raise with `--max-bytes`). Files exactly at the cap are searched.
-- **The bd layer.** Memories and issue text are separate `bd memories` / `bd list` searches. A
-  document sweep is not a corpus sweep.
+- **The store.** Memories and issue text are separate `cairn memories` / `cairn list --all --json`
+  searches. A document sweep is not a corpus sweep.
 
 This is one instance of a defect class that recurs across subsystems; the catalogue is
 [checks-narrower-than-what-they-check.md](checks-narrower-than-what-they-check.md).

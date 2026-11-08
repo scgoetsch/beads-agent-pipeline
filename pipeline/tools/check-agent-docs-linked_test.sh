@@ -9,7 +9,7 @@
 #
 # Hermetic: builds a throwaway repo under mktemp. It never touches this working tree, so it is
 # safe to run at any time, including with uncommitted work in progress. Four link states, the
-# pointer-file state of a filesystem without symlinks, and the bd-managed region check.
+# pointer-file state of a filesystem without symlinks, and the old managed block being named.
 set -uo pipefail
 GUARD=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/check-agent-docs-linked.sh
 [ -x "$GUARD" ] || { echo "missing or non-executable: $GUARD" >&2; exit 2; }
@@ -67,43 +67,25 @@ chk "no CLAUDE.md at all passes"          "$(run)" 0
 rm -f "$T/AGENTS.md"
 chk "neither file present passes"         "$(run)" 0
 
-echo "### the bd-managed region check"
+echo "### the old tracker's managed block in AGENTS.md is named, never a reason to block"
 printf '# Agent Instructions\n\nrules\n' > "$T/AGENTS.md"
 ln -sf AGENTS.md "$T/CLAUDE.md"
-chk "no BEADS markers -> nothing to check" "$(run)" 0
-{ printf '# Agent Instructions\n\n<!-- BEGIN BEADS INTEGRATION -->\n'
-  printf 'protocol line mentioning sweep.sh\n'
-  printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
-chk "protocol inside the markers is caught" "$(run)" 1
-
-# bd's OWN block must pass, whatever bd chooses to put in it. bd 1.3.0 generates a
-# "## Session Completion" section between its markers; the guard once listed that heading as
-# protocol-of-ours and blocked every commit on a fresh install. The shape below is the real
-# 1.3.0 block, cut down: a versioned marker, bd's headings, nothing of ours.
-{ printf '# Agent Instructions\n\nrules\n\n'
-  printf '<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:1105d646 -->\n'
-  printf '## Beads Issue Tracker\n\nRun `bd prime`.\n\n'
-  printf '## Session Completion\n\n**When ending a work session**, close issues and push.\n'
-  printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
-chk "bd 1.3.0's own block (with its Session Completion heading) passes" "$(run)" 0
-
-echo "### the size cap follows bd's own template, not a number written down in 2026"
-# The guard asks `bd setup --print` how long bd's block is (floor 56) and allows that plus slack.
-# Compute the same figure here, so this stays true when bd's template grows.
-tmpl=0
-if bd setup --help 2>&1 | grep -q -- '--print'; then tmpl=$(bd setup --print 2>/dev/null | wc -l | tr -d ' '); fi
-case $tmpl in ''|*[!0-9]*) tmpl=0 ;; esac; [ "$tmpl" -lt 56 ] && tmpl=56
-region() {  # region N -> AGENTS.md whose managed block holds N generated-looking lines
-  { printf '# Agent Instructions\n\nrules\n\n<!-- BEGIN BEADS INTEGRATION v:1 -->\n'
-    i=0; while [ "$i" -lt "$1" ]; do printf -- '- generated line %d\n' "$i"; i=$((i+1)); done
+chk "no BEADS markers -> passes"            "$(run)" 0
+chk "  and says nothing"                    "$( (cd "$T" && ./tools/check-agent-docs-linked.sh) 2>&1 | wc -l | tr -d ' ')" 0
+old_block() {  # old_block N -> AGENTS.md carrying the old managed block with N lines in it
+  { printf '# Agent Instructions\n\nrules\n\n<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:1105d646 -->\n'
+    i=0; while [ "$i" -lt "$1" ]; do printf -- '- generated line %d mentioning sweep.sh\n' "$i"; i=$((i+1)); done
     printf '<!-- END BEADS INTEGRATION -->\n'; } > "$T/AGENTS.md"
 }
-region "$tmpl";         chk "a block as long as bd's template ($tmpl) passes"   "$(run)" 0
-region $((tmpl + 40));  chk "a block 40 lines past bd's template is caught"     "$(run)" 1
+old_block 3
+chk "an old block passes (it is the user's file)" "$(run)" 0
+chk "  and it is named on stderr"           "$( (cd "$T" && ./tools/check-agent-docs-linked.sh) 2>&1 | grep -c "old tracker's managed block")" 1
+old_block 200
+chk "its size no longer matters"            "$(run)" 0
 
-echo "### --cached validates the index, including the managed block"
+echo "### --cached validates the index"
 git -C "$T" init -q
-region "$tmpl"; git -C "$T" add AGENTS.md CLAUDE.md
+old_block 3; git -C "$T" add AGENTS.md CLAUDE.md
 chk "valid staged pair passes" "$(cached)" 0
 git -C "$T" -c user.email=test@example.invalid -c user.name=fixture commit -qm baseline
 git -C "$T" rm -q --cached CLAUDE.md
@@ -114,9 +96,6 @@ rm -f "$T/CLAUDE.md"; printf 'regular copy\n' > "$T/CLAUDE.md"; git -C "$T" add 
 rm -f "$T/CLAUDE.md"; ln -s AGENTS.md "$T/CLAUDE.md"
 chk "staged regular copy caught despite working symlink" "$(cached)" 1
 git -C "$T" add CLAUDE.md
-region $((tmpl + 40)); git -C "$T" add AGENTS.md; region "$tmpl"
-chk "staged oversized managed block caught despite clean working doc" "$(cached)" 1
-git -C "$T" add AGENTS.md
 git -C "$T" rm -q --cached AGENTS.md
 chk "staged link with only an untracked target is broken" "$(cached)" 1
 git -C "$T" add AGENTS.md

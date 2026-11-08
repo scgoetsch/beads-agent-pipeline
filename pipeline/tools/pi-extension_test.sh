@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Hermetic Pi adapter suite: feed real Pi event shapes to the actual TypeScript factory, using
-# disposable sibling scripts. Never executes pkill, a real bd store, or the user's .pi resources.
+# disposable sibling scripts. Never executes pkill, a real cairn store, or the user's .pi resources.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 if [ ! -f .pi/extensions/beads-pipeline.ts ]; then
@@ -17,7 +17,7 @@ cp -f .pi/extensions/beads-pipeline.ts "$T/ws/.pi/extensions/beads-pipeline.ts"
 # Count actual child invocations, so a stubbed factory that claims it primed without running
 # the script cannot pass. These are never the scripts of the user's live project.
 for pair in '.claude/bd-prime-hook.sh:prime' '.claude/bd-prerun-hook.sh:gate' \
-            '.claude/bd-stop-hook.sh:stop' 'tools/dolt-guard.sh:dolt'; do
+            '.claude/bd-stop-hook.sh:stop'; do
   f=${pair%%:*}; name=${pair#*:}
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q >> "$BAP_TEST_ROOT/%s.calls"\n' "$name" "$name" > "$T/ws/$f"
 done
@@ -33,7 +33,7 @@ printf '%s\n' 'IFS= read -r payload || :' 'printf "%s\n" "$payload" >> "$BAP_TES
 printf '%s\n' 'IFS= read -r payload || :' 'printf "%s\n" "$payload" >> "$BAP_TEST_ROOT/stop.inputs"' \
   'case "$payload" in *SessionEnd*) echo "close reminder" ;; *) echo "in-progress reminder" ;; esac' \
   >> "$T/ws/.claude/bd-stop-hook.sh"
-chmod +x "$T/ws/.claude/"*.sh "$T/ws/tools/"*.sh
+chmod +x "$T/ws/.claude/"*.sh
 BAP_TEST_ROOT="$T/ws" node --input-type=module - "$T/ws/.pi/extensions/beads-pipeline.ts" "$T/ws" <<'JS' || exit 1
 import assert from 'node:assert/strict';
 import { existsSync, renameSync } from 'node:fs';
@@ -56,17 +56,16 @@ const calls = (name) => existsSync(`${root}/${name}.calls`) ? readFileSync(`${ro
 const prompt = () => ({ systemPromptOptions: { sections: {} } });
 
 await fire('session_start', { reason: 'startup' });
-assert.equal(calls('dolt'), 1); assert.equal(calls('prime'), 1);
+assert.equal(calls('prime'), 1);
 for (let n = 0; n < 2; n++) {
   const event = prompt(); await fire('before_agent_start', event);
   assert.match(event.systemPromptOptions.sections.beads_pipeline, /PRIMED 1/);
 }
-assert.equal(calls('prime'), 1, 'before_agent_start must not re-run bd');
+assert.equal(calls('prime'), 1, 'before_agent_start must not re-run the prime hook');
 await fire('session_before_compact', { reason: 'threshold' });
 assert.equal(calls('prime'), 2);
 const after = prompt(); await fire('before_agent_start', after);
 assert.match(after.systemPromptOptions.sections.beads_pipeline, /PRIMED 2/);
-assert.equal(calls('dolt'), 1, 'compaction should not rerun the startup guard');
 
 const blocked = await fire('tool_call', { toolName: 'bash', input: { command: 'pkill -f sentinel' } });
 assert.ok(blocked, JSON.stringify(notices)); assert.equal(blocked.block, true); assert.match(blocked.reason, /BARE pkill BLOCKED/);
@@ -139,8 +138,7 @@ W="$T/ws2"; mkdir -p "$W/.pi/extensions" "$W/.claude" "$W/tools" "$T/bin2"
 cp -f .pi/extensions/beads-pipeline.ts "$W/.pi/extensions/"
 cp -f .claude/bd-stop-hook.sh .claude/bd-prerun-hook.sh "$W/.claude/"
 printf '#!/usr/bin/env bash\necho "# PRIMED"\n' > "$W/.claude/bd-prime-hook.sh"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$W/tools/dolt-guard.sh"
-cat > "$T/bin2/bd" <<'BD'
+cat > "$T/bin2/cairn" <<'BD'
 #!/usr/bin/env bash
 # Stub store: $BAP_STORE holds "<id><TAB><title>" per in-progress issue.
 case "$*" in
@@ -151,7 +149,7 @@ print(json.dumps([{"id": r[0], "title": r[-1], "status": "in_progress"} for r in
 esac
 exit 0
 BD
-chmod +x "$T/bin2/bd" "$W/.claude/"*.sh "$W/tools/"*.sh
+chmod +x "$T/bin2/cairn" "$W/.claude/"*.sh
 printf 'other-1\tanother session\nother-2\tstale since June\nother-3\tanother project\n' > "$T/store"
 BAP_STORE="$T/store" BD_SESSION_CLAIMS_DIR="$T/claims2" PATH="$T/bin2:$PATH" \
   node --input-type=module - "$W/.pi/extensions/beads-pipeline.ts" "$W" "$T/store" <<'JS2'
@@ -179,7 +177,7 @@ assert.equal(killed?.block, true, 'the prerun hook still blocks a bare pkill thr
 const blocked = await bash('python3 scripts/run.py');
 assert.equal(blocked?.block, true, 'unrelated in-progress issues must not license this session');
 assert.match(blocked.reason, /No issue claimed by THIS session/);
-assert.equal(await bash('bd update ws-9 --claim'), undefined, 'claiming is allowed');
+assert.equal(await bash('cairn update ws-9 --claim'), undefined, 'claiming is allowed');
 appendFileSync(store, 'ws-9\tmy claimed work\n');          // ...and the claim ran
 await fire('agent_settled');
 assert.equal(notices.length, base + 1, 'the session\'s own claim is reported once');

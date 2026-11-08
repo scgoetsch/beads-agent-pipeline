@@ -3,9 +3,9 @@
 # it should speak, and speak when it should stay silent.
 #
 # Hermetic: the gate is COPIED into a scratch clone so it resolves that clone from its own
-# location (the portability rule), with a fabricated stamp and memories export, and a stub `bd`
+# location (the portability rule), with a fabricated stamp and memories export, and a stub `cairn`
 # on a private PATH for the no-export branch. "Today" is pinned with BD_CURATION_TODAY. Nothing
-# here touches the real .claude/ or .beads/.
+# here touches the real .claude/ or .cairn/.
 set -uo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 GATE="$HERE/.claude/site-checks/memory-curation-gate.sh"
@@ -14,11 +14,11 @@ pass=0; fail=0
 chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass+1));
         else printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
 
-ws="$T/ws"; mkdir -p "$ws/.claude/site-checks" "$ws/.beads"
+ws="$T/ws"; mkdir -p "$ws/.claude/site-checks" "$ws/.cairn"
 cp "$GATE" "$ws/.claude/site-checks/" && chmod +x "$ws/.claude/site-checks/memory-curation-gate.sh"
 G="$ws/.claude/site-checks/memory-curation-gate.sh"
 export BD_CURATION_TODAY=2026-10-06
-rows() { : > "$ws/.beads/memories.jsonl"; for i in $(seq 1 "$1"); do printf '{"_type":"memory","key":"k%d"}\n' "$i" >> "$ws/.beads/memories.jsonl"; done; }
+rows() { : > "$ws/.cairn/memories.jsonl"; for i in $(seq 1 "$1"); do printf '{"_type":"memory","key":"k%d"}\n' "$i" >> "$ws/.cairn/memories.jsonl"; done; }
 stamp() { printf '%s\t%s\n' "$1" "$2" > "$ws/.claude/memory-curation.txt"; }
 run() { out=$("$G" 2>&1); rc=$?; }
 
@@ -71,9 +71,9 @@ rows 100; stamp 2026-12-01 100; run
 chk "stamp in the future -> 'did NOT run'"        "$(grep -c 'did NOT run' <<<"$out")" 1
 chk "every loud path still exits 0"               "$rc" 0
 
-echo "### no export: counts through bd; without bd it says so"
-# A private PATH: symlinks to every tool the gate needs, plus a stub bd whose listing has 115
-# keys in bd's two-space-indented shape under a header line that must not be counted.
+echo "### no export: counts through cairn; without cairn it says so"
+# A private PATH: wrappers for every tool the gate needs, plus a stub cairn whose listing has 115
+# keys in the two-space-indented shape under a header line that must not be counted.
 mkdir -p "$T/bin"
 # A private PATH entry that runs the real TOOL. A symlink would do on Linux and macOS, but MSYS
 # `ln -s` copies the binary without the DLLs beside it and the copy dies with 127; an exec
@@ -81,37 +81,25 @@ mkdir -p "$T/bin"
 shim() { local b; b=$(command -v "$2" 2>/dev/null) || return 1
          printf '#!/bin/sh\nexec "%s" "$@"\n' "$b" > "$1/$2" && chmod +x "$1/$2"; }
 for tool in bash sh grep head tr wc date cat sed dirname seq; do shim "$T/bin" "$tool" || true; done
-printf '#!/usr/bin/env bash\n[ "$1" = memories ] || exit 1\necho "Memories matching \\"\\":"\nfor i in $(seq 1 115); do printf "  key-%%03d\\n    body\\n" "$i"; done\n' > "$T/bin/bd"; chmod +x "$T/bin/bd"
-rm -f "$ws/.beads/memories.jsonl"; stamp 2026-10-01 100
+printf '#!/usr/bin/env bash\n[ "$1" = memories ] || exit 1\necho "Memories matching \\"\\":"\nfor i in $(seq 1 115); do printf "  key-%%03d\\n    body\\n" "$i"; done\n' > "$T/bin/cairn"; chmod +x "$T/bin/cairn"
+rm -f "$ws/.cairn/memories.jsonl"; stamp 2026-10-01 100
 out=$(PATH="$T/bin" "$G" 2>&1); rc=$?
-chk "no export + stub bd: counts 115 keys, 15 new -> fires" "$(grep -c '(15 new)' <<<"$out")" 1
+chk "no export + stub cairn: counts 115 keys, 15 new -> fires" "$(grep -c '(15 new)' <<<"$out")" 1
 chk "header and body lines are not counted"       "$(grep -c 'now 115 ' <<<"$out")" 1
-printf '#!/usr/bin/env bash\nexit 3\n' > "$T/bin/bd"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$T/bin/cairn"
 out=$(PATH="$T/bin" "$G" 2>&1); rc=$?
-chk "no export + failing bd -> 'did NOT run'"      "$(grep -c 'did NOT run' <<<"$out")" 1
-rm -f "$T/bin/bd"
+chk "no export + failing cairn -> 'did NOT run'"      "$(grep -c 'did NOT run' <<<"$out")" 1
+rm -f "$T/bin/cairn"
 out=$(PATH="$T/bin" "$G" 2>&1); rc=$?
-chk "no export + no bd -> 'did NOT run'"           "$(grep -c 'did NOT run' <<<"$out")" 1
-chk "...and names both missing sources"            "$(grep -c 'no .beads/memories.jsonl and no bd' <<<"$out")" 1
+chk "no export + no cairn -> 'did NOT run'"           "$(grep -c 'did NOT run' <<<"$out")" 1
+chk "...and names both missing sources"            "$(grep -c 'no .cairn/memories.jsonl and no cairn on PATH' <<<"$out")" 1
 chk "exit 0 on every counting failure"             "$rc" 0
 rows 100; stamp 2026-10-01 100
 out=$(PATH="$T/bin" "$G" 2>&1)
-chk "export present: bd is not consulted (no bd on PATH, still silent)" "$out" ""
-
-echo "### .claude/store-cli = cairn: the count comes from cairn, bd is not asked"
-rm -f "$ws/.beads/memories.jsonl"; stamp 2026-10-01 100
-printf '#!/usr/bin/env bash\n[ "$1" = memories ] || exit 1\necho "Memories (112):"\nfor i in $(seq 1 112); do printf "  key-%%03d\\n    body\\n" "$i"; done\n' > "$T/bin/cairn"; chmod +x "$T/bin/cairn"
-printf '#!/usr/bin/env bash\nexit 3\n' > "$T/bin/bd"; chmod +x "$T/bin/bd"
-printf 'cairn\n' > "$ws/.claude/store-cli"
-out=$(PATH="$T/bin" "$G" 2>&1)
-chk "counts 112 through cairn, 12 new -> fires"   "$(grep -c '(12 new)' <<<"$out")" 1
-rm -f "$T/bin/cairn"
-out=$(PATH="$T/bin" "$G" 2>&1)
-chk "cairn selected but absent: says so by name"  "$(grep -c 'no cairn on PATH' <<<"$out")" 1
-rm -f "$ws/.claude/store-cli" "$T/bin/bd"; rows 100
+chk "export present: cairn is not consulted (no cairn on PATH, still silent)" "$out" ""
 
 echo "### the export is counted by memory rows, not by lines of anything"
-rows 100; printf '{"_type":"issue","id":"WS-x"}\n' >> "$ws/.beads/memories.jsonl"; stamp 2026-10-01 100; run
+rows 100; printf '{"_type":"issue","id":"WS-x"}\n' >> "$ws/.cairn/memories.jsonl"; stamp 2026-10-01 100; run
 chk "an issue row does not count as a memory"     "$out" ""
 
 echo "### stays well under the hook's 1500-byte site-check cap"

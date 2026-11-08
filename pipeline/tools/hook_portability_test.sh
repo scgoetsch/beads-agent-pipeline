@@ -4,14 +4,14 @@
 # WHAT IT GUARDS
 # .claude/settings.json is version-controlled, so whatever path the hooks name travels to
 # every clone. When that path was a literal like /home/alice/workspace, the hooks' `cd ... || exit 0`
-# failed OPEN and SILENT on any other clone: no session rules, no bd memories, no pkill guard,
+# failed OPEN and SILENT on any other clone: no session rules, no memories, no pkill guard,
 # no untracked-script gate, and no error anywhere. A second operator would have run plain
 # Claude Code in a directory that merely contained the files.
 #
 # So these checks relocate the hooks to a throwaway root and assert they follow. A test that
 # only ran them in place would pass against the very bug it exists to catch.
 #
-# Run: tools/hook_portability_test.sh     (no network, no bd store, no cluster)
+# Run: tools/hook_portability_test.sh     (no network, no store, no cluster)
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -33,21 +33,20 @@ canon() { local p; p=$(cd -- "$1" 2>/dev/null && pwd -P) || p=$1
 
 # ---- a throwaway "clone" at a path that is NOT this repo --------------------
 CLONE="$TMP/some other place/clone"     # the space is deliberate: paths get quoted wrong
-mkdir -p "$CLONE/.claude" "$CLONE/.beads" "$CLONE/tools"
+mkdir -p "$CLONE/.claude" "$CLONE/.cairn" "$CLONE/tools"
 CLONE_CANON=$(canon "$CLONE")
 cp "$ROOT/.claude/bd-prime-hook.sh" "$ROOT/.claude/bd-prerun-hook.sh" \
    "$ROOT/.claude/bd-stop-hook.sh" "$CLONE/.claude/"
-cp "$ROOT/tools/dolt-guard.sh" "$CLONE/tools/"
 printf 'some-hot-memory\n' > "$CLONE/.claude/memory-hot.txt"
 
-# stub bd: records the cwd it was called from, then gets out of the way
+# stub cairn: records the cwd it was called from, then gets out of the way
 mkdir -p "$TMP/bin"
-cat > "$TMP/bin/bd" <<'STUB'
+cat > "$TMP/bin/cairn" <<'STUB'
 #!/usr/bin/env bash
 pwd -P >> "$BD_CWD_LOG"
 exit 1
 STUB
-chmod +x "$TMP/bin/bd"
+chmod +x "$TMP/bin/cairn"
 export BD_CWD_LOG="$TMP/cwd.log"
 PATH="$TMP/bin:$PATH"; export PATH
 
@@ -60,31 +59,31 @@ run_hook() {  # run_hook <script> [stdin]
 sec "the hooks follow their own file to a relocated clone"
 
 rc=$(run_hook bd-stop-hook.sh)
-chk "bd-stop-hook runs bd from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
+chk "bd-stop-hook runs cairn from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
 chk "bd-stop-hook exits 0" "$rc" "0"
 
 rc=$(run_hook bd-prime-hook.sh)
-chk "bd-prime-hook runs bd from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
+chk "bd-prime-hook runs cairn from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
 chk "bd-prime-hook still emits the session rules" \
     "$(grep -c 'MANDATORY SESSION RULES' "$TMP/out")" "1"
 
 JSON='{"tool_name":"Bash","tool_input":{"command":"python3 scripts/run_thing.py"}}'
-# The scripts gate is the prerun hook's only bd call; pin it on, since a clone's
+# The scripts gate is the prerun hook's only store call; pin it on, since a clone's
 # .claude/bd-prerun.conf may turn it off.
 rc=$(BD_SCRIPT_DIRS_RE=scripts run_hook bd-prerun-hook.sh "$JSON")
-chk "bd-prerun-hook runs bd from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
+chk "bd-prerun-hook runs cairn from the relocated clone" "$(canon "$(head -1 "$BD_CWD_LOG")")" "$CLONE_CANON"
 
 sec "the guards still fire after relocation (not just the path resolution)"
 
-# bd is never consulted for the pkill gate, so this proves the gate itself survived the move.
+# The store is never consulted for the pkill gate, so this proves the gate itself survived the move.
 JSON='{"tool_name":"Bash","tool_input":{"command":"pkill -f rsync"}}'
 rc=$(run_hook bd-prerun-hook.sh "$JSON")
 chk "bare pkill is still blocked (exit 2)" "$rc" "2"
 chk "  ...and says why on stderr" "$(grep -c 'BARE pkill' "$TMP/err")" "1"
 
-JSON='{"tool_name":"Bash","tool_input":{"command":"bd remember \"no key here\""}}'
+JSON='{"tool_name":"Bash","tool_input":{"command":"cairn remember \"no key here\""}}'
 rc=$(run_hook bd-prerun-hook.sh "$JSON")
-chk "bd remember without --key is still blocked" "$rc" "2"
+chk "cairn remember without --key is still blocked" "$rc" "2"
 
 sec "unresolvable root is LOUD, never a silent exit 0"
 
@@ -95,11 +94,6 @@ chk "bd-prime-hook announces it could not resolve the workspace" \
     "$(printf '%s' "$out" | grep -c 'CANNOT RESOLVE THE WORKSPACE')" "1"
 chk "  ...and says the session is NOT primed" \
     "$(printf '%s' "$out" | grep -ci 'no project rules')" "1"
-
-sec "dolt-guard defaults to its own repo, not a hardcoded path"
-
-got=$(BD_DOLT_GUARD_NORUN=1 bash -c '. "$1/tools/dolt-guard.sh"; printf %s "$__BD_DOLT_GUARD_ROOT"' _ "$CLONE")
-chk "sourced from the relocated clone, root is that clone" "$(canon "$got")" "$CLONE_CANON"
 
 sec "no executable line names a hardcoded workspace root"
 

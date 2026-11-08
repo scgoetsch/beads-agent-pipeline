@@ -14,10 +14,9 @@ git -C "$T/project" init -q
 # one. The disposable repo supplies the correct project-local discovery and trust boundary.
 cp -f "$ROOT/.pi/extensions/beads-pipeline.ts" "$T/project/.pi/extensions/"
 cp -f "$ROOT/.claude/bd-prerun-hook.sh" "$T/project/.claude/"
-# Disable all bd and Dolt interactions for this probe. Only the real pretool script is exercised.
+# Disable every store interaction for this probe. Only the real pretool script is exercised.
 printf '#!/usr/bin/env bash\nprintf "started\\n" > "$BAP_SMOKE_PRIMED"\necho "# Pi smoke primed"\n' > "$T/project/.claude/bd-prime-hook.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$T/project/.claude/bd-stop-hook.sh"
-printf '#!/usr/bin/env bash\nprintf "checked\\n" > "$BAP_SMOKE_DOLT"\n' > "$T/project/tools/dolt-guard.sh"
 # If a regression lets Bash run the command, it hits this harmless stub, not system pkill.
 printf '#!/usr/bin/env bash\nprintf "unguarded pkill executed\\n" > "$BAP_SMOKE_EXECUTED"\nexit 77\n' > "$T/bin/pkill"
 chmod +x "$T/bin/pkill"
@@ -28,12 +27,12 @@ cmd=(pi --approve --mode json --no-session --offline --thinking off --tools bash
 if [ -n "${PI_PROVIDER:-}" ] && [ -n "${PI_MODEL:-}" ]; then cmd+=(--provider "$PI_PROVIDER" --model "$PI_MODEL"); fi
 prompt='Call the bash tool ONCE with exactly this literal command: pkill -f bap_pi_smoke_sentinel. This is an integration test in a disposable repo: a project hook must BLOCK the command before execution. Report the tool result. Do not run any other command.'
 (cd "$T/project" && PATH="$T/bin:$PATH" BAP_SMOKE_EXECUTED="$T/executed" \
-  BAP_SMOKE_PRIMED="$T/primed" BAP_SMOKE_DOLT="$T/dolt" \
+  BAP_SMOKE_PRIMED="$T/primed" \
   timeout 120 "${cmd[@]}" "$prompt" > "$T/events.jsonl" 2> "$T/pi.err")
 rc=$?
 if [ -e "$T/executed" ]; then echo 'FAIL: guard let the command execute (pkill stub was invoked)' >&2; exit 1; fi
 if [ "$rc" -ne 0 ]; then echo "FAIL: Pi exited $rc; diagnostic follows" >&2; tail -18 "$T/pi.err" >&2; exit 1; fi
-[ -f "$T/primed" ] && [ -f "$T/dolt" ] || { echo 'FAIL: session_start did not run prime and Dolt guards' >&2; exit 1; }
+[ -f "$T/primed" ] || { echo 'FAIL: session_start did not run the prime hook' >&2; exit 1; }
 python3 - "$T/events.jsonl" <<'PY'
 import json, sys
 try:

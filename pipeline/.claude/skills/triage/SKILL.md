@@ -1,11 +1,11 @@
 ---
 name: triage
-description: One triage cycle over the bd work queue (every project, or only the ACTIVE ones when the repo keeps a project registry) — resume check, surface the top ready item, load its prior context from bd memories, classify it, and draft a short plan-of-attack + single next action, WITHOUT claiming or executing. Read-only by default. Wrap in /loop or /schedule for recurring morning triage.
+description: One triage cycle over the cairn work queue (every project, or only the ACTIVE ones when the repo keeps a project registry) — resume check, surface the top ready item, load its prior context from cairn memories, classify it, and draft a short plan-of-attack + single next action, WITHOUT claiming or executing. Read-only by default. Wrap in /loop or /schedule for recurring morning triage.
 ---
 
 # /triage — surface + plan the top ready bead
 
-Project-agnostic. The bd queue usually spans several projects at once. Triage is the generic
+Project-agnostic. The cairn queue usually spans several projects at once. Triage is the generic
 front end that reads the queue and **proposes**; it does **not** execute. Deep planning,
 execution, the maker/checker verifier, and landing are separate, gated steps.
 
@@ -19,13 +19,13 @@ that reads the whole repo costs more than the work it was triaging.
 
 ## Steps
 
-1. **Resume check.** `bd list --status in_progress 2>/dev/null`. **Default rule: treat
+1. **Resume check.** `cairn list --status in_progress 2>/dev/null`. **Default rule: treat
    in_progress as parked / long-running and do NOT front-run it** — surface the top OPEN item
    instead. Resume an in_progress item only if asked, or if one was updated very recently
    (genuinely mid-flight, not parked). Always report the in_progress count so nothing is
    silently dropped.
 
-2. **Surface.** Without a registry: `bd ready --json`, top OPEN item by **(priority asc, then
+2. **Surface.** Without a registry: `cairn ready --json`, top OPEN item by **(priority asc, then
    created_at asc)**. With one: `projects.py ready` (active projects, grouped). Priorities
    rank WITHIN a project, not across projects, so pick the project first — the one the user is
    working on, or ask if it is unclear — then its top OPEN item by the same order;
@@ -34,7 +34,7 @@ that reads the whole repo costs more than the work it was triaging.
 
 3. **Contextualize — don't re-derive.** Infer the item's **domain** from its title / desc /
    labels, then load the conventions that govern THAT domain from AGENTS.md +
-   `bd memories <key terms>`. Invariants are looked up **per item, never assumed**. Examples of
+   `cairn memories <key terms>`. Invariants are looked up **per item, never assumed**. Examples of
    domain → invariant (illustrative — write your own in AGENTS.md):
    - the project's own rules file, when the registry names one.
    - work on a dataset with a canonical/derived split → the convention that says which one is
@@ -50,14 +50,14 @@ that reads the whole repo costs more than the work it was triaging.
 
 5. **Plan (short).** 3-6 step plan-of-attack + the **single concrete next action**. List the
    domain invariants the eventual checker must enforce on land (from step 3) plus the always-on
-   ones (`bd remember` + push on close).
+   ones (`cairn remember` + push on close).
 
-6. **Propose — do not claim or execute.** Offer: claim it (`bd update <id> --claim`) · open the
+6. **Propose — do not claim or execute.** Offer: claim it (`cairn update <id> --claim`) · open the
    full implementation plan · skip to next · resume an in_progress item. Act only on explicit go.
 
 ## Modes (args)
 - _default_: read-only — surface + plan + propose. No writes.
-- `--claim`: also claim the selected item.   `--comment`: post the plan as a bd comment.
+- `--claim`: also claim the selected item.   `--comment`: post the plan as an issue comment (`cairn comment <id> "..."`).
 - `<issue-id>`: triage that specific id.   `<project>`: with a registry, `projects.py ready -p <project>`
   (works for inactive ones too); without one, restrict to items matching the term.
 

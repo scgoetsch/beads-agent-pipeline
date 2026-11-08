@@ -1,17 +1,19 @@
 ---
 name: memory-curate
-description: Curate the bd persistent-memory store — audit prime cost, prune dead/transient memories, dedup, compact bloated bodies, consolidate clusters, and tier hot vs situational to shrink the session-start prime dump. bd-native; a semantic engine (memory-mesh / bd find-duplicates) is an OPTIONAL accelerator, never required. Read-only audit by default; every destructive step is backed up + human-confirmed.
+description: Curate the cairn persistent-memory store — audit prime cost, prune dead/transient memories, dedup, compact bloated bodies, consolidate clusters, and tier hot vs situational to shrink the session-start prime dump. cairn-native; a semantic engine (memory-mesh) is an OPTIONAL accelerator, never required. Read-only audit by default; every destructive step is backed up + human-confirmed.
 ---
 
-# /memory-curate — keep the bd memory store lean and load-bearing
+# /memory-curate — keep the cairn memory store lean and load-bearing
 
-bd injects **every** memory at prime time, so the store's size is a per-session token tax,
-and bd has no decay/compaction of its own. This skill adds the missing lifecycle:
+Prime injects every memory KEY at session start, plus the bodies of the hot tier
+(`.claude/memory-hot.txt`), so the key list and the hot bodies are a per-session token tax,
+and the store has no decay/compaction of its own. This skill adds the missing lifecycle:
 **admission → tier → periodic curate (dedup / compact / consolidate / decay)**.
 
-- **bd is the system of record.** Every write/delete here goes to bd (`remember --key` / `forget`).
-- **Semantic engine is optional.** Probe it (`memory-mesh stats`, or `bd find-duplicates`); if up,
-  use it to sharpen near-dup detection and synthesis; if down/WIP, fall back to `bd memories`
+- **cairn is the system of record.** Every write/delete here goes to cairn (`cairn remember --key` /
+  `cairn forget`). Every replaced body stays readable: `cairn history --memory <key>`.
+- **Semantic engine is optional.** Probe it (`memory-mesh stats`); if up, use it to sharpen
+  near-dup detection and synthesis; if down/WIP, fall back to `cairn memories`
   keyword clustering + your own summarization. **Never a hard dependency.**
 - **Always:** export a backup first, propose a diff, human-confirm every prune/merge, stay
   idempotent, and **report the metric** (prime KB before→after) so the win is measurable.
@@ -19,27 +21,28 @@ and bd has no decay/compaction of its own. This skill adds the missing lifecycle
 ## Modes (first arg; default `audit`)
 
 ### `audit`  — read-only report
-1. **Metrics:** count = `bd memories | /usr/bin/grep -acE '^  [a-z0-9]'`; memory payload bytes =
-   `bd export --include-memories` size − `bd export` size → KB and ~tokens (KB×256).
+1. **Metrics:** count = `grep -c '^{"_type":"memory"' .cairn/memories.jsonl`; memory payload bytes =
+   `cairn export --include-memories` size − `cairn export` size → KB and ~tokens (KB×256).
 2. **Classify** each memory into: `transient` · `retracted/superseded` · `near-dup cluster` ·
    `bloated` (>~15 lines) · `stale` (not updated > 3 months) · `KEEP-HOT` (convention/gotcha guard).
 3. Report tallies + % recoverable + the top consolidation targets. **No writes.**
 
 ### `prune`  — cleanup (propose → confirm → apply)
-1. **Backup:** `bd export --include-memories -o .beads/memories-backup-<YYYY-MM-DD>.jsonl`.
+1. **Backup:** `cairn export --include-memories -o .cairn/memories-backup-<YYYY-MM-DD>.jsonl`
+   (`.cairn/` is git-ignored; git and `cairn history --memory` keep the old bodies as well).
 2. **Verify preservation (retractions):** before forgetting any retracted/superseded memory,
    confirm the active memory that still holds the fact exists **by its EXACT full key**
-   (`bd memories <key>` — keys often carry a dataset or topic prefix like `acme-loadtest-…`; never match a substring
+   (`cairn recall <key>` — keys often carry a dataset or topic prefix like `acme-loadtest-…`; never match a substring
    or a guessed/truncated name). Target absent → do NOT prune; compact to "X wrong → see Y" instead.
 3. **Propose:** transient + verified-retracted → `forget`; bloated → compact to 2-4 load-bearing
    lines, or move the long body to a repo doc and keep a one-line pointer.
-4. Show the diff → human-confirms → apply via `bd forget <key>` / `bd remember --key <k> "<tight>"`.
+4. Show the diff → human-confirms → apply via `cairn forget <key>` / `cairn remember --key <k> "<tight>"`.
 
 ### `consolidate`  — merge clusters into one canonical memory
-1. **Detect** near-dup / same-topic clusters (mesh `search` if up, else `bd memories <kw>` + judgment).
+1. **Detect** near-dup / same-topic clusters (mesh `search` if up, else `cairn memories <kw>` + `cairn related <key>` + judgment).
 2. **Synthesize** ONE canonical memory per cluster (mesh `reflect -t <topic>` if up, else summarize),
    keeping a `Supersedes:` line + `[[links]]` so the trail is traceable.
-3. Confirm → `bd remember --key <merged> "<text>"` + `bd forget` the sources.
+3. Confirm → `cairn remember --key <merged> "<text>"` + `cairn forget` the sources.
 
 ### `tier`  — the structural win (shrink prime permanently; measured 76 KB → 7 KB on a 40-memory store)
 The tiering itself is already built: `.claude/bd-prime-hook.sh` injects the memories listed in
@@ -52,18 +55,20 @@ decides what goes on the list:
    to `BD_PRIME_BUDGET` (default 10,000 bytes, the Claude Code cap) and names any hot body that
    did not fit — on Claude Code that is roughly 8 KB of bodies in total. A hot list that
    overflows is not hot; compact the bodies or shorten the list until the top line is gone.
-3. Mid-session, pull situational detail on demand via `bd memories <kw>` (or mesh `search`).
+3. Mid-session, pull situational detail on demand via `cairn memories <kw>` (or mesh `search`).
    Cold-start is safe because the always-on guards are exactly what's needed before the task is known.
 
 ### `gate`  — write discipline (stop future bloat at the source) — **IMPLEMENTED**
 Enforced automatically by the `PreToolUse` hook `.claude/bd-prerun-hook.sh` (no per-call action
-needed). On any `bd remember`:
+needed). On any `cairn remember`:
 - **BLOCK** (exit 2, with fix instructions): missing `--key`; a body that is STRUCTURALLY a
   handoff memo (status lines, next-step lists, commit hashes as state). The test is structural:
   the words `handoff`, `wrap-up`, `pickup` alone only WARN, because a vocabulary blocklist once
   refused the memory that documented the rule while a rephrase walked through.
 - **WARN** (allowed): oversized inline body (>~1.5 KB) → keep load-bearing facts, move detail to a doc.
-- Fails open on any error; scoped strictly to `bd remember` (all other commands untouched).
+- Fails open on any error; scoped strictly to `remember` (all other commands untouched).
+- cairn's own `remember` adds admission control on top: a long body that near-duplicates another
+  key is refused with that key named (cairn README, "Memory links").
 - Limitation: body checks only see content that is literal in the command string (not `"$(cat file)"`);
   the structural rules (`--key` present, command shape) are robust regardless.
 
@@ -75,8 +80,11 @@ needed). On any `bd remember`:
 - not updated > 3 months → **flag for review** (don't auto-prune)
 
 ## Importance heuristic (rank hot vs prunable — no embeddings needed)
-`score = is_convention_guard + reference_frequency + recency + type_weight − is_transient − length_penalty`
-HOT = convention/gotcha guards + high-reference. Everything else is situational → retrieval-gated.
+`cairn memories --rank` computes the graph half: PageRank over the `[[links]]` times recency
+(half-life 90 days), superseded keys × 0.1 (`--json` for the numbers). Add judgment for what a
+graph cannot see:
+`score = rank + is_convention_guard + type_weight − is_transient − length_penalty`
+HOT = convention/gotcha guards + high rank. Everything else is situational → retrieval-gated.
 
 ## Stamp — after ANY mode, audit included
 The session-start gate (`.claude/site-checks/memory-curation-gate.sh`) reads
@@ -86,13 +94,12 @@ The session-start gate (`.claude/site-checks/memory-curation-gate.sh`) reads
 of this skill ends by rewriting it and committing it with the curation:
 
 ```bash
-printf '%s\t%s\n' "$(date +%F)" "$(bd memories | /usr/bin/grep -acE '^  [a-z0-9]')" > .claude/memory-curation.txt
+printf '%s\t%s\n' "$(date +%F)" "$(/usr/bin/grep -c '^{"_type":"memory"' .cairn/memories.jsonl)" > .claude/memory-curation.txt
 ```
 
-`/usr/bin/grep -a`, not bare `grep`: `bd memories` truncates each body by BYTE, so a split multibyte
-character (an em dash on 2026-10-09) makes the listing "binary". An agent shell's `grep` wrapper
-that skips binary input (Claude Code's does: ugrep `-I`) then prints NOTHING — not 0 — and the
-stamp would carry an empty count. A script gets the real grep; the gate keeps `-a` anyway.
+The count is the one the gate makes: memory rows of the tracked export (refresh it first,
+`tools/refresh-beads-exports.sh`). `/usr/bin/grep`, not a bare `grep`: an agent shell's wrapper
+can print nothing instead of a count.
 
 An audit that finds nothing to do still stamps — otherwise the gate nags every session. The
 gate replaces the old advice to wrap `audit` in `/loop`; run `prune` / `consolidate` / `tier`

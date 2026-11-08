@@ -1,33 +1,40 @@
 #!/usr/bin/env python3
-"""Repair dangling [[wikilinks]] in the bd memory store.
+"""Repair dangling [[wikilinks]] in the cairn memory store.
 
 REPOINT: only where a successor memory demonstrably carries the same claim.
 DE-LINK: everywhere else -- `[[x]]` -> `x (memory pruned)`, preserving the
          historical name while removing the false navigation promise.
 Issue refs ([[ab-1234]]) are a valid cross-namespace pointer and are left alone. The prefix
-comes from the store itself (`bd config get issue_prefix`); this script refuses to run without it.
+comes from the store itself (.cairn/config.json: `prefix` and `issue_prefixes`); this script refuses
+to run without it.
 """
 import json, re, subprocess, sys
 
 APPLY = '--apply' in sys.argv
 
 
-def issue_prefix():
-    """The bd issue prefix of THIS store, or exit. Links to issues are pointers into the issue
+def issue_prefixes():
+    """The issue prefixes of THIS store, or exit. Links to issues are pointers into the issue
     namespace, not dangling memory links, so they are skipped rather than repaired -- and a wrong
     prefix here de-links every issue reference in the store on --apply. This used to be the
     constant 'WS', the prefix of the workspace it was written in; the first other store it was
-    run against had a different one. Never guess it."""
-    r = subprocess.run(['bd', 'config', 'get', 'issue_prefix'], capture_output=True, text=True)
-    p = r.stdout.strip()
-    if r.returncode != 0 or not p or 'not set' in p:
-        sys.exit("audit_wikilinks: cannot read this store's issue prefix "
-                 "(`bd config get issue_prefix` gave: %r). Refusing to guess -- a wrong prefix "
-                 "would de-link every [[issue]] reference. Run this inside the bd project." % p)
-    return p
+    run against had a different one. Never guess it. cairn keeps the store's prefix and any
+    others its issue ids use in .cairn/config.json, at the checkout's top."""
+    top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+    path = (top.stdout.strip() or '.') + '/.cairn/config.json'
+    try:
+        cfg = json.load(open(path))
+    except (OSError, ValueError) as exc:
+        sys.exit(f"audit_wikilinks: cannot read this store's issue prefix from {path} ({exc}). "
+                 "Refusing to guess -- a wrong prefix would de-link every [[issue]] reference. "
+                 "Run this inside the cairn project.")
+    found = [p for p in [cfg.get('prefix'), *(cfg.get('issue_prefixes') or [])] if p]
+    if not found:
+        sys.exit(f"audit_wikilinks: {path} names no issue prefix; refusing to guess.")
+    return tuple(p.lower() + '-' for p in found)
 
 
-ISSUE_PREFIX = issue_prefix()
+ISSUE_PREFIXES = issue_prefixes()
 
 # successor verified to carry the cited claim -> (target, evidence)
 #
@@ -42,7 +49,7 @@ ISSUE_PREFIX = issue_prefix()
 #       ('successor-key', 'states the same threshold, with the measurement that settled it'),
 REPOINT = {}
 
-d = json.loads(subprocess.run(['bd', 'memories', '--json'],
+d = json.loads(subprocess.run(['cairn', 'memories', '--json'],
                               capture_output=True, text=True).stdout)
 d.pop('schema_version', None)
 keys = set(d)
@@ -53,8 +60,10 @@ for k, v in d.items():
     # link syntax written as inline code (`[[key]]`) is documentation, not a link
     scanned = re.sub(r'`[^`]*`', '', v)
     for link in sorted(set(re.findall(r'\[\[([^\]]+)\]\]', scanned))):
-        if link in keys or link.startswith(ISSUE_PREFIX + '-'):
+        if link in keys or link.lower().startswith(ISSUE_PREFIXES):
             continue
+        if len(link) <= 2 or link == 'key':      # cairn's escapes for writing about the notation
+            continue                             # (cairn/links.py PROSE_TARGETS): not links
         if link in ('wikilink', 'wikilinks'):                     # prose, not a link
             new = new.replace(f'[[{link}]]', f'`{link}`')
             notes.append(f'prose  {link} -> backticks')
@@ -79,7 +88,7 @@ if not APPLY:
     sys.exit(0)
 
 for k, (body, _) in sorted(edits.items()):
-    r = subprocess.run(['bd', 'remember', '--key', k, body],
+    r = subprocess.run(['cairn', 'remember', '--key', k, body],
                        capture_output=True, text=True)
     if r.returncode != 0:
         print(f'FAILED {k}: {r.stderr[:200]}')

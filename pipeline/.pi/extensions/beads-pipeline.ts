@@ -21,7 +21,7 @@ type NoticeContext = {
   cwd: string; hasUI: boolean; ui: { notify(message: string, level: "info" | "warning"): void };
   sessionManager?: { getSessionId?(): string };
 };
-// The bd store is shared by every session and all of them claim as the same actor, so the hooks
+// The store is shared by every session in the checkout, which may claim as one actor, so the hooks
 // scope "in progress" to what THIS session claimed, keyed by the session id.
 // Pi's own id when available, so a resumed session keeps its record; else one per runtime.
 const RUNTIME_KEY = `pi-${randomUUID()}`;
@@ -41,7 +41,7 @@ function inProject(cwd: string): boolean {
 
 function missingWarning(script: string): string {
   const path = resolve(root, ".claude", script);
-  return `${PREFIX} ${script} NOT FOUND at ${path} — bd session rules and command guards are OFF. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.`;
+  return `${PREFIX} ${script} NOT FOUND at ${path} — the pipeline's session rules and command guards are OFF. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.`;
 }
 
 function notice(ctx: NoticeContext, message: string, level: "info" | "warning" = "warning"): void {
@@ -100,22 +100,12 @@ async function runScript(relative: string, stdin?: string): Promise<ScriptResult
 export default function beadsPipeline(pi: ExtensionAPI) {
   let prime = `${PREFIX} session not primed — check that the Pi extension loaded and session_start ran.`;
 
-  async function refresh(ctx: NoticeContext, start: boolean): Promise<void> {
+  // The prime hook runs `cairn sync` itself; there is no store server to check first.
+  async function refresh(ctx: NoticeContext): Promise<void> {
     if (!inProject(ctx.cwd)) {
-      prime = `${PREFIX} extension from ${root} loaded outside its project (${ctx.cwd}); no bd checks ran.`;
+      prime = `${PREFIX} extension from ${root} loaded outside its project (${ctx.cwd}); no store checks ran.`;
       notice(ctx, prime);
       return;
-    }
-    let guardAlert = "";
-    if (start) {
-      const guard = await runScript("tools/dolt-guard.sh");
-      if (guard.fault || guard.code !== 0) {
-        guardAlert = `${PREFIX} Dolt guard FAILED (${guard.fault || `exit ${guard.code}`}): ${guard.stderr.trim() || "bd writes may not land"}`;
-        notice(ctx, guardAlert);
-      } else if (guard.stderr.trim()) {
-        // The guard reports a restart or an inability to probe on stderr.
-        notice(ctx, `${PREFIX} ${guard.stderr.trim()}`);
-      }
     }
     const result = await runScript(".claude/bd-prime-hook.sh");
     if (result.fault || result.code !== 0 || !result.stdout.trim()) {
@@ -128,7 +118,6 @@ export default function beadsPipeline(pi: ExtensionAPI) {
       prime = result.stdout;
       if (result.stderr.trim()) notice(ctx, `${PREFIX} bd-prime-hook.sh: ${result.stderr.trim()}`);
     }
-    if (guardAlert) prime = `${guardAlert}\n${prime}`;
   }
 
   async function gate(command: string, ctx: NoticeContext): Promise<string | undefined> {
@@ -155,11 +144,11 @@ export default function beadsPipeline(pi: ExtensionAPI) {
     }
   }
 
-  pi.on("session_start", async (_event, ctx) => { await refresh(ctx, true); });
-  pi.on("session_before_compact", async (_event, ctx) => { await refresh(ctx, false); });
+  pi.on("session_start", async (_event, ctx) => { await refresh(ctx); });
+  pi.on("session_before_compact", async (_event, ctx) => { await refresh(ctx); });
   pi.on("before_agent_start", (event) => {
-    // Pi rebuilds system-prompt sections for each run, including after compaction. bd is NOT
-    // called here: use the cache from session_start (or the last session_before_compact).
+    // Pi rebuilds system-prompt sections for each run, including after compaction. The store is
+    // NOT called here: use the cache from session_start (or the last session_before_compact).
     event.systemPromptOptions.sections.beads_pipeline = prime;
   });
   pi.on("tool_call", async (event, ctx) => {

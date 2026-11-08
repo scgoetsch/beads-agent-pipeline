@@ -256,9 +256,11 @@ install_file() { # install_file <relpath> [mode]
     say "    compare: diff \"$dst\" \"$dst.new\""
     # A bd-era copy of a pipeline file is not merely different: it reads .claude/store-cli and can
     # still run bd (the session hooks, the pre-commit's bd-memgraph stanza). Say that by name.
+    case $rel in *.md|*_test.sh) ;; *)    # a doc or a suite that mentions them runs nothing
     if grep -qE '\.claude/store-cli|bd hooks run|bd-memgraph|dolt-guard\.sh' "$dst" 2>/dev/null; then
       warn "$rel is the bd-era version and can still run bd — adopt ours unless you know why not:  mv -f \"$dst.new\" \"$dst\""
     fi
+    esac
     return 0
   fi
   run mkdir -p "$(dirname "$dst")"
@@ -407,6 +409,38 @@ if [ -n "$stale" ]; then
   bd_left=1
   say "bd-era files this release no longer ships (nothing runs them; remove them):"
   say "    git rm -q --$stale"
+fi
+# 5. The old tracker's own exports in .beads/ (its issues.jsonl is usually tracked). cairn reads
+#    its exports from .beads/ while .cairn/ holds none, and refuses a split once both do, so every
+#    `cairn sync` and export refresh after the move would fail. Named; the fix is a git rm.
+old_exports=""
+for f in issues.jsonl memories.jsonl allocator.json events.jsonl; do
+  { [ -f "$TARGET/.beads/$f" ] || [ -n "$(git -C "$TARGET" ls-files -- ".beads/$f" 2>/dev/null)" ]; } \
+    && old_exports="$old_exports .beads/$f"
+done
+if [ -n "$old_exports" ]; then
+  bd_left=1
+  warn "the old tracker's exports are still in .beads/ (${old_exports# }) — cairn refuses exports split between .beads/ and .cairn/"
+  say "    remove them (git history keeps them):  git rm -q --cached --ignore-unmatch$old_exports && rm -f$old_exports"
+fi
+# 6. Sibling worktrees of this checkout share its store through an untracked .cairn/redirect
+#    (cairn README, worktrees). One made before the move has none, and its post-checkout
+#    `cairn sync` would build a store of its own there. Written only from the main checkout,
+#    only where a worktree has neither a redirect nor a database.
+if [ "$GIT_DIR" = "$GIT_COMMON" ] && cairn_writable && [ "$cairn_db" = "$TARGET/.cairn/cairn.db" ]; then
+  while IFS= read -r wt; do
+    wt=${wt#worktree }; [ -n "$wt" ] && [ -d "$wt" ] || continue
+    [ "$(cd "$wt" && pwd -P)" = "$TARGET" ] && continue
+    if [ -f "$wt/.cairn/redirect" ]; then say "worktree $wt shares this store (.cairn/redirect)"
+    elif [ -e "$wt/.cairn/cairn.db" ]; then
+      warn "worktree $wt has a cairn store of its own — it does not share this one; see tools/new-worktree.sh"
+    elif [ "$MODE" = dryrun ]; then printf '  \033[36m[dry-run]\033[0m write %s/.cairn/redirect\n' "$wt"
+    else
+      mkdir -p "$wt/.cairn" && printf '%s\n' "$TARGET/.cairn" > "$wt/.cairn/redirect" \
+        && did "worktree $wt now shares this store (.cairn/redirect -> $TARGET/.cairn)" \
+        || warn "could not write $wt/.cairn/redirect"
+    fi
+  done < <(git -C "$TARGET" worktree list --porcelain 2>/dev/null | grep '^worktree ')
 fi
 [ "$bd_left" -eq 0 ] && say "nothing of bd's found"
 

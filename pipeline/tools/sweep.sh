@@ -45,8 +45,8 @@
 #     under a UTF-8 locale it is binary and skipped. Run sweeps under a UTF-8 locale so the
 #     BINARY column means what the report says — including plain prose carrying one malformed byte,
 #     which is how one README.md hid the phrase 'three repositories' from a sweep. The count is printed; read those files directly.
-#   * The bd layer (memories, issue descriptions/notes) — those are separate
-#     `bd memories` / `bd list` searches. A document sweep is not a corpus sweep.
+#   * The store (memories, issue descriptions/notes) — those are separate
+#     `cairn memories` / `cairn list --all --json` searches. A document sweep is not a corpus sweep.
 #
 # USAGE
 #   tools/sweep.sh 'distinctive phrase'        # fixed string (default)
