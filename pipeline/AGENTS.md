@@ -37,7 +37,7 @@ project extension cannot warn that it was skipped. Git pre-commit hooks work ind
 ## Issue tracking: cairn
 
 This project tracks work and keeps durable knowledge in [cairn](https://github.com/scgoetsch/cairn)
-(0.7.0 or later): a small SQLite store in `.cairn/` with the verbs and flags of beads. `cairn prime`
+(0.7.0 or later; 0.8.0 for `search` and `check --stale`): a small SQLite store in `.cairn/` with the verbs and flags of beads. `cairn prime`
 prints the session-start context; `cairn --help` lists every verb.
 
 ```bash
@@ -46,7 +46,9 @@ cairn show <id>            # view an issue
 cairn update <id> --claim  # claim work
 cairn note <id> "..."      # APPEND to a running record
 cairn close <id>           # complete work
-cairn memories <word>      # search memories; cairn recall <key> prints one
+cairn search <words>       # ranked: related issues and memories (before filing, when starting)
+cairn memories <word>      # substring match on memories; cairn recall <key> prints one
+cairn check --stale        # memories naming an issue closed or a file deleted since written
 ```
 
 ### Rules
@@ -294,6 +296,7 @@ tools/memory-curation-gate_test.sh   # the session-start curation reminder speak
 tools/bd-prerun-hook_test.sh     # the PreToolUse guard (blocks bare pkill, bad cairn remember, untracked scripts)
 tools/bd-prime-hook_test.sh      # the SessionStart hook tiers memories, and names every fallback
 tools/bd-stop-hook_test.sh       # turn-end/close reminder: this session's claims only, rows not ● glyphs
+tools/bd-cue-hook_test.sh        # related-work pointers for an issue named in a prompt or claimed
 tools/audit_wikilinks_test.sh    # the memory-curate link repair reads the issue prefix from .cairn/config.json
 tools/hook_portability_test.sh   # the hooks follow their own clone, and fail LOUD
 tools/pi-extension_test.sh       # if installed: Pi event adapter's priming, gate, fail-open and reminder
@@ -332,7 +335,9 @@ turn and reports only this session's claimed in-progress issues, when that set c
 session-scoped because the store is shared by every session in this checkout and its worktrees:
 the prerun hook records each session's `cairn update <id> --claim` in `.git/bd-session-claims/`,
 and an issue assigned to this session's `BEADS_ACTOR` counts too. Picking up work claimed in an earlier session? Re-claim it; `--claim`
-is idempotent.
+is idempotent. `bd-cue-hook.sh` (UserPromptSubmit, and PostToolUse after a claim) prints, once per
+issue per session, pointers to the earlier issues and the memories `cairn search` ranks highest for
+that issue's text: one line each, ranked, not all relevant; read what fits (`BD_CUE=0` turns it off).
 **Each resolves the repo root from its own file location, never a literal path** — see
 `docs/ops/hooks-and-portability.md`. Optional site checks live in `.claude/site-checks/`.
 

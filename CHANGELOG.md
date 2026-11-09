@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.2 — 2026-11-09
+
+- **New hook, `.claude/bd-cue-hook.sh`:**
+  - **When it runs:** on UserPromptSubmit, when the prompt names an issue (a full id, or a bare suffix such as `zd8s` that is an issue in the store), and on PostToolUse, after a `cairn update <id> --claim` / `--status in_progress` or a `cairn ready --claim`.
+  - **What it prints:** pointers to the earlier issues and the memories `cairn search` ranks highest for that issue's title and description. At most 3 of each, one line each, once per issue per session.
+  - **What it leaves out:** hot-tier memories, because their bodies are already in context.
+  - **Why pointers rather than memory bodies:** measured on the home workspace store, no score threshold separated relevant hits from irrelevant ones (top-3 precision 30%), so a wrong hit has to stay cheap.
+  - **The measurement:** the memories loaded at session start held one the issue needed for 19% of issues; `cairn search` on the issue's text put one in its top 10 for 75%, and in its top 3 for 63% (cairn workspace-d3ct).
+  - **Off switch and failure behaviour:** `BD_CUE=0` turns it off. It prints nothing with a cairn older than 0.8.0. Claude Code only; the Pi adapter does not run it.
+- **AGENTS.md template:** lists `cairn search` and `cairn check --stale` (cairn 0.8.0).
+- **CI:** cairn is pinned to v0.8.0's commit (`61f20a4`).
+- **`tools/hook_portability_test.sh`:** checks that every pipeline hook command resolves the root, whatever their number; it had counted exactly four.
+
 ## v0.2.1 — 2026-11-08
 
 - **macOS:** the export history check (`tools/refresh-beads-exports.sh`) refused every valid append there, so every commit was blocked. It now compares with `head -c | cmp` instead of `cmp -s -n`.

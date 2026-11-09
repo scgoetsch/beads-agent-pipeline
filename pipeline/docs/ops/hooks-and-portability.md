@@ -39,6 +39,7 @@ These hooks do not all fail the same way, and that is on purpose:
 | `bd-prime-hook.sh` (SessionStart) | prints a loud alarm, exits 0 | its stdout *is* the session payload, so the alarm is the one thing guaranteed to be read |
 | `bd-prerun-hook.sh` (PreToolUse) | warns on stderr, exits 0 | exit 2 here blocks every Bash call and bricks the session — worse than the outage |
 | `bd-stop-hook.sh` (Stop, SessionEnd) | warns on stderr, exits 0 | nothing to protect at that point |
+| `bd-cue-hook.sh` (UserPromptSubmit, PostToolUse) | warns on stderr, exits 0 | it only ever adds context; without cairn 0.8.0's `search` it prints nothing |
 
 Open is a legitimate choice. **Open and silent is not.**
 

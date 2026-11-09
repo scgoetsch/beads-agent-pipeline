@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-cue-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-cue-hook.sh NOT FOUND at $H \u2014 no related-work pointers for the issues you name or claim. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
@@ -38,6 +49,17 @@
         "hooks": [
           {
             "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-stop-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-stop-hook.sh NOT FOUND at $H \u2014 the pipeline's session rules and command guards are OFF. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.\"; fi",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/bd-cue-hook.sh\"; if [ -f \"$H\" ]; then bash \"$H\"; else echo \"\u26a0 bd-cue-hook.sh NOT FOUND at $H \u2014 no related-work pointers for the issues you name or claim. Restore the tracked script (git checkout) or re-run the beads-agent-pipeline installer, then check .claude/settings.json.\"; fi",
             "type": "command"
           }
         ],

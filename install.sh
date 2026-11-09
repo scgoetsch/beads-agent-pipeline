@@ -524,7 +524,7 @@ fi
 [ "$bd_left" -eq 0 ] && say "nothing of bd's found"
 
 hdr "session machinery (.claude/)"
-for f in bd-prime-hook.sh bd-prerun-hook.sh bd-stop-hook.sh; do install_file ".claude/$f" 755; done
+for f in bd-prime-hook.sh bd-prerun-hook.sh bd-stop-hook.sh bd-cue-hook.sh; do install_file ".claude/$f" 755; done
 install_file ".claude/memory-hot.txt"
 
 if [ "$WITH_PI" -eq 1 ]; then

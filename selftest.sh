@@ -67,7 +67,7 @@ grep -q 'AGENTS.md' "$T/.install.log" && ok "installer reports what it did" || b
 
 printf '\n\033[1m### the payload is actually there\033[0m\n'
 for f in AGENTS.md .claude/settings.json .claude/bd-prime-hook.sh .claude/bd-prerun-hook.sh \
-         .claude/bd-stop-hook.sh .beads-hooks/pre-commit .beads-hooks/post-merge .beads-hooks/post-checkout tools/sweep.sh \
+         .claude/bd-stop-hook.sh .claude/bd-cue-hook.sh .beads-hooks/pre-commit .beads-hooks/post-merge .beads-hooks/post-checkout tools/sweep.sh \
          tools/refresh-beads-exports.sh tools/new-worktree.sh \
          docs/ops/hooks-and-portability.md .claude/skills/triage/SKILL.md \
          .claude/skills/README.md tools/check-no-agent-cache-paths.sh \
@@ -116,7 +116,7 @@ grep -q 'note: --no-shell does nothing' "$T/.install.log" && bad "no --no-shell 
 
 printf '\n\033[1m### every shipped guard passes in the fresh repo\033[0m\n'
 for s in tools/check-agent-docs-linked.sh tools/hook_portability_test.sh tools/sweep_test.sh \
-         tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/bd-stop-hook_test.sh \
+         tools/bd-prerun-hook_test.sh tools/bd-prime-hook_test.sh tools/bd-stop-hook_test.sh tools/bd-cue-hook_test.sh \
          tools/agent_docs_test.sh \
          tools/check-no-agent-cache-paths_test.sh tools/check-agent-docs-linked_test.sh \
          tools/audit_wikilinks_test.sh tools/memory-curation-gate_test.sh \

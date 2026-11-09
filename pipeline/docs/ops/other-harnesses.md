@@ -11,6 +11,7 @@ Neither is a substitute for the git-layer guards. This page says which parts fir
 | `pkill` / memory-admission guard | Claude PreToolUse | Pi `tool_call` + `user_bash` | no | **no** |
 | Unclosed-issue reminder (this session's claims) | Claude Stop (each turn) | Pi `agent_settled` (each turn) + `session_shutdown` (close) | no | **no** |
 | Pre-compaction refresh | Claude PreCompact | Pi `session_before_compact` | no | **no** |
+| Related-work pointers (an issue named or claimed) | Claude UserPromptSubmit + PostToolUse | no (run `cairn search` by hand) | no | **no** |
 | Git guards (`.beads-hooks/`) | **yes** | **yes** | **yes** | **yes** (if wired in this clone) |
 | `tools/*.sh` | **yes** | **yes** | **yes** | **yes** |
 | `AGENTS.md` | via symlink | reads `AGENTS.md` | reads `AGENTS.md` | if the harness looks for it |

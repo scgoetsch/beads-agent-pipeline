@@ -288,7 +288,7 @@ them a sweep binary-file case that depends on a UTF-8 locale a container does no
 **On every push, in GitHub Actions** (`.github/workflows/selftest.yml`): the same `./selftest.sh`
 on `ubuntu-latest`, on `macos-latest` (bash from Homebrew, since the stock `/bin/bash` is 3.2) and
 on `windows-latest` (Git Bash). cairn comes from github.com/scgoetsch/cairn at the commit the
-workflow pins (`CAIRN_REF`, the commit of cairn's tag v0.7.0), into a directory of its own so the
+workflow pins (`CAIRN_REF`, the commit of cairn's tag v0.8.0), into a directory of its own so the
 self-test's no-cairn probe can hide it. Each job writes its box line, the RESULT line and every
 FAIL to the run summary and keeps the log as an artifact; after a failure it also keeps the
 installer's own output and every suite's full log, since the self-test shows only a failing
@@ -311,7 +311,7 @@ first on any other platform and file what fails.
 
 | | | |
 | --- | --- | --- |
-| [Claude Code](https://claude.com/claude-code) | needed **for Claude session hooks only** | `.claude/settings.json` wires three scripts on four Claude events; these do not load under Pi. Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `pipeline/docs/ops/other-harnesses.md` has the matrix. |
+| [Claude Code](https://claude.com/claude-code) | needed **for Claude session hooks only** | `.claude/settings.json` wires four scripts on six Claude events; these do not load under Pi (the Pi adapter runs the prime, prerun and stop hooks, not `bd-cue-hook.sh`). Everything at the git layer, every tool and `AGENTS.md` work under any harness or none — `pipeline/docs/ops/other-harnesses.md` has the matrix. |
 | [Pi](https://github.com/badlogic/pi-mono) (Node ≥22.19) | required **only with `--with-pi`** | The optional project extension calls those same scripts through Pi's event API. Project trust is required; `--no-approve` or `--no-extensions` skips the adapter. Do not infer guard coverage from `AGENTS.md` alone. |
 | `git`, `python3` (3.9+) | required | everything is git-scoped; the PreToolUse guard parses hook JSON; cairn is stdlib-only Python |
 | [`cairn`](https://github.com/scgoetsch/cairn) 0.7.0+ | required | the issue tracker and memory store: a SQLite database in `.cairn/`, git-ignored, plus four tracked files beside it. Install: `git clone https://github.com/scgoetsch/cairn && ln -s "$PWD/cairn/bin/cairn" ~/.local/bin/cairn`. 0.7.0 is the first that keeps the tracked files in `.cairn/`; the installer checks `cairn --version` |
@@ -459,11 +459,11 @@ For a bd user who pulls 0.2.0 and re-runs `install.sh`:
   blocks aside, in a repo that had the 0.1 pipeline). When a shipped tool changes upstream, re-running the installer lands it as
   `tools/<name>.new` with a `DIFFERS` line; diff it, `mv -f` it into place, `chmod 755`. Tracked; a
   hash manifest is the likely fix.
-- **The names are still beads'.** `bd-prime-hook.sh`, `bd-prerun-hook.sh`, `bd-stop-hook.sh`,
+- **The names are still beads'.** `bd-prime-hook.sh`, `bd-prerun-hook.sh`, `bd-stop-hook.sh`, `bd-cue-hook.sh`,
   `.beads-hooks/`, `.pi/extensions/beads-pipeline.ts`, `BEADS_ACTOR`, the `BD_*` knobs,
   `.git/bd-session-claims/` and `tools/refresh-beads-exports.sh` keep their names in this release:
   renaming them is a settings-merge and `core.hooksPath` migration of its own, for a later one.
-- **cairn is pinned by commit, not version.** CI and the container name the commit of cairn's tag v0.7.0
+- **cairn is pinned by commit, not version.** CI and the container name the commit of cairn's tag v0.8.0
   rather than the tag, which could be moved, and the installer checks only `cairn --version` ≥ 0.7.0.
 - **Platform coverage is what the Actions matrix runs: Ubuntu 24.04, macOS and Windows Server 2025
   under Git Bash, plus the Docker self-test on a bare Ubuntu.** Not covered: a Windows box that

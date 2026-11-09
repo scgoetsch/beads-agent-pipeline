@@ -109,11 +109,15 @@ chk "settings.json is valid JSON" \
 hooked=$(python3 - "$ROOT/.claude/settings.json" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1]))
-c=[h["command"] for evs in d["hooks"].values() for ev in evs for h in ev["hooks"]]
-print(sum(1 for x in c if "CLAUDE_PROJECT_DIR" in x and "rev-parse" in x))
+# The pipeline's own commands only: a user's hook beside ours is not ours to judge.
+c=[h["command"] for evs in d["hooks"].values() for ev in evs for h in ev["hooks"]
+   if "/.claude/bd-" in h.get("command", "")]
+print("%d of %d" % (sum(1 for x in c if "CLAUDE_PROJECT_DIR" in x and "rev-parse" in x), len(c)))
 PY
 )
-chk "every hook command resolves the root at run time" "$hooked" "4"
+# All of them, however many there are (four until v0.2.2 added bd-cue-hook.sh on two events).
+chk "every hook command resolves the root at run time" "${hooked%% of *}" "${hooked##* of }"
+chk "  and there are hook commands to check" "$([ "${hooked##* of }" -ge 6 ] && echo ok)" "ok"
 
 sec "negative control: the check above really would catch a regression"
 
